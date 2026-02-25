@@ -8,13 +8,7 @@ Built on top of [Claude Agent SDK](https://github.com/anthropics/anthropic-sdk-p
 
 ### Quick install
 
-Requires **Python 3.10+**. If you're on an older version, install Python 3.10+ first:
-
-```bash
-uv python install 3.10
-```
-
-Then install:
+Requires **Python 3.10+**.
 
 ```bash
 uv tool install "fastfold-agent-cli[all]" --python 3.10
