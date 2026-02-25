@@ -12,7 +12,7 @@ from pathlib import Path
 from ct.tools import registry
 
 
-CODE_GEN_SYSTEM_PROMPT = """You are a Python code generator for celltype-cli, a drug discovery research agent.
+CODE_GEN_SYSTEM_PROMPT = """You are a Python code generator for fastfold-agent-cli, a drug discovery research agent.
 
 Write Python code to accomplish the user's analysis goal. The code will be executed in a sandbox.
 
@@ -525,7 +525,9 @@ def _is_script_authoring_goal(goal: str) -> bool:
             "standalone script",
         )
     )
-    has_py_target = ".py" in g and any(word in g for word in ("script", "save", "write", "create", "generate"))
+    has_py_target = ".py" in g and any(
+        word in g for word in ("script", "save", "write", "create", "generate")
+    )
     return explicit_script or has_py_target
 
 
@@ -590,7 +592,9 @@ def _generate_and_save_script(
                 f"The script must be directly runnable with `python {script_path.name}`."
             )
         else:
-            user_msg = SCRIPT_RETRY_PROMPT.format(code=script_text, error=last_error or "Unknown syntax error")
+            user_msg = SCRIPT_RETRY_PROMPT.format(
+                code=script_text, error=last_error or "Unknown syntax error"
+            )
 
         with session.console.status(
             f"[green]{'Generating' if attempt == 1 else 'Fixing'} script...[/green]",
@@ -714,16 +718,18 @@ def _agentic_code_loop(
 
         # Append assistant message (full content blocks) and tool result
         messages.append({"role": "assistant", "content": content_blocks})
-        messages.append({
-            "role": "user",
-            "content": [
-                {
-                    "type": "tool_result",
-                    "tool_use_id": tool_call.id,
-                    "content": tool_output,
-                }
-            ],
-        })
+        messages.append(
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_call.id,
+                        "content": tool_output,
+                    }
+                ],
+            }
+        )
 
     # Extract result from sandbox namespace
     result_obj = sandbox.get_variable("result")
@@ -977,11 +983,33 @@ def _generate_and_execute_code(
 def _describe_data_files(extra_dirs: list[Path] | None = None) -> str:
     """List data files in CWD and extra directories for domain tool prompts."""
     data_exts = {
-        ".csv", ".tsv", ".xlsx", ".xls", ".parquet",
-        ".vcf", ".bed", ".bam", ".fasta", ".fa", ".faa",
-        ".fastq", ".gff", ".gtf", ".nwk", ".nex", ".tree",
-        ".mafft", ".clipkit", ".aln", ".phy", ".gz",
-        ".zip", ".rds", ".rdata", ".gmt", ".json",
+        ".csv",
+        ".tsv",
+        ".xlsx",
+        ".xls",
+        ".parquet",
+        ".vcf",
+        ".bed",
+        ".bam",
+        ".fasta",
+        ".fa",
+        ".faa",
+        ".fastq",
+        ".gff",
+        ".gtf",
+        ".nwk",
+        ".nex",
+        ".tree",
+        ".mafft",
+        ".clipkit",
+        ".aln",
+        ".phy",
+        ".gz",
+        ".zip",
+        ".rds",
+        ".rdata",
+        ".gmt",
+        ".json",
     }
 
     def _scan_dir(directory: Path, label: str) -> list[str]:
@@ -1013,7 +1041,7 @@ def _describe_data_files(extra_dirs: list[Path] | None = None) -> str:
     if cwd_files:
         sections.append("Files in working directory:\n" + "\n".join(cwd_files))
 
-    for d in (extra_dirs or []):
+    for d in extra_dirs or []:
         d_files = _scan_dir(d, str(d))
         if d_files:
             sections.append(f"Files in {d}:\n" + "\n".join(d_files))
@@ -1059,7 +1087,11 @@ def execute(goal: str, _session=None, _prior_results=None, **kwargs) -> dict:
     # (phylo, KEGG ORA, variant classification) lives in the dedicated domain
     # tools (phylo.analyze, omics.kegg_ora, genomics.variant_classify) which
     # the planner selects directly.
-    prompt = BIOINFORMATICS_CODE_GEN_PROMPT if _session.config.get("agent.bioinformatics_mode") else CODE_GEN_SYSTEM_PROMPT
+    prompt = (
+        BIOINFORMATICS_CODE_GEN_PROMPT
+        if _session.config.get("agent.bioinformatics_mode")
+        else CODE_GEN_SYSTEM_PROMPT
+    )
 
     return _generate_and_execute_code(
         goal=goal,

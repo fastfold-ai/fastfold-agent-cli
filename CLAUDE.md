@@ -1,8 +1,8 @@
-# celltype-cli — Project Instructions
+# fastfold-agent-cli — Project Instructions
 
 ## What This Is
 
-celltype-cli is an autonomous agent for drug discovery research — like Claude Code, but for biology.
+fastfold-agent-cli is an autonomous agent for drug discovery research — like Claude Code, but for biology.
 It takes natural language questions about compounds/targets/indications and executes
 multi-step research workflows using computational biology tools.
 

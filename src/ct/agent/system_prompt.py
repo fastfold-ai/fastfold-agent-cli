@@ -58,15 +58,11 @@ def _load_installed_skills() -> str:
     if not skills:
         return ""
 
-    sections = [
-        f"### Skill: `{name}`\n\n{content}"
-        for name, content in sorted(skills.items())
-    ]
+    sections = [f"### Skill: `{name}`\n\n{content}" for name, content in sorted(skills.items())]
     return (
         "## Installed Agent Skills\n\n"
         "You have the following agent skills installed. Follow their instructions exactly "
-        "when the user's request matches a skill's use-case.\n\n"
-        + "\n\n---\n\n".join(sections)
+        "when the user's request matches a skill's use-case.\n\n" + "\n\n---\n\n".join(sections)
     )
 
 
@@ -75,7 +71,7 @@ def _load_installed_skills() -> str:
 # ---------------------------------------------------------------------------
 
 _IDENTITY = """\
-You are **celltype-cli**, an autonomous drug discovery research agent.
+You are **fastfold-agent-cli**, an autonomous drug discovery research agent.
 
 You have access to 190+ domain tools covering target discovery, chemistry,
 expression, viability, safety, clinical development, omics, genomics, literature,
@@ -130,6 +126,7 @@ If tools failed, pivot to answering from your knowledge instead.
 # Builder
 # ---------------------------------------------------------------------------
 
+
 def build_system_prompt(
     session,
     tool_names: list[str] | None = None,
@@ -182,6 +179,7 @@ def build_system_prompt(
     # 4. Workflow guides (compact — key sequences for common tasks)
     try:
         from ct.agent.workflows import format_workflows_for_llm
+
         workflows = format_workflows_for_llm()
         if workflows:
             parts.append(workflows)
@@ -195,6 +193,7 @@ def build_system_prompt(
     # are essential. Include in full.
     try:
         from ct.agent.knowledge import KNOWLEDGE_PRIMER
+
         parts.append("\n" + KNOWLEDGE_PRIMER)
     except Exception as e:
         logger.warning("Could not load knowledge primer: %s", e)
@@ -202,6 +201,7 @@ def build_system_prompt(
     # 6. Bioinformatics code-gen hints (CRITICAL for BixBench performance)
     try:
         from ct.tools.code import BIOINFORMATICS_CODE_GEN_PROMPT, AGENTIC_CODE_ADDENDUM
+
         # Strip the template placeholders and include the raw hints
         hints = BIOINFORMATICS_CODE_GEN_PROMPT
         # Remove the {namespace_description} and {data_files_description} placeholders
@@ -220,6 +220,7 @@ def build_system_prompt(
     # 7. Synthesis rules
     try:
         from ct.agent.knowledge import SYNTHESIZER_PRIMER
+
         parts.append("\n## Synthesis Guidelines\n")
         parts.append(SYNTHESIZER_PRIMER)
     except Exception as e:

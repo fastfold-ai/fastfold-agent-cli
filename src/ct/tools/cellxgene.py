@@ -12,13 +12,14 @@ def _check_census_sdk():
     """Check if cellxgene-census SDK is installed. Returns error dict or None."""
     try:
         import cellxgene_census  # noqa: F401
+
         return None
     except ImportError:
         return {
             "error": "cellxgene-census not installed.",
             "summary": (
                 "cellxgene-census SDK required but not installed. "
-                "Install with: pip install 'celltype-cli[singlecell]' "
+                "Install with: pip install 'fastfold-agent-cli[singlecell]' "
                 "or: pip install cellxgene-census"
             ),
         }
@@ -38,8 +39,9 @@ def _check_census_sdk():
         "Much more detailed than GTEx bulk RNA-seq. Use for cell-type-specific target validation."
     ),
 )
-def gene_expression(gene: str, tissue: str = None, organism: str = "Homo sapiens",
-                    **kwargs) -> dict:
+def gene_expression(
+    gene: str, tissue: str = None, organism: str = "Homo sapiens", **kwargs
+) -> dict:
     """Query gene expression across cell types from CELLxGENE Census."""
     err = _check_census_sdk()
     if err:
@@ -56,22 +58,35 @@ def gene_expression(gene: str, tissue: str = None, organism: str = "Homo sapiens
                 value_filter += f" and tissue_general == '{tissue}'"
 
             # Query expression for the gene
-            obs_df = census["census_data"][organism.lower().replace(" ", "_")].obs.read(
-                value_filter=value_filter,
-                column_names=["cell_type", "tissue_general", "disease", "assay"],
-            ).concat().to_pandas()
+            obs_df = (
+                census["census_data"][organism.lower().replace(" ", "_")]
+                .obs.read(
+                    value_filter=value_filter,
+                    column_names=["cell_type", "tissue_general", "disease", "assay"],
+                )
+                .concat()
+                .to_pandas()
+            )
 
             if obs_df.empty:
                 return {
-                    "summary": f"No cells found for tissue='{tissue}'" if tissue else "No data found",
+                    "summary": f"No cells found for tissue='{tissue}'"
+                    if tissue
+                    else "No data found",
                     "error": "No matching cells in Census",
                 }
 
             # Get gene expression via the X matrix
-            gene_df = census["census_data"][organism.lower().replace(" ", "_")].ms["RNA"].var.read(
-                value_filter=f"feature_name == '{gene}'",
-                column_names=["soma_joinid", "feature_name"],
-            ).concat().to_pandas()
+            gene_df = (
+                census["census_data"][organism.lower().replace(" ", "_")]
+                .ms["RNA"]
+                .var.read(
+                    value_filter=f"feature_name == '{gene}'",
+                    column_names=["soma_joinid", "feature_name"],
+                )
+                .concat()
+                .to_pandas()
+            )
 
             if gene_df.empty:
                 return {
@@ -85,11 +100,13 @@ def gene_expression(gene: str, tissue: str = None, organism: str = "Homo sapiens
 
             expression_by_cell_type = []
             for _, row in top_cell_types.iterrows():
-                expression_by_cell_type.append({
-                    "tissue": row["tissue_general"],
-                    "cell_type": row["cell_type"],
-                    "n_cells": int(row["n_cells"]),
-                })
+                expression_by_cell_type.append(
+                    {
+                        "tissue": row["tissue_general"],
+                        "cell_type": row["cell_type"],
+                        "n_cells": int(row["n_cells"]),
+                    }
+                )
 
             tissues = sorted(obs_df["tissue_general"].unique().tolist())
             cell_types = sorted(obs_df["cell_type"].unique().tolist())
@@ -133,8 +150,9 @@ def gene_expression(gene: str, tissue: str = None, organism: str = "Homo sapiens
         "which genes distinguish a cell type from others."
     ),
 )
-def cell_type_markers(cell_type: str, tissue: str = None, top_n: int = 20,
-                      organism: str = "Homo sapiens", **kwargs) -> dict:
+def cell_type_markers(
+    cell_type: str, tissue: str = None, top_n: int = 20, organism: str = "Homo sapiens", **kwargs
+) -> dict:
     """Find marker genes for a cell type from CELLxGENE Census."""
     err = _check_census_sdk()
     if err:
@@ -148,10 +166,15 @@ def cell_type_markers(cell_type: str, tissue: str = None, top_n: int = 20,
             if tissue:
                 value_filter += f" and tissue_general == '{tissue}'"
 
-            obs_df = census["census_data"][organism.lower().replace(" ", "_")].obs.read(
-                value_filter=value_filter,
-                column_names=["cell_type", "tissue_general"],
-            ).concat().to_pandas()
+            obs_df = (
+                census["census_data"][organism.lower().replace(" ", "_")]
+                .obs.read(
+                    value_filter=value_filter,
+                    column_names=["cell_type", "tissue_general"],
+                )
+                .concat()
+                .to_pandas()
+            )
 
             if obs_df.empty:
                 return {
@@ -176,7 +199,7 @@ def cell_type_markers(cell_type: str, tissue: str = None, top_n: int = 20,
                 "tissues": tissues_found,
                 "markers": [],
                 "note": "Full marker gene computation requires local scanpy analysis. "
-                        "Use cellxgene_census.get_anndata() for detailed analysis.",
+                "Use cellxgene_census.get_anndata() for detailed analysis.",
             }
 
     except Exception as e:
@@ -202,8 +225,13 @@ def cell_type_markers(cell_type: str, tissue: str = None, top_n: int = 20,
         "before deeper analysis."
     ),
 )
-def dataset_search(tissue: str = None, disease: str = None, assay: str = None,
-                   organism: str = "Homo sapiens", **kwargs) -> dict:
+def dataset_search(
+    tissue: str = None,
+    disease: str = None,
+    assay: str = None,
+    organism: str = "Homo sapiens",
+    **kwargs,
+) -> dict:
     """Search CELLxGENE Census for datasets matching criteria."""
     err = _check_census_sdk()
     if err:
@@ -223,11 +251,15 @@ def dataset_search(tissue: str = None, disease: str = None, assay: str = None,
 
             value_filter = " and ".join(filters)
 
-            obs_df = census["census_data"][organism.lower().replace(" ", "_")].obs.read(
-                value_filter=value_filter,
-                column_names=["dataset_id", "tissue_general", "disease",
-                              "assay", "cell_type"],
-            ).concat().to_pandas()
+            obs_df = (
+                census["census_data"][organism.lower().replace(" ", "_")]
+                .obs.read(
+                    value_filter=value_filter,
+                    column_names=["dataset_id", "tissue_general", "disease", "assay", "cell_type"],
+                )
+                .concat()
+                .to_pandas()
+            )
 
             if obs_df.empty:
                 return {
@@ -236,37 +268,43 @@ def dataset_search(tissue: str = None, disease: str = None, assay: str = None,
                 }
 
             # Aggregate by dataset
-            datasets = obs_df.groupby("dataset_id").agg(
-                n_cells=("cell_type", "size"),
-                tissues=("tissue_general", lambda x: sorted(x.unique().tolist())),
-                diseases=("disease", lambda x: sorted(x.unique().tolist())),
-                assays=("assay", lambda x: sorted(x.unique().tolist())),
-                cell_types=("cell_type", lambda x: sorted(x.unique().tolist())),
-            ).reset_index()
+            datasets = (
+                obs_df.groupby("dataset_id")
+                .agg(
+                    n_cells=("cell_type", "size"),
+                    tissues=("tissue_general", lambda x: sorted(x.unique().tolist())),
+                    diseases=("disease", lambda x: sorted(x.unique().tolist())),
+                    assays=("assay", lambda x: sorted(x.unique().tolist())),
+                    cell_types=("cell_type", lambda x: sorted(x.unique().tolist())),
+                )
+                .reset_index()
+            )
 
             datasets = datasets.sort_values("n_cells", ascending=False)
 
             results = []
             for _, row in datasets.head(20).iterrows():
-                results.append({
-                    "dataset_id": row["dataset_id"],
-                    "n_cells": int(row["n_cells"]),
-                    "tissues": row["tissues"][:5],
-                    "diseases": row["diseases"][:5],
-                    "assays": row["assays"],
-                    "n_cell_types": len(row["cell_types"]),
-                })
+                results.append(
+                    {
+                        "dataset_id": row["dataset_id"],
+                        "n_cells": int(row["n_cells"]),
+                        "tissues": row["tissues"][:5],
+                        "diseases": row["diseases"][:5],
+                        "assays": row["assays"],
+                        "n_cell_types": len(row["cell_types"]),
+                    }
+                )
 
-            search_desc = ", ".join(
-                f"{k}={v}" for k, v in
-                [("tissue", tissue), ("disease", disease), ("assay", assay)]
-                if v
-            ) or "all"
-
-            summary = (
-                f"Found {len(datasets)} datasets ({search_desc}), "
-                f"{len(obs_df)} total cells"
+            search_desc = (
+                ", ".join(
+                    f"{k}={v}"
+                    for k, v in [("tissue", tissue), ("disease", disease), ("assay", assay)]
+                    if v
+                )
+                or "all"
             )
+
+            summary = f"Found {len(datasets)} datasets ({search_desc}), {len(obs_df)} total cells"
 
             return {
                 "summary": summary,

@@ -12,7 +12,7 @@ from ct.tools import registry
 
 
 REASON_SYSTEM_PROMPT = """\
-You are a drug discovery research expert embedded in celltype-cli, \
+You are a drug discovery research expert embedded in fastfold-agent-cli, \
 an autonomous research agent.
 
 You are being called as a reasoning tool — the planner determined that \
@@ -31,7 +31,7 @@ Guidelines:
 """
 
 COMPARE_SYSTEM_PROMPT = """\
-You are a drug discovery research expert embedded in celltype-cli.
+You are a drug discovery research expert embedded in fastfold-agent-cli.
 
 You are being called to compare and evaluate options. Provide a structured \
 comparison with clear criteria, trade-offs, and a recommendation.
@@ -46,7 +46,7 @@ Guidelines:
 """
 
 SUMMARIZE_SYSTEM_PROMPT = """\
-You are a drug discovery research expert embedded in celltype-cli.
+You are a drug discovery research expert embedded in fastfold-agent-cli.
 
 You are being called to synthesize and summarize information. Distill the \
 key findings into a concise, actionable summary.
@@ -95,8 +95,7 @@ def _build_context_section(prior_results: dict = None) -> str:
         "similarity search, etc.) — those are faster and cheaper."
     ),
 )
-def reason(goal: str, context: str = "", _session=None,
-           _prior_results=None, **kwargs) -> dict:
+def reason(goal: str, context: str = "", _session=None, _prior_results=None, **kwargs) -> dict:
     """Use Claude for expert reasoning on drug discovery questions."""
     if _session is None:
         return {
@@ -114,6 +113,7 @@ def reason(goal: str, context: str = "", _session=None,
     system = REASON_SYSTEM_PROMPT.format(context_section=context_section)
 
     from ct.ui.status import ThinkingStatus
+
     try:
         with ThinkingStatus(_session.console, "reasoning"):
             response = llm.chat(
@@ -151,8 +151,9 @@ def reason(goal: str, context: str = "", _session=None,
         "then use claude.compare to interpret and decide."
     ),
 )
-def compare(goal: str, options: str = "", criteria: str = "",
-            _session=None, _prior_results=None, **kwargs) -> dict:
+def compare(
+    goal: str, options: str = "", criteria: str = "", _session=None, _prior_results=None, **kwargs
+) -> dict:
     """Compare multiple options using Claude's reasoning."""
     if _session is None:
         return {
@@ -172,6 +173,7 @@ def compare(goal: str, options: str = "", criteria: str = "",
     system = COMPARE_SYSTEM_PROMPT.format(context_section=context_section)
 
     from ct.ui.status import ThinkingStatus
+
     try:
         with ThinkingStatus(_session.console, "comparing"):
             response = llm.chat(
@@ -207,8 +209,7 @@ def compare(goal: str, options: str = "", criteria: str = "",
         "used as a final step after data-gathering tools have run."
     ),
 )
-def summarize(goal: str, content: str = "", _session=None,
-              _prior_results=None, **kwargs) -> dict:
+def summarize(goal: str, content: str = "", _session=None, _prior_results=None, **kwargs) -> dict:
     """Summarize and synthesize research findings."""
     if _session is None:
         return {
@@ -226,6 +227,7 @@ def summarize(goal: str, content: str = "", _session=None,
     system = SUMMARIZE_SYSTEM_PROMPT.format(context_section=context_section)
 
     from ct.ui.status import ThinkingStatus
+
     try:
         with ThinkingStatus(_session.console, "summarizing"):
             response = llm.chat(
@@ -264,9 +266,14 @@ def summarize(goal: str, content: str = "", _session=None,
         "Do NOT use for drug discovery research — use ct's specialized tools."
     ),
 )
-def code(task: str, allowed_tools: str = "Read,Edit,Write,Bash,Glob,Grep",
-         max_budget: float = 1.0, _session=None, _prior_results=None,
-         **kwargs) -> dict:
+def code(
+    task: str,
+    allowed_tools: str = "Read,Edit,Write,Bash,Glob,Grep",
+    max_budget: float = 1.0,
+    _session=None,
+    _prior_results=None,
+    **kwargs,
+) -> dict:
     """Delegate a coding task to Claude Code CLI.
 
     Spawns `claude -p` in non-interactive mode with permission bypass and
@@ -313,24 +320,28 @@ def code(task: str, allowed_tools: str = "Read,Edit,Write,Bash,Glob,Grep",
     full_prompt = task
     if context_parts:
         full_prompt = (
-            f"Context from prior research steps:\n"
-            + "\n".join(context_parts)
-            + f"\n\nTask: {task}"
+            f"Context from prior research steps:\n" + "\n".join(context_parts) + f"\n\nTask: {task}"
         )
 
     cmd = [
         claude_path,
-        "-p", full_prompt,
-        "--output-format", "text",
-        "--permission-mode", "bypassPermissions",
-        "--allowed-tools", allowed_tools,
-        "--max-budget-usd", str(max_budget),
+        "-p",
+        full_prompt,
+        "--output-format",
+        "text",
+        "--permission-mode",
+        "bypassPermissions",
+        "--allowed-tools",
+        allowed_tools,
+        "--max-budget-usd",
+        str(max_budget),
         "--no-session-persistence",
     ]
 
     try:
         if _session:
             from ct.ui.status import ThinkingStatus
+
             with ThinkingStatus(_session.console, "coding"):
                 result = subprocess.run(
                     cmd,
