@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "fold": {
+      "source": "fastfold-ai/skills",
+      "sourceType": "github",
+      "computedHash": "0317ba64359ffa0767266eb406d536373ba940583838a4fd68bfa5ef491d00af"
+    }
+  }
+}
