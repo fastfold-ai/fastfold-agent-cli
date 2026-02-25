@@ -7,8 +7,17 @@ Ask questions in natural language. Fastfold CLI plans the analysis, selects the 
 Built on top of [Claude Agent SDK](https://github.com/anthropics/anthropic-sdk-python) and [CellType CLI](https://github.com/celltype/cli).
 
 ### Quick install
+
+Requires **Python 3.10+**. If you're on an older version, install Python 3.10+ first:
+
 ```bash
-uv tool install "fastfold-agent-cli[all]"
+uv python install 3.10
+```
+
+Then install:
+
+```bash
+uv tool install "fastfold-agent-cli[all]" --python 3.10
 ```
 
 ### Authentication
