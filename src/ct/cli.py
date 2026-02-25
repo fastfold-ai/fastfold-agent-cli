@@ -1,5 +1,5 @@
 """
-Fastfold CLI entry point.
+Fastfold Agent CLI entry point.
 
 Usage:
     fastfold                              # Interactive mode
@@ -43,7 +43,7 @@ BANNER = """
 app = typer.Typer(
     name="fastfold",
     help=(
-        "Fastfold CLI — An autonomous agent for drug discovery research.\n\n"
+        "Fastfold Agent CLI — Where scientists and AI agents work together doing real science.\n\n"
         "Common usage:\n"
         '  fastfold "your research question"\n'
         '  fastfold --smiles "CCO" "Profile this compound"\n'
@@ -181,7 +181,7 @@ def setup_cmd(
     console.print()
     console.print(
         Panel(
-            "[bold]Welcome to Fastfold CLI[/bold]\n\n"
+            "[bold]Welcome to Fastfold Agent CLI[/bold]\n\n"
             "This wizard will configure fastfold for first use.\n"
             "You'll configure Anthropic and Fastfold AI Cloud API keys.",
             title="[cyan]fastfold setup[/cyan]",
@@ -582,7 +582,10 @@ def _run_step_command(label: str, cmd: list[str], env: Optional[dict] = None) ->
 def trace_diagnose(
     path: Optional[Path] = typer.Option(None, "--path", "-p", help="Path to a trace JSONL file"),
     session_id: Optional[str] = typer.Option(
-        None, "--session-id", "-s", help="Session ID (looks up ~/.fastfold-cli/traces/<id>.trace.jsonl)"
+        None,
+        "--session-id",
+        "-s",
+        help="Session ID (looks up ~/.fastfold-cli/traces/<id>.trace.jsonl)",
     ),
     as_json: bool = typer.Option(False, "--json", help="Print diagnostics as JSON"),
     show_queries: bool = typer.Option(
@@ -643,7 +646,10 @@ def trace_diagnose(
 def trace_export(
     path: Optional[Path] = typer.Option(None, "--path", "-p", help="Path to a trace JSONL file"),
     session_id: Optional[str] = typer.Option(
-        None, "--session-id", "-s", help="Session ID (looks up ~/.fastfold-cli/traces/<id>.trace.jsonl)"
+        None,
+        "--session-id",
+        "-s",
+        help="Session ID (looks up ~/.fastfold-cli/traces/<id>.trace.jsonl)",
     ),
     report: Optional[Path] = typer.Option(
         None, "--report", "-r", help="Optional markdown report to include"
@@ -1382,7 +1388,7 @@ def run_cmd(
     version: bool = typer.Option(False, "--version", "-V", help="Show version"),
 ):
     """
-    Fastfold CLI — An autonomous agent for drug discovery research.
+    Fastfold Agent CLI — Where scientists and AI agents work together doing real science.
 
     Run without arguments for interactive mode.
     Pass a question for single-query mode.
@@ -1620,7 +1626,7 @@ def print_banner():
     )
 
     console.print(
-        Panel(meta_text, title="[bold cyan]Fastfold CLI[/]", border_style="dim", width=65)
+        Panel(meta_text, title="[bold cyan]Fastfold Agent CLI[/]", border_style="dim", width=65)
     )
 
 
