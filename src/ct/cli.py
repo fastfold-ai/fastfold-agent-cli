@@ -314,7 +314,7 @@ def _prompt_fastfold_cloud_api_key(cfg, cli_value: Optional[str] = None) -> Opti
     import getpass
 
     existing = cfg.get("api.fastfold_cloud_key") or os.environ.get("FASTFOLD_API_KEY")
-    if cli_value:
+    if isinstance(cli_value, str) and cli_value:
         return cli_value.strip() or None
 
     console.print()
@@ -1647,7 +1647,7 @@ def run_interactive(
     llm_issue = cfg.llm_preflight_issue()
     if llm_issue:
         console.print("\n  [yellow]First-time setup required.[/yellow]\n")
-        setup_cmd(api_key=None)
+        setup_cmd(api_key=None, fastfold_api_key=None)
         # Reload config after setup
         cfg = Config.load()
         llm_issue = cfg.llm_preflight_issue()
