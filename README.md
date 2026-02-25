@@ -6,52 +6,9 @@ Ask questions in natural language. Fastfold CLI plans the analysis, selects the 
 
 Built on top of [Claude Agent SDK](https://github.com/anthropics/anthropic-sdk-python) and [CellType CLI](https://github.com/celltype/cli).
 
-## Installation
-
-### Quick install (recommended)
-
+### Quick install
 ```bash
-curl -fsSL https://raw.githubusercontent.com/fastfold-ai/fastfold-agent-cli/main/install.sh | bash
-```
-
-Detects Python 3.10+, installs via `uv`, `pipx`, or `pip`, and launches an interactive setup wizard.
-
-### Install from source with uv
-
-```bash
-# Clone the repo
-git clone https://github.com/fastfold-ai/fastfold-agent-cli.git
-cd fastfold-agent-cli
-
-# Install uv if you don't have it
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# Create a virtual environment with Python 3.12 and install all dependencies
-uv venv --python 3.12
-uv sync
-
-# Run the setup wizard
-uv run fastfold setup
-
-# Or activate the venv and use fastfold directly
-source .venv/bin/activate
-fastfold setup
-```
-
-### Install from PyPI
-
-```bash
-# With uv (recommended)
-uv tool install fastfold-agent-cli
-
-# With pipx
-pipx install fastfold-agent-cli
-
-# With pip
-pip install fastfold-agent-cli
-
-# With all optional scientific stacks (RDKit, scanpy, etc.)
-pip install "fastfold-agent-cli[all]"
+uv tool install "fastfold-agent-cli[all]"
 ```
 
 ### Authentication
