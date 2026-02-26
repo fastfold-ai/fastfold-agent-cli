@@ -111,6 +111,7 @@ npx skills addd <owner/repo>
 fastfold data pull depmap    # DepMap CRISPR, mutations, expression
 fastfold data pull prism     # PRISM cell viability
 fastfold data pull msigdb    # Gene sets
+fastfold data pull alphafold     # Protein structures (on-demand)
 
 # Or point to existing data
 fastfold config set data.depmap /path/to/depmap/
