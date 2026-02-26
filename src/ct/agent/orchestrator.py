@@ -23,6 +23,7 @@ from rich.live import Live
 from rich.panel import Panel
 from rich.text import Text
 
+from ct.agent.evidence_board import EvidenceBoard
 from ct.agent.executor import ExecutionResult
 from ct.agent.planner import Plan, Step
 from ct.agent.session import Session
@@ -197,6 +198,7 @@ class ResearchOrchestrator:
         max_threads = int(session.config.get("agent.parallel_max_threads", 5))
         self.n_threads = min(max(n_threads, 1), max_threads)
         self.trajectory = trajectory
+        self.evidence_board = EvidenceBoard()
 
     def run(self, query: str, context: dict = None,
             preset_goals: list[ThreadGoal] = None) -> OrchestratorResult:

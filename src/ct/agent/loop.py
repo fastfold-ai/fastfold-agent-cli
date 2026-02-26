@@ -40,8 +40,12 @@ class AgentLoop:
     for multi-turn session context.
     """
 
-    def __init__(self, session):
+    def __init__(self, session, evidence_board=None, thread_id: int = 0,
+                 headless: bool = False):
         self.session = session
+        self.evidence_board = evidence_board
+        self.thread_id = thread_id
+        self.headless = headless
         self.trajectory = Trajectory()
         session_id = str(uuid.uuid4())[:8]
         self.trace_store = TraceStore(session_id=session_id)
@@ -49,9 +53,10 @@ class AgentLoop:
             session, trajectory=self.trajectory, trace_store=self.trace_store,
         )
 
-    def run(self, query: str, context: dict | None = None):
+    def run(self, query: str, context: dict | None = None,
+            progress_callback=None):
         """Execute a query and record it in the trajectory."""
-        result = self._runner.run(query, context)
+        result = self._runner.run(query, context, progress_callback=progress_callback)
 
         # Check for clarification request in result
         if result and result.raw_results:
