@@ -10,7 +10,11 @@ import shlex
 import subprocess
 import time
 import threading
+import json
+import os
 from dataclasses import dataclass
+import urllib.error
+import urllib.request
 
 from rich.console import Console
 from rich.panel import Panel
@@ -47,6 +51,7 @@ SLASH_COMMANDS = {
     "/usage": "Show session token/cost usage",
     "/copy": "Copy the last answer to clipboard",
     "/export": "Export current session transcript to markdown",
+    "/export-share": "Export session, send to Slack, and save to library",
     "/notebook": "Export current session as Jupyter notebook (.ipynb)",
     "/compact": "Compress session context for longer runs",
     "/agents": "Run a query with N parallel research agents",
@@ -777,6 +782,11 @@ class InteractiveTerminal:
             if cmd in ("copy", "/copy"):
                 self._copy_last_response()
                 continue
+            if cmd.startswith("/export-share"):
+                parts = query.split(maxsplit=1)
+                filename = parts[1] if len(parts) > 1 else None
+                self._export_share(filename)
+                continue
             if cmd.startswith("/export"):
                 parts = query.split(maxsplit=1)
                 filename = parts[1] if len(parts) > 1 else None
@@ -1094,10 +1104,10 @@ class InteractiveTerminal:
             self.console.print(f"  [yellow]Clipboard not available. Use /export instead.[/yellow]")
 
     def _export_session(self, filename: str = None):
-        """Export the session transcript to a markdown file."""
+        """Export the session transcript to a markdown file and return the path."""
         if not hasattr(self, 'agent') or not self.agent.trajectory.turns:
             self.console.print("  [dim]No session data to export yet.[/dim]")
-            return
+            return None
 
         output_dir = Path.cwd() / "exports"
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -1108,7 +1118,7 @@ class InteractiveTerminal:
             ts = time.strftime("%Y%m%d_%H%M%S")
             path = output_dir / f"session_{ts}.md"
 
-        lines = ["# ct Session Export\n"]
+        lines = ["# FastFold Agent CLI Session Export\n"]
         lines.append(f"*Exported {time.strftime('%Y-%m-%d %H:%M')}*\n")
         lines.append(f"*Model: {self._model_display_name()}*\n\n---\n")
 
@@ -1124,6 +1134,92 @@ class InteractiveTerminal:
 
         path.write_text("\n".join(lines))
         self.console.print(f"  [green]Exported to[/green] {path}")
+        return path
+
+    def _send_export_to_slack(self, markdown: str, report_name: str) -> dict:
+        """Send markdown report to Fastfold Slack report endpoint."""
+        from ct.agent.config import Config
+
+        cfg = Config.load()
+        api_key = os.environ.get("FASTFOLD_API_KEY") or cfg.get("api.fastfold_cloud_key")
+        if not api_key:
+            return {
+                "ok": False,
+                "message": (
+                    "Fastfold API key not configured. Run `fastfold setup` or "
+                    "`fastfold config set api.fastfold_cloud_key <key>`."
+                ),
+            }
+
+        base_url = os.environ.get("FASTFOLD_API_BASE_URL", "https://api.fastfold.ai").strip() or "https://api.fastfold.ai"
+        url = f"{base_url.rstrip('/')}/v1/slack/messages/agent-cli-report"
+        body = json.dumps(
+            {
+                "markdown": markdown,
+                "report_name": report_name,
+                "save_to_library": True,
+            }
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            url=url,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                text = resp.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as e:
+            text = e.read().decode("utf-8", errors="replace")
+            try:
+                data = json.loads(text) if text else {}
+            except Exception:
+                data = {}
+            return {"ok": False, "message": data.get("message") or f"API error ({e.code})"}
+        except urllib.error.URLError as e:
+            return {"ok": False, "message": f"Network error: {e.reason}"}
+
+        try:
+            data = json.loads(text) if text else {}
+        except Exception:
+            return {"ok": False, "message": "Invalid JSON response from Fastfold API."}
+        if not isinstance(data, dict):
+            return {"ok": False, "message": "Unexpected response from Fastfold API."}
+        return data
+
+    def _export_share(self, filename: str = None):
+        """Export transcript and share to configured Slack report channel."""
+        path = self._export_session(filename)
+        if path is None:
+            return
+
+        try:
+            markdown = path.read_text(encoding="utf-8")
+        except Exception as exc:
+            self.console.print(f"  [red]Could not read export file:[/red] {exc}")
+            return
+
+        self.console.print("  [cyan]Sending report to Slack...[/cyan]")
+        payload = self._send_export_to_slack(markdown, path.name)
+        if bool(payload.get("ok")):
+            channel_id = payload.get("channel_id") or "(unknown)"
+            library_item_id = payload.get("library_item_id")
+            self.console.print(f"  [green]Shared to Slack channel[/green] {channel_id}")
+            if library_item_id:
+                self.console.print(f"  [green]Saved to library item[/green] {library_item_id}")
+            return
+
+        self.console.print(f"  [yellow]{payload.get('message') or 'Failed to share report.'}[/yellow]")
+        if bool(payload.get("needs_slack_setup")):
+            setup = payload.get("setup_instructions") or (
+                "Configure Slack at https://cloud.fastfold.ai/integrations/slack "
+                "and set a channel for the agent_cli_report mode."
+            )
+            self.console.print(f"  [dim]{setup}[/dim]")
 
     def _export_notebook(self, filename: str = None):
         """Export the current session trace as a Jupyter notebook."""

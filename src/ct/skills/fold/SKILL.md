@@ -13,16 +13,24 @@ This skill guides correct use of the [FastFold Jobs API](https://docs.fastfold.a
 
 **Get an API key:** Create a key in the [FastFold dashboard](https://cloud.fastfold.ai/api-keys). Keep it secret.
 
-**Use the key:** Scripts read `FASTFOLD_API_KEY` from `.env` or environment.
+**Use the key:** Scripts resolve credentials in this order:
+1. `FASTFOLD_API_KEY` from environment
+2. `.env` in workspace/current parent directories
+3. FastFold CLI config at `~/.fastfold-cli/config.json` (`api.fastfold_cloud_key`)
+
 Do **not** ask users to paste secrets in chat.
 
 - **`.env` file (recommended):** Scripts automatically load `FASTFOLD_API_KEY` from a `.env` file in the project root.
 - **Environment:** `export FASTFOLD_API_KEY="sk-..."` (overrides `.env`).
 - **Credential policy:** Never request, accept, echo, or store API keys in chat messages, command history, or logs.
 
-**If `FASTFOLD_API_KEY` is not set:**
-1. Copy `references/.env.example` to `.env` at the workspace root.
-2. Tell the user: *"Open the `.env` file and paste your FastFold API key after `FASTFOLD_API_KEY=`. You can create one at [FastFold API Keys](https://cloud.fastfold.ai/api-keys)."*
+**Only if no key is resolved from env/.env/config:**
+1. Generic-agent guidance (default):
+   - Tell the user to set `FASTFOLD_API_KEY` in environment or `.env`.
+   - You can create `.env` from `references/.env.example` and ask the user to add their key.
+2. Only if user is explicitly on FastFold CLI, you may suggest:
+   - `fastfold setup`
+   - `fastfold config set api.fastfold_cloud_key <key>`
 3. Do not run any job scripts until the user confirms the key is set.
 
 ## When to Use This Skill
@@ -48,6 +56,7 @@ python -c "import ct.skills.fold.scripts; import os; print(os.path.dirname(ct.sk
 - **Viewer link:** `python -m ct.skills.fold.scripts.get_viewer_link <job_id>`
 
 The agent should run these scripts for the user, not hand them a list of commands.
+Do not replace this flow with ad-hoc Python `requests` code; use the bundled scripts.
 
 ## Workflow: Create → Wait → Results
 
