@@ -24,10 +24,9 @@ from rich.panel import Panel
 from rich.text import Text
 
 from ct.agent.evidence_board import EvidenceBoard
-from ct.agent.executor import ExecutionResult
-from ct.agent.planner import Plan, Step
 from ct.agent.session import Session
 from ct.agent.trajectory import Trajectory
+from ct.agent.types import ExecutionResult, Plan, Step
 from ct.ui.status import ThinkingStatus
 
 logger = logging.getLogger("ct.orchestrator")
