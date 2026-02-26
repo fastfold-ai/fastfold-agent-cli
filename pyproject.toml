@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fastfold-agent-cli"
-version = "0.0.8"
+version = "0.0.9"
 description = "Fastfold CLI — An autonomous agent for drug discovery research"
 readme = "README.md"
 license = "MIT"

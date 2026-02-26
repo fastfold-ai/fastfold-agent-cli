@@ -255,9 +255,7 @@ class ResearchOrchestrator:
             f"{len(thread_results)} threads..."
         )
 
-        from ct.agent.executor import Executor
-        executor = Executor(self.session)
-        summary = executor.synthesize(query, merged_plan, merged_raw, stream=True)
+        summary = self._synthesize(query, merged_plan, merged_raw, thread_results)
 
         duration = time.time() - t0
 
@@ -290,6 +288,55 @@ class ResearchOrchestrator:
         )
 
         return result
+
+    def _synthesize(self, query: str, merged_plan, merged_raw: dict,
+                    thread_results: list) -> str:
+        """Merge thread findings into a single coherent report via LLM."""
+        llm = self.session.get_llm()
+
+        # Build a compact summary of what each thread found
+        findings: list[str] = []
+        for tr in thread_results:
+            if tr.error or tr.plan is None:
+                findings.append(
+                    f"Thread {tr.thread_id} ({tr.goal[:60]}): FAILED — {tr.error}"
+                )
+                continue
+            step_summaries = []
+            for step in tr.plan.steps:
+                if step.status == "completed" and step.result:
+                    result = step.result
+                    if isinstance(result, dict):
+                        text = result.get("summary") or str(result)[:300]
+                    else:
+                        text = str(result)[:300]
+                    step_summaries.append(f"  - [{step.tool}] {text}")
+            findings.append(
+                f"Thread {tr.thread_id} — {tr.goal[:80]} "
+                f"({tr.completed_steps} steps):\n" + "\n".join(step_summaries)
+            )
+
+        findings_text = "\n\n".join(findings)
+        user_msg = (
+            f"Original query: {query}\n\n"
+            f"Parallel research thread findings:\n\n{findings_text}\n\n"
+            f"Synthesize all findings into a single comprehensive research report. "
+            f"Integrate evidence across threads, highlight key conclusions, and note "
+            f"any gaps or conflicts between thread findings."
+        )
+
+        with ThinkingStatus(self.console, "synthesizing"):
+            response = llm.chat(
+                system=(
+                    "You are a senior drug discovery researcher. Synthesize parallel "
+                    "research thread findings into a single coherent, evidence-backed "
+                    "report. Be concise but thorough. Use markdown formatting."
+                ),
+                messages=[{"role": "user", "content": user_msg}],
+                max_tokens=4096,
+            )
+
+        return (response.content or "").strip()
 
     def _decompose(self, query: str, context: dict) -> list[ThreadGoal]:
         """Use LLM to decompose query into N independent thread goals."""
