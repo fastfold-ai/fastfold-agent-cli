@@ -645,11 +645,8 @@ class AgentRunner:
 
     def _print_usage(self, result_msg, duration: float):
         """Print cost and usage summary."""
-        cost = getattr(result_msg, "total_cost_usd", 0)
         turns = getattr(result_msg, "num_turns", 0)
         parts = []
-        if cost:
-            parts.append(f"${cost:.2f}")
         if turns:
             parts.append(f"{turns} turns")
         if duration >= 60:
