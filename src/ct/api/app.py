@@ -12,11 +12,12 @@ from pydantic import BaseModel, Field
 
 from ct.api.config import discover_datasets, validate_schema, DATASET_REGISTRY, DEFAULT_QUERY_LIMIT
 from ct.api.engine import QueryEngine
+from ct import __version__
 
 app = FastAPI(
     title="ct Data API",
     description="Query large drug discovery datasets via DuckDB",
-    version="0.1.0",
+    version=__version__,
 )
 
 engine = QueryEngine()
