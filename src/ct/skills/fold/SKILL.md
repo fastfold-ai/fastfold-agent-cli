@@ -1,6 +1,6 @@
 ---
 name: fold
-description: Submits and manages FastFold protein folding jobs via the Jobs API (Boltz-2, OpenFold 3, Chai-1, AlphaFold2, SimpleFold). Covers authentication, job payloads, modifications, constraints, polling, and CIF/PDB URLs. Use when folding with FastFold, OpenFold 3/Chai-1 complexes, ligands/affinity, or scripting create → wait → results.
+description: Submits and manages FastFold protein folding jobs via the Jobs API (Boltz-2, OpenFold 3, Chai-1, IntelliFold, AlphaFold2, SimpleFold). Covers authentication, job payloads, modifications, constraints, webhooks, polling, and CIF/PDB URLs. Use when folding with FastFold, OpenFold 3/Chai-1/IntelliFold complexes, ligands/affinity, or scripting create → wait → results.
 ---
 
 # Fold
@@ -51,18 +51,78 @@ python -c "import ct.skills.fold.scripts; import os; print(os.path.dirname(ct.sk
 - **Create job (simple):** `python -m ct.skills.fold.scripts.create_job --name "My Job" --sequence MALW... [--model boltz-2] [--public]`
 - **Create job (full payload):** `python -m ct.skills.fold.scripts.create_job --payload job.json`
 - **Wait for completion:** `python -m ct.skills.fold.scripts.wait_for_completion <job_id> [--poll-interval 5] [--timeout 900]`
+- **Wait for fold + linked Evolla answers (preferred for webhook flows):** `python -m ct.skills.fold.scripts.wait_for_evolla_linked <job_id> --json` (defaults to one representative source sequence; add `--all-sequences` only when you explicitly need per-sequence polling)
 - **Fetch results (JSON):** `python -m ct.skills.fold.scripts.fetch_results <job_id>`
 - **Download CIF:** `python -m ct.skills.fold.scripts.download_cif <job_id> [--out output.cif]`
 - **Viewer link:** `python -m ct.skills.fold.scripts.get_viewer_link <job_id>`
 
 The agent should run these scripts for the user, not hand them a list of commands.
-Do not replace this flow with ad-hoc Python `requests` code; use the bundled scripts.
+Do not replace this flow with ad-hoc Python `requests` code, curl chains, or background polling tasks; use the bundled scripts.
 
 ## Workflow: Create → Wait → Results
 
 1. **Create job** — POST `/v1/jobs` with `name`, `sequences`, `params` (required).
 2. **Wait for completion** — Poll GET `/v1/jobs/{jobId}/results` until `job.status` is `COMPLETED`, `FAILED`, or `STOPPED`.
 3. **Fetch results** — For `COMPLETED` jobs: read `cif_url`, `pdb_url`, metrics, viewer link, and persisted `constraints` (`contact` / `pocket` / `bond`) from the same `/v1/jobs/{jobId}/results` payload.
+
+### Optional chain: Fold completion -> Evolla completion -> answer
+
+Use this when users want automatic post-fold interpretation in natural language.
+
+**Most efficient path (single waiter command):**
+
+1. Submit fold job with webhook constraints.
+2. Run:
+   - `python -m ct.skills.fold.scripts.wait_for_evolla_linked <job_id> --json`
+3. Read fold + Evolla answer(s) from that single command output.
+
+**What is Evolla?**
+- Evolla is FastFold's protein-chat workflow. It uses the folded structure as context and answers questions (for example: function summary, mechanism hints, or other protein Q&A).
+
+**Evolla-10B key details (paper-backed)**
+- Architecture: frozen SaProt encoder + frozen Llama3 decoder, bridged by trainable Sequence Compressor and Sequence Aligner modules.
+- Training scale: paper reports ~546M protein-text triplets (~41.8M proteins; ~150B tokens), then DPO refinement.
+- Benchmark profile: paper reports stronger functional inference versus general-purpose LLMs and zero-shot parity with a state-of-the-art supervised baseline on selected tasks.
+- Versions: the paper describes 10B and 80B variants; this webhook flow currently targets Evolla-10B.
+
+**What the webhook is for**
+- It automatically starts Evolla right after fold completion.
+- It does not change the fold artifacts (`cif_url`, `pdb_url`, metrics); it adds linked chat workflows and answers.
+- There is **one webhook option today**: Evolla auto-chat (`auto_evolla_chat_on_complete`).
+- `constraints.webhooks` is intentionally extensible and may include more webhook options in future versions.
+
+Create jobs with:
+
+`constraints.webhooks.auto_evolla_chat_on_complete = true`
+
+and optionally:
+
+`constraints.webhooks.evolla_initial_question = "What is the function of this protein?"`
+
+**How to read webhook results (end-to-end):**
+
+1. Wait for fold completion from `GET /v1/jobs/{jobId}/results` (`job.status == COMPLETED`).
+2. Read `jobRunId` and sequence IDs from that same response.
+3. For each sequence, query linked Evolla workflows:
+   - `GET /v1/workflows/evolla/linked-history?source_job_id=<jobId>&source_job_run_id=<jobRunId>&source_sequence_id=<sequenceId>`
+4. Poll linked history until:
+   - `workflowStatus` is terminal (`COMPLETED` / `FAILED` / `STOPPED`) and
+   - `lastAnswer` is present.
+5. Return `lastAnswer` as the Evolla response for that sequence.
+
+**Field mapping (important):**
+- Fold output: `/v1/jobs/{jobId}/results`
+- Evolla output: `/v1/workflows/evolla/linked-history`
+- Latest answer text: `lastAnswer`
+- Latest question text: `lastQuestion`
+- Evolla execution state: `workflowStatus`
+
+If a linked workflow is `DRAFT`, users can edit the draft initial question via:
+
+- `PATCH /v1/workflows/evolla/{workflowId}/draft-question`
+  body: `{ "question": "..." }`
+
+Then wait for a follow-up run/answer as above.
 
 ## ⚠️ Correct Payload Field Names — Read Before Writing Any Payload
 
@@ -76,6 +136,7 @@ Common mistakes the agent must avoid:
 | `"ccd": "ATP"` | `"sequence": "ATP", "is_ccd": true` |
 | `"ligandSequence": {"id": "L", "ccd": "ATP"}` | `"ligandSequence": {"sequence": "ATP", "is_ccd": true}` |
 | `"modelName": "OpenFold-3"` or `"openfold-3"` | `"modelName": "openfold3"` (exact string) |
+| `"modelName": "IntelliFold"` | `"modelName": "intellifold"` (exact string) |
 
 ## Payload Examples
 
@@ -342,11 +403,29 @@ Optional fields — omit to use defaults. **Affinity-related** keys apply only w
 }
 ```
 
+### IntelliFold (`intellifold`)
+
+- Use **`recyclingSteps`**, **`samplingSteps`**, and **`diffusionSample`** for optional runtime tuning (maps to IntelliFold CLI flags).
+- Input is **Boltz-compatible YAML** generated server-side; supports **protein / RNA / DNA / ligand** chains.
+- Omit **`relaxPrediction`** (same as OpenFold 3 / Boltz-style complex runs).
+
+```json
+{
+  "params": {
+    "modelName": "intellifold",
+    "recyclingSteps": 10,
+    "samplingSteps": 200,
+    "diffusionSample": 5
+  }
+}
+```
+
 ## Ligands, affinity, and constraints
 
 - **CCD vs SMILES:** ligand `sequence` is either a **CCD code** with `"is_ccd": true` or a **SMILES** string with `is_ccd` omitted/false.
 - **Affinity (Boltz-2):** set `"property_type": "affinity"` on the **`ligandSequence`** object; never put `computeAffinity` in `params`.
-- **Constraints (`contact` / `pocket` / `bond`):** Set them in the job JSON under `constraints` (same request body as everything else). **Boltz** and **Boltz-2** use pocket/bond constraints. **Chai-1** maps contact/pocket/bond into native restraints during inference. **OpenFold 3** does not feed `constraints` into its inference input—only **sequences** and chain-level **modifications**—though the service may still persist `constraints` on the job for the UI or replay.
+- **Constraints (`contact` / `pocket` / `bond`):** Set them in the job JSON under `constraints` (same request body as everything else). **Boltz**, **Boltz-2**, and **IntelliFold** use pocket/bond constraints in YAML. **Chai-1** maps contact/pocket/bond into native restraints during inference. **OpenFold 3** does not feed `constraints` into its inference input—only **sequences** and chain-level **modifications**—though the service may still persist `constraints` on the job for the UI or replay.
+- **Webhook automation (current):** `constraints.webhooks.auto_evolla_chat_on_complete: true` enables Evolla auto-chat after fold completion; optional `constraints.webhooks.evolla_initial_question` sets the first question. This is the single webhook option today; future webhook options may be added under `constraints.webhooks`.
 
 ## Complex vs Non-Complex Jobs
 

@@ -16,8 +16,14 @@ import sys
 import urllib.error
 import urllib.request
 
-from load_env import resolve_fastfold_api_key
-from security_utils import validate_base_url, validate_job_id, validate_results_payload
+try:
+    # Package mode: python -m ct.skills.fold.scripts.fetch_results
+    from .load_env import resolve_fastfold_api_key
+    from .security_utils import validate_base_url, validate_job_id, validate_results_payload
+except ImportError:
+    # Script mode: python fetch_results.py
+    from load_env import resolve_fastfold_api_key
+    from security_utils import validate_base_url, validate_job_id, validate_results_payload
 
 
 def get_results(base_url: str, api_key: str, job_id: str) -> dict:
@@ -51,6 +57,22 @@ def summary(data: dict) -> str:
     status = job.get("status", "UNKNOWN")
     is_complex = job.get("isComplex", False)
     lines = [f"Status: {status}", f"Complex: {is_complex}"]
+    job_run_id = (
+        data.get("jobRunId")
+        or (data.get("parameters") or {}).get("jobRunId")
+        or next((s.get("jobRunId") for s in (data.get("sequences") or []) if isinstance(s, dict) and s.get("jobRunId")), "")
+    )
+    if job_run_id:
+        lines.append(f"jobRunId: {job_run_id}")
+    sequence_ids = []
+    for row in (data.get("sequences") or []):
+        if not isinstance(row, dict):
+            continue
+        sequence_id = str(row.get("id") or row.get("sequenceId") or row.get("sequence_id") or "").strip()
+        if sequence_id:
+            sequence_ids.append(sequence_id)
+    if sequence_ids:
+        lines.append(f"sequenceIds: {', '.join(sequence_ids)}")
     constraints = data.get("constraints") or {}
     if isinstance(constraints, dict) and constraints:
         contact_n = len(constraints.get("contact") or [])

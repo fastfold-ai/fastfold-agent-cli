@@ -17,8 +17,14 @@ import time
 import urllib.error
 import urllib.request
 
-from load_env import resolve_fastfold_api_key
-from security_utils import validate_base_url, validate_job_id, validate_results_payload
+try:
+    # Package mode: python -m ct.skills.fold.scripts.wait_for_completion
+    from .load_env import resolve_fastfold_api_key
+    from .security_utils import validate_base_url, validate_job_id, validate_results_payload
+except ImportError:
+    # Script mode: python wait_for_completion.py
+    from load_env import resolve_fastfold_api_key
+    from security_utils import validate_base_url, validate_job_id, validate_results_payload
 
 
 def get_results(base_url: str, api_key: str, job_id: str) -> dict:
@@ -69,11 +75,17 @@ def main():
 
     start = time.time()
     last_status = None
+    same_status_count = 0
     while True:
         data = get_results(base_url, api_key, job_id)
         job = data.get("job", {})
-        status = job.get("status", "UNKNOWN")
-        if not args.quiet:
+        status = str(job.get("status", "UNKNOWN")).upper()
+        if status == last_status:
+            same_status_count += 1
+        else:
+            same_status_count = 0
+            last_status = status
+        if not args.quiet and (same_status_count == 0 or status in ("COMPLETED", "FAILED", "STOPPED")):
             print(f"[FastFold] job {job_id} status: {status}", file=sys.stderr)
         if status == "COMPLETED":
             if args.json:
@@ -85,7 +97,12 @@ def main():
             sys.exit(1)
         if (time.time() - start) > args.timeout:
             sys.exit(2)  # timeout
-        time.sleep(max(0.1, args.poll_interval))
+        sleep_s = max(0.1, args.poll_interval)
+        if same_status_count >= 6:
+            sleep_s = min(20.0, sleep_s * 1.5)
+        if same_status_count >= 12:
+            sleep_s = min(30.0, sleep_s * 2.0)
+        time.sleep(sleep_s)
 
 
 if __name__ == "__main__":

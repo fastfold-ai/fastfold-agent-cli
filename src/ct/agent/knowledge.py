@@ -47,7 +47,7 @@ If those tools are not listed in "Available tools", do not plan with them.
 ### Structure & Molecular Design
 - **structure**: ternary_predict, batch_screen, alphafold_fetch, compound_3d, dock, md_simulate, fep, binding_site
 - **design**: suggest_modifications (medicinal chemistry optimization)
-- **fold skill** (FastFold Cloud API): USE for running new protein structure predictions with FastFold models (boltz-2, monomer, multimer, simplefold_*). This is the preferred route for running fresh folds — it calls the FastFold Jobs API via scripts in `.claude/skills/fold/scripts/`. `FASTFOLD_API_KEY` is already set in the environment.
+- **fold skill** (FastFold Cloud API): USE for running new protein structure predictions with FastFold models (boltz-2, openfold3, chai1, intellifold, monomer, multimer, simplefold_*). This is the preferred route for running fresh folds — it calls the FastFold Jobs API via scripts in `.claude/skills/fold/scripts/`. `FASTFOLD_API_KEY` is already set in the environment.
 - USE WHEN: "Dock X into Y", "Find binding pockets", "Optimize this compound", "Predict ternary complex"
 - USE fold skill WHEN: "run fold with fastfold", "fold this sequence", "predict structure for this protein sequence", "run AlphaFold/boltz/simplefold on this sequence"
 - THINK: get structure (AlphaFold/PDB) → find pockets → dock compounds → score → suggest modifications → FEP for ranking

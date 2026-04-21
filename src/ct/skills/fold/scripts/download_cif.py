@@ -19,13 +19,24 @@ import sys
 import urllib.error
 import urllib.request
 
-from load_env import resolve_fastfold_api_key
-from security_utils import (
-    validate_artifact_url,
-    validate_base_url,
-    validate_job_id,
-    validate_results_payload,
-)
+try:
+    # Package mode: python -m ct.skills.fold.scripts.download_cif
+    from .load_env import resolve_fastfold_api_key
+    from .security_utils import (
+        validate_artifact_url,
+        validate_base_url,
+        validate_job_id,
+        validate_results_payload,
+    )
+except ImportError:
+    # Script mode: python download_cif.py
+    from load_env import resolve_fastfold_api_key
+    from security_utils import (
+        validate_artifact_url,
+        validate_base_url,
+        validate_job_id,
+        validate_results_payload,
+    )
 
 
 def get_results(base_url: str, api_key: str, job_id: str) -> dict:

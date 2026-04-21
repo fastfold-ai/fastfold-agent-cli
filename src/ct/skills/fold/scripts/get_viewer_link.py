@@ -18,8 +18,14 @@ import sys
 import urllib.error
 import urllib.request
 
-from load_env import resolve_fastfold_api_key
-from security_utils import validate_base_url, validate_job_id, validate_results_payload
+try:
+    # Package mode: python -m ct.skills.fold.scripts.get_viewer_link
+    from .load_env import resolve_fastfold_api_key
+    from .security_utils import validate_base_url, validate_job_id, validate_results_payload
+except ImportError:
+    # Script mode: python get_viewer_link.py
+    from load_env import resolve_fastfold_api_key
+    from security_utils import validate_base_url, validate_job_id, validate_results_payload
 
 VIEWER_URL_TEMPLATE = "https://cloud.fastfold.ai/job/{job_id}?shared=true"
 
