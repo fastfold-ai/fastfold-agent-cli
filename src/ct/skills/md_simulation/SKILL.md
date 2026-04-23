@@ -59,6 +59,8 @@ python -c "import ct.skills.md_simulation.scripts; import os; print(os.path.dirn
 
 - **Submit MD from a fold job (AF+PAE auto-attach):**
   `python -m ct.skills.md_simulation.scripts.submit_from_fold_job <fold_job_id> [--name "OpenMM via fold"] [--simulation-name my_run] [--preset single_af_go] [--sim-length-ns 0.2] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 20] [--profile calvados3] [--public]`
+- **Fetch PDB + PAE from AlphaFold DB by UniProt ID:**
+  `python -m ct.skills.md_simulation.scripts.fetch_uniprot <UNIPROT_ID> --out-dir <dir> [--json]` — writes `AF-<ID>.pdb` and `AF-<ID>.json` into `--out-dir` and prints their paths. Pipe these into `submit_manual_af_pae`.
 - **Submit MD from manual PDB+PAE upload:**
   `python -m ct.skills.md_simulation.scripts.submit_manual_af_pae --pdb path/to/structure.pdb --pae path/to/pae.json [--name "OpenMM manual"] [--simulation-name my_run] [--sim-length-ns 0.2] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 20] [--profile calvados3] [--public]`
 - **Wait for workflow completion (status + metrics/plots propagation):**
@@ -171,6 +173,16 @@ Use when the user has local `.pdb` structure + `.json` PAE files (e.g., an Alpha
 ```
 
 `submit_manual_af_pae` runs all four steps for you.
+
+### Shortcut — From a UniProt ID (AlphaFold DB)
+
+When the user gives a UniProt accession (e.g. `P00698`) instead of local files, mirror the `/openmm/new` UniProt action: pull the AlphaFold DB PDB + PAE JSON, then reuse the manual-upload flow.
+
+1. `python -m ct.skills.md_simulation.scripts.fetch_uniprot <UNIPROT_ID> --out-dir /tmp/uniprot --json`
+   - Hits `https://alphafold.ebi.ac.uk/api/prediction/<UNIPROT_ID>`, reads `pdbUrl` + `paeDocUrl` from the first entry, downloads them, validates the PAE is parseable JSON, and writes `AF-<id>.pdb` + `AF-<id>.json`.
+2. `python -m ct.skills.md_simulation.scripts.submit_manual_af_pae --pdb /tmp/uniprot/AF-<UNIPROT_ID>.pdb --pae /tmp/uniprot/AF-<UNIPROT_ID>.json ...`
+
+Use this only with preset `single_af_go`.
 
 ## Reading Results
 
