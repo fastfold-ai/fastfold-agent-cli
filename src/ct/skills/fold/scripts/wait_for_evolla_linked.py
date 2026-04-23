@@ -227,6 +227,15 @@ def main() -> None:
         default=900.0,
         help="Evolla wait timeout seconds (default 900)",
     )
+    ap.add_argument(
+        "--max-not-found-polls",
+        type=int,
+        default=8,
+        help=(
+            "Mark a sequence as NOT_FOUND after N linked-history polls "
+            "with no workflow row (default 8)."
+        ),
+    )
     ap.add_argument("--base-url", default="https://api.fastfold.ai", help="API base URL")
     ap.add_argument("--json", action="store_true", help="Print combined fold+evolla JSON to stdout")
     ap.add_argument("--quiet", action="store_true", help="Suppress progress status lines")
@@ -330,6 +339,7 @@ def main() -> None:
             "foundWorkflow": False,
             "done": False,
             "completedWithoutAnswerPolls": 0,
+            "notFoundPolls": 0,
             "sameStatusCount": 0,
         }
 
@@ -381,6 +391,14 @@ def main() -> None:
             st["hasAnswer"] = bool(next_answer)
             st["foundWorkflow"] = found_workflow
 
+            if not found_workflow:
+                st["notFoundPolls"] = int(st.get("notFoundPolls") or 0) + 1
+                if int(st["notFoundPolls"]) >= max(1, int(args.max_not_found_polls)):
+                    st["workflowStatus"] = "NOT_FOUND"
+                    st["done"] = True
+                continue
+            st["notFoundPolls"] = 0
+
             if next_answer:
                 st["done"] = True
                 continue
@@ -414,6 +432,7 @@ def main() -> None:
                 "lastAnswer": st.get("lastAnswer") or "",
                 "hasAnswer": bool(st.get("hasAnswer")),
                 "foundWorkflow": bool(st.get("foundWorkflow")),
+                "notFoundPolls": int(st.get("notFoundPolls") or 0),
             }
         )
 
@@ -425,6 +444,12 @@ def main() -> None:
             "items": items,
         },
     }
+    if any(str(i.get("workflowStatus") or "").upper() == "NOT_FOUND" for i in items):
+        payload["evolla"]["note"] = (
+            "No linked Evolla workflow was found for at least one sequence. "
+            "This usually means constraints.webhooks.evolla.enabled was not set "
+            "for this fold run, or linked workflow materialization is delayed."
+        )
 
     if args.json:
         print(json.dumps(payload, indent=2))
@@ -435,6 +460,11 @@ def main() -> None:
             answer = str(item["lastAnswer"] or "").strip()
             if answer:
                 print(f"[Evolla] {sid} answer: {answer}", file=sys.stderr)
+            elif status == "NOT_FOUND":
+                print(
+                    f"[Evolla] {sid} status: NOT_FOUND (no linked workflow row found)",
+                    file=sys.stderr,
+                )
             else:
                 print(f"[Evolla] {sid} status: {status}", file=sys.stderr)
 

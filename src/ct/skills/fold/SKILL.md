@@ -51,13 +51,20 @@ python -c "import ct.skills.fold.scripts; import os; print(os.path.dirname(ct.sk
 - **Create job (simple):** `python -m ct.skills.fold.scripts.create_job --name "My Job" --sequence MALW... [--model boltz-2] [--public]`
 - **Create job (full payload):** `python -m ct.skills.fold.scripts.create_job --payload job.json`
 - **Wait for completion:** `python -m ct.skills.fold.scripts.wait_for_completion <job_id> [--poll-interval 5] [--timeout 900]`
-- **Wait for fold + linked Evolla answers (preferred for webhook flows):** `python -m ct.skills.fold.scripts.wait_for_evolla_linked <job_id> --json` (defaults to one representative source sequence; add `--all-sequences` only when you explicitly need per-sequence polling)
+- **Wait for fold + linked Evolla answers (preferred for webhook flows):** `python -m ct.skills.fold.scripts.wait_for_evolla_linked <job_id> --json [--evolla-timeout 300] [--max-not-found-polls 8]` (defaults to one representative source sequence; add `--all-sequences` only when you explicitly need per-sequence polling)
 - **Fetch results (JSON):** `python -m ct.skills.fold.scripts.fetch_results <job_id>`
 - **Download CIF:** `python -m ct.skills.fold.scripts.download_cif <job_id> [--out output.cif]`
 - **Viewer link:** `python -m ct.skills.fold.scripts.get_viewer_link <job_id>`
 
 The agent should run these scripts for the user, not hand them a list of commands.
 Do not replace this flow with ad-hoc Python `requests` code, curl chains, or background polling tasks; use the bundled scripts.
+
+### Agent execution guardrails (required)
+
+- Use module entrypoints only (`python -m ct.skills.fold.scripts.<script>`), never filesystem searching (`find`, `locate`) for scripts.
+- Do not generate temporary monitoring scripts in `/tmp`; call the bundled waiter directly.
+- Use bounded waits (`--timeout` and `--evolla-timeout`) instead of open-ended loops.
+- Treat `workflowStatus == NOT_FOUND` as a signal that Evolla linkage is missing/delayed, not as a reason to keep polling indefinitely.
 
 ## Workflow: Create → Wait → Results
 
@@ -73,7 +80,7 @@ Use this when users want automatic post-fold interpretation in natural language.
 
 1. Submit fold job with webhook constraints.
 2. Run:
-   - `python -m ct.skills.fold.scripts.wait_for_evolla_linked <job_id> --json`
+   - `python -m ct.skills.fold.scripts.wait_for_evolla_linked <job_id> --json --evolla-timeout 300 --max-not-found-polls 8`
 3. Read fold + Evolla answer(s) from that single command output.
 
 **What is Evolla?**
@@ -109,6 +116,10 @@ and optionally:
    - `workflowStatus` is terminal (`COMPLETED` / `FAILED` / `STOPPED`) and
    - `lastAnswer` is present.
 5. Return `lastAnswer` as the Evolla response for that sequence.
+
+If the waiter returns `workflowStatus: "NOT_FOUND"` for a sequence, stop polling and verify that the submitted job included:
+- `constraints.webhooks.evolla.enabled: true`
+- (optional) `constraints.webhooks.evolla.initial_question`
 
 **Field mapping (important):**
 - Fold output: `/v1/jobs/{jobId}/results`
