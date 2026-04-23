@@ -61,7 +61,9 @@ Do not replace this flow with ad-hoc Python `requests` code, curl chains, or bac
 
 ### Agent execution guardrails (required)
 
-- Use module entrypoints only (`python -m ct.skills.fold.scripts.<script>`), never filesystem searching (`find`, `locate`) for scripts.
+- **Always** invoke scripts via their Python module path: `python -m ct.skills.fold.scripts.<script>`. They are shipped **inside this CLI's Python package** (`fastfold-agent-cli`). They are **not** on disk under `~/.claude/skills/`, `~/.cursor/skills/`, or any `.claude/skills/` subfolder — **do not search those paths** with `find`, `locate`, or `ls`.
+- Do **not** reimplement the flow by hand (e.g. `requests` / `urllib` POST to `/v1/jobs`). Use the bundled scripts.
+- If `python -m ct.skills.fold.scripts.<script>` fails with `ModuleNotFoundError: No module named 'ct.skills.fold'`, the installed `fastfold-agent-cli` is outdated. Ask the user to upgrade: `uv tool install "fastfold-agent-cli[all]" --python 3.10 --upgrade` (or `pip install -U fastfold-agent-cli`). Do not work around it with hand-rolled code.
 - Do not generate temporary monitoring scripts in `/tmp`; call the bundled waiter directly.
 - Use bounded waits (`--timeout` and `--evolla-timeout`) instead of open-ended loops.
 - Treat `workflowStatus == NOT_FOUND` as a signal that Evolla linkage is missing/delayed, not as a reason to keep polling indefinitely.

@@ -73,7 +73,9 @@ Do not replace this flow with ad-hoc Python `requests` code or curl chains; use 
 
 ### Agent execution guardrails (required)
 
-- Use module entrypoints only (`python -m ct.skills.md_simulation.scripts.<script>`), never filesystem searching (`find`, `locate`) for scripts.
+- **Always** invoke scripts via their Python module path: `python -m ct.skills.md_simulation.scripts.<script>`. They are shipped **inside this CLI's Python package** (`fastfold-agent-cli`). They are **not** on disk under `~/.claude/skills/`, `~/.cursor/skills/`, or any `.claude/skills/` subfolder — **do not search those paths** with `find`, `locate`, or `ls`.
+- Do **not** reimplement the workflow by hand (e.g. `requests` / `urllib` POST to `/v1/workflows`). Use the bundled scripts so the preset, file refs, share URLs, and settle polling behave consistently.
+- If `python -m ct.skills.md_simulation.scripts.<script>` fails with `ModuleNotFoundError: No module named 'ct.skills.md_simulation'`, the installed `fastfold-agent-cli` is outdated. Ask the user to upgrade: `uv tool install "fastfold-agent-cli[all]" --python 3.10 --upgrade` (or `pip install -U fastfold-agent-cli`). Do not attempt to work around it by rolling your own code.
 - Do not generate temporary monitor scripts in `/tmp`; use `wait_for_workflow`.
 - Use bounded waits (`--timeout` and `--metrics-timeout`), never open-ended loops.
 - Metrics and plot artifacts can appear slightly **after** first terminal status; `wait_for_workflow` handles the extra settle window for you.
