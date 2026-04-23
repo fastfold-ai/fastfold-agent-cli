@@ -16,16 +16,13 @@ import argparse
 import json
 import sys
 
-try:
-    # Package mode: python -m ct.skills.md_simulation.scripts.fetch_results
-    from ._api import build_result_links, http_json, summarize_task_result
-    from .load_env import resolve_fastfold_api_key
-    from .security_utils import validate_base_url, validate_workflow_id
-except ImportError:
-    # Script mode: python fetch_results.py
-    from _api import build_result_links, http_json, summarize_task_result
-    from load_env import resolve_fastfold_api_key
-    from security_utils import validate_base_url, validate_workflow_id
+from ct.skills.md_simulation.scripts._api import (
+    build_result_links,
+    http_json,
+    summarize_task_result,
+)
+from ct.skills.md_simulation.scripts.load_env import resolve_fastfold_api_key
+from ct.skills.md_simulation.scripts.security_utils import validate_base_url, validate_workflow_id
 
 
 def _format_artifact_row(entry: dict) -> str:

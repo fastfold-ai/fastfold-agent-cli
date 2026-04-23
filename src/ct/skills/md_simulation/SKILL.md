@@ -50,37 +50,33 @@ Do **not** ask users to paste secrets in chat.
 
 ## Running Scripts
 
-The md-simulation skill ships bundled scripts. Run them as Python modules — no hardcoded paths needed:
-
-```bash
-# Find scripts location (if needed)
-python -c "import ct.skills.md_simulation.scripts; import os; print(os.path.dirname(ct.skills.md_simulation.scripts.__file__))"
-```
+The md-simulation skill is shipped inside the `fastfold-agent-cli` Python package. Every script is exposed as a **console command on PATH** after `uv tool install fastfold-agent-cli` (or `pip install fastfold-agent-cli`). **Always invoke these commands directly** — do **not** try to guess the Python interpreter, `find` files on disk, `cd` into package directories, or probe `uv tool dir`.
 
 - **Submit MD from a fold job (AF+PAE auto-attach):**
-  `python -m ct.skills.md_simulation.scripts.submit_from_fold_job <fold_job_id> [--name "OpenMM via fold"] [--simulation-name my_run] [--preset single_af_go] [--sim-length-ns 0.2] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 20] [--profile calvados3] [--public]`
+  `fastfold-md-submit-from-fold-job <fold_job_id> [--name "OpenMM via fold"] [--simulation-name my_run] [--preset single_af_go] [--sim-length-ns 0.2] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 20] [--profile calvados3] [--public]`
 - **Fetch PDB + PAE from AlphaFold DB by UniProt ID:**
-  `python -m ct.skills.md_simulation.scripts.fetch_uniprot <UNIPROT_ID> --out-dir <dir> [--json]` — writes `AF-<ID>.pdb` and `AF-<ID>.json` into `--out-dir` and prints their paths. Pipe these into `submit_manual_af_pae`.
+  `fastfold-md-fetch-uniprot <UNIPROT_ID> --out-dir <dir> [--json]` — writes `AF-<ID>.pdb` and `AF-<ID>.json` into `--out-dir` and prints their paths. Pipe these into `fastfold-md-submit-manual-af-pae`.
 - **Submit MD from manual PDB+PAE upload:**
-  `python -m ct.skills.md_simulation.scripts.submit_manual_af_pae --pdb path/to/structure.pdb --pae path/to/pae.json [--name "OpenMM manual"] [--simulation-name my_run] [--sim-length-ns 0.2] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 20] [--profile calvados3] [--public]`
+  `fastfold-md-submit-manual-af-pae --pdb path/to/structure.pdb --pae path/to/pae.json [--name "OpenMM manual"] [--simulation-name my_run] [--sim-length-ns 0.2] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 20] [--profile calvados3] [--public]`
 - **Wait for workflow completion (status + metrics/plots propagation):**
-  `python -m ct.skills.md_simulation.scripts.wait_for_workflow <workflow_id> [--timeout 1800] [--metrics-timeout 900] [--poll-interval 5] [--json] [--public]`
+  `fastfold-md-wait-for-workflow <workflow_id> [--timeout 1800] [--metrics-timeout 900] [--poll-interval 5] [--json] [--public]`
 - **Fetch final results (artifacts + metrics summary):**
-  `python -m ct.skills.md_simulation.scripts.fetch_results <workflow_id> [--json] [--public]`
+  `fastfold-md-fetch-results <workflow_id> [--json] [--public]`
 - **Toggle public/private (share link):**
-  `python -m ct.skills.md_simulation.scripts.toggle_public <workflow_id> --public` (or `--private`) — when set public, prints the shareable URL `https://cloud.fastfold.ai/openmm/results/<workflow_id>?shared=true`.
+  `fastfold-md-toggle-public <workflow_id> --public` (or `--private`) — when set public, prints the shareable URL `https://cloud.fastfold.ai/openmm/results/<workflow_id>?shared=true`.
 
-The agent should run these scripts for the user, not hand them a list of commands.
-Do not replace this flow with ad-hoc Python `requests` code or curl chains; use the bundled scripts.
+The agent should run these commands for the user, not hand them a list of commands.
+Do not replace this flow with ad-hoc Python `requests` code, curl chains, or probes of `which python` / `uv tool dir` — the console commands above are the stable interface.
 
 ### Agent execution guardrails (required)
 
-- **Always** invoke scripts via their Python module path: `python -m ct.skills.md_simulation.scripts.<script>`. They are shipped **inside this CLI's Python package** (`fastfold-agent-cli`). They are **not** on disk under `~/.claude/skills/`, `~/.cursor/skills/`, or any `.claude/skills/` subfolder — **do not search those paths** with `find`, `locate`, or `ls`.
-- Do **not** reimplement the workflow by hand (e.g. `requests` / `urllib` POST to `/v1/workflows`). Use the bundled scripts so the preset, file refs, share URLs, and settle polling behave consistently.
-- If `python -m ct.skills.md_simulation.scripts.<script>` fails with `ModuleNotFoundError: No module named 'ct.skills.md_simulation'`, the installed `fastfold-agent-cli` is outdated. Ask the user to upgrade: `uv tool install "fastfold-agent-cli[all]" --python 3.10 --upgrade` (or `pip install -U fastfold-agent-cli`). Do not attempt to work around it by rolling your own code.
-- Do not generate temporary monitor scripts in `/tmp`; use `wait_for_workflow`.
+- **Always** call the skill using the `fastfold-md-…` console commands listed above. They're installed on PATH when the user installs `fastfold-agent-cli`. Do **not** try `python -m …`, `pip list`, `which python`, `uv tool dir`, `find`, `locate`, or `ls` on package directories — you'll waste the user's turns and the commands already work.
+- Do **not** reimplement the workflow with ad-hoc `requests` / `urllib` POSTs to `/v1/workflows`. Use the console commands so preset, file refs, share URLs, polling, and result parsing all behave consistently.
+- **Default to private** — do not pass `--public`. Only add `--public` (to `fastfold-md-submit-from-fold-job` / `fastfold-md-submit-manual-af-pae`) when the user **explicitly** asks for a public link, sharable link, or the workflow to be shared/made public. Correspondingly, only surface the `?shared=true` URL to the user when the workflow is actually public.
+- If any `fastfold-md-…` command fails with `command not found` (or a clear ModuleNotFoundError), the installed `fastfold-agent-cli` is outdated. Tell the user to upgrade: `uv tool install "fastfold-agent-cli[all]" --python 3.10 --upgrade` (or `pip install -U fastfold-agent-cli`). Do not attempt to work around it by hunting for scripts or rolling your own code.
+- Do not generate temporary monitor scripts in `/tmp`; use `fastfold-md-wait-for-workflow`.
 - Use bounded waits (`--timeout` and `--metrics-timeout`), never open-ended loops.
-- Metrics and plot artifacts can appear slightly **after** first terminal status; `wait_for_workflow` handles the extra settle window for you.
+- Metrics and plot artifacts can appear slightly **after** first terminal status; `fastfold-md-wait-for-workflow` handles the extra settle window for you.
 
 ## Workflow: Submit → Wait → Results
 

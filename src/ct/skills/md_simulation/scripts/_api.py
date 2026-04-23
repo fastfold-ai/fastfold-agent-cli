@@ -14,12 +14,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-try:
-    # Package mode: python -m ct.skills.md_simulation.scripts._api
-    from .security_utils import validate_results_payload
-except ImportError:
-    # Script mode: python _api.py
-    from security_utils import validate_results_payload
+from ct.skills.md_simulation.scripts.security_utils import validate_results_payload
 
 
 def http_json(
