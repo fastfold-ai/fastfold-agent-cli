@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fastfold-agent-cli"
-version = "0.0.24"
+version = "0.0.25"
 description = "Fastfold CLI — An autonomous agent for drug discovery research"
 readme = "README.md"
 license = "MIT"
@@ -85,6 +85,7 @@ fastfold = "ct.cli:entry"
 # bundled modules in ct.skills.md_simulation.scripts.*
 fastfold-md-submit-from-fold-job = "ct.skills.md_simulation.scripts.submit_from_fold_job:main"
 fastfold-md-submit-manual-af-pae = "ct.skills.md_simulation.scripts.submit_manual_af_pae:main"
+fastfold-md-submit-from-workflow = "ct.skills.md_simulation.scripts.submit_from_workflow:main"
 fastfold-md-fetch-uniprot = "ct.skills.md_simulation.scripts.fetch_uniprot:main"
 fastfold-md-wait-for-workflow = "ct.skills.md_simulation.scripts.wait_for_workflow:main"
 fastfold-md-fetch-results = "ct.skills.md_simulation.scripts.fetch_results:main"
