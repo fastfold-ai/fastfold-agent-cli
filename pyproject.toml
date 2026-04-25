@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fastfold-agent-cli"
-version = "0.0.25"
+version = "0.0.26"
 description = "Fastfold CLI — An autonomous agent for drug discovery research"
 readme = "README.md"
 license = "MIT"
@@ -90,6 +90,7 @@ fastfold-md-fetch-uniprot = "ct.skills.md_simulation.scripts.fetch_uniprot:main"
 fastfold-md-wait-for-workflow = "ct.skills.md_simulation.scripts.wait_for_workflow:main"
 fastfold-md-fetch-results = "ct.skills.md_simulation.scripts.fetch_results:main"
 fastfold-md-toggle-public = "ct.skills.md_simulation.scripts.toggle_public:main"
+fastfold-md-extract-frame = "ct.skills.md_simulation.scripts.extract_frame:main"
 
 # fold skill console scripts (same pattern)
 fastfold-fold-create-job = "ct.skills.fold.scripts.create_job:main"

@@ -1201,7 +1201,7 @@ wheels = [
 
 [[package]]
 name = "fastfold-agent-cli"
-version = "0.0.25"
+version = "0.0.26"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
