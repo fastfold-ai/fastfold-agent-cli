@@ -56,13 +56,13 @@ Do **not** ask users to paste secrets in chat.
 The md-simulation skill is shipped inside the `fastfold-agent-cli` Python package. Every script is exposed as a **console command on PATH** after `uv tool install fastfold-agent-cli` (or `pip install fastfold-agent-cli`). **Always invoke these commands directly** — do **not** try to guess the Python interpreter, `find` files on disk, `cd` into package directories, or probe `uv tool dir`.
 
 - **Submit MD from a fold job (AF+PAE auto-attach):**
-  `fastfold-md-submit-from-fold-job <fold_job_id> [--name "OpenMM via fold"] [--simulation-name my_run] [--preset single_af_go] [--sim-length-ns 0.2] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 20] [--profile calvados3] [--charged-n-terminal-amine|--no-charged-n-terminal-amine] [--charged-c-terminal-carboxyl|--no-charged-c-terminal-carboxyl] [--charged-histidine|--no-charged-histidine] [--public]`
+  `fastfold-md-submit-from-fold-job <fold_job_id> [--name "OpenMM via fold"] [--simulation-name my_run] [--preset single_af_go] [--sim-length-ns 0.2] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 20] [--force-field calvados3] [--charged-n-terminal-amine|--no-charged-n-terminal-amine] [--charged-c-terminal-carboxyl|--no-charged-c-terminal-carboxyl] [--charged-histidine|--no-charged-histidine] [--public]`
 - **Fetch PDB + PAE from AlphaFold DB by UniProt ID:**
   `fastfold-md-fetch-uniprot <UNIPROT_ID> --out-dir <dir> [--json]` — writes `AF-<ID>.pdb` and `AF-<ID>.json` into `--out-dir` and prints their paths. Pipe these into `fastfold-md-submit-manual-af-pae`.
 - **Submit MD from manual PDB+PAE upload:**
-  `fastfold-md-submit-manual-af-pae --pdb path/to/structure.pdb --pae path/to/pae.json [--name "OpenMM manual"] [--simulation-name my_run] [--sim-length-ns 0.2] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 20] [--profile calvados3] [--charged-n-terminal-amine|--no-charged-n-terminal-amine] [--charged-c-terminal-carboxyl|--no-charged-c-terminal-carboxyl] [--charged-histidine|--no-charged-histidine] [--public]`
+  `fastfold-md-submit-manual-af-pae --pdb path/to/structure.pdb --pae path/to/pae.json [--name "OpenMM manual"] [--simulation-name my_run] [--sim-length-ns 0.2] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 20] [--force-field calvados3] [--charged-n-terminal-amine|--no-charged-n-terminal-amine] [--charged-c-terminal-carboxyl|--no-charged-c-terminal-carboxyl] [--charged-histidine|--no-charged-histidine] [--public]`
 - **Submit from an existing OpenMM workflow (preferred when given `/openmm/results/<workflow_id>`):**
-  `fastfold-md-submit-from-workflow <workflow_id> [--name "OpenMM copy"] [--simulation-name my_run] [--component-name FUSRGG3] [--sim-length-ns 10] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 50] [--profile calvados3] [--topology center] [--box-eq|--no-box-eq] [--pressure 0.1,0,0] [--periodic|--no-periodic] [--charged-n-terminal-amine|--no-charged-n-terminal-amine] [--charged-c-terminal-carboxyl|--no-charged-c-terminal-carboxyl] [--charged-histidine|--no-charged-histidine] [--json]` — fetches the source workflow's `input_payload`, reuses the same input file refs, applies explicit parameter overrides, then submits a new workflow.
+  `fastfold-md-submit-from-workflow <workflow_id> [--name "OpenMM copy"] [--simulation-name my_run] [--component-name FUSRGG3] [--sim-length-ns 10] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 50] [--force-field calvados3] [--topology center] [--box-eq|--no-box-eq] [--pressure 0.1,0,0] [--periodic|--no-periodic] [--charged-n-terminal-amine|--no-charged-n-terminal-amine] [--charged-c-terminal-carboxyl|--no-charged-c-terminal-carboxyl] [--charged-histidine|--no-charged-histidine] [--json]` — fetches the source workflow's `input_payload`, reuses the same input file refs, applies explicit parameter overrides, then submits a new workflow.
 - **Advanced (on explicit request only): submit from custom YML refs + uploaded files:**
   `fastfold-md-submit-from-yml-refs --config-yaml ./config.yaml --components-yaml ./components.yaml --residues-csv ./residues.csv --fasta ./input.fasta [--simulation-name my_run] [--component-name FUSRGG3] [--topology center] [--box-length 50] [--json]`  
   or AF/structure mode:  
@@ -75,6 +75,9 @@ The md-simulation skill is shipped inside the `fastfold-agent-cli` Python packag
   `fastfold-md-extract-frame <workflow_id> --time-ns 5.0 [--selection "protein or resname LIG"] [--dt-in-ps 0] [--download ./frame.pdb] [--json]` — validates the requested time against `sim_length_ns` when available, calls the frame extraction endpoint, and prints the extracted PDB URL.
 - **Toggle public/private (share link):**
   `fastfold-md-toggle-public <workflow_id> --public` (or `--private`) — when set public, prints the shareable URL `https://cloud.fastfold.ai/openmm/results/<workflow_id>?shared=true`.
+
+Use `--force-field` to set `workflow_input.residue_profile`. `--profile` is still accepted as a backwards-compatible alias.
+In workflow payloads, `force_field_family` is the model family (typically `calvados`) and `residue_profile` is the specific force-field parameter set (for example `calvados3` or `c2rna`).
 
 The agent should run these commands for the user, not hand them a list of commands.
 Do not replace this flow with ad-hoc Python `requests` code, curl chains, or probes of `which python` / `uv tool dir` — the console commands above are the stable interface.
@@ -214,7 +217,7 @@ fastfold-md-submit-from-workflow <workflow_id> \
   --ionic 0.15 \
   --ph 7.5 \
   --box-length 50 \
-  --profile calvados3 \
+  --force-field calvados3 \
   --topology center
 ```
 
