@@ -56,13 +56,17 @@ Do **not** ask users to paste secrets in chat.
 The md-simulation skill is shipped inside the `fastfold-agent-cli` Python package. Every script is exposed as a **console command on PATH** after `uv tool install fastfold-agent-cli` (or `pip install fastfold-agent-cli`). **Always invoke these commands directly** — do **not** try to guess the Python interpreter, `find` files on disk, `cd` into package directories, or probe `uv tool dir`.
 
 - **Submit MD from a fold job (AF+PAE auto-attach):**
-  `fastfold-md-submit-from-fold-job <fold_job_id> [--name "OpenMM via fold"] [--simulation-name my_run] [--preset single_af_go] [--sim-length-ns 0.2] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 20] [--profile calvados3] [--public]`
+  `fastfold-md-submit-from-fold-job <fold_job_id> [--name "OpenMM via fold"] [--simulation-name my_run] [--preset single_af_go] [--sim-length-ns 0.2] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 20] [--profile calvados3] [--charged-n-terminal-amine|--no-charged-n-terminal-amine] [--charged-c-terminal-carboxyl|--no-charged-c-terminal-carboxyl] [--charged-histidine|--no-charged-histidine] [--public]`
 - **Fetch PDB + PAE from AlphaFold DB by UniProt ID:**
   `fastfold-md-fetch-uniprot <UNIPROT_ID> --out-dir <dir> [--json]` — writes `AF-<ID>.pdb` and `AF-<ID>.json` into `--out-dir` and prints their paths. Pipe these into `fastfold-md-submit-manual-af-pae`.
 - **Submit MD from manual PDB+PAE upload:**
-  `fastfold-md-submit-manual-af-pae --pdb path/to/structure.pdb --pae path/to/pae.json [--name "OpenMM manual"] [--simulation-name my_run] [--sim-length-ns 0.2] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 20] [--profile calvados3] [--public]`
+  `fastfold-md-submit-manual-af-pae --pdb path/to/structure.pdb --pae path/to/pae.json [--name "OpenMM manual"] [--simulation-name my_run] [--sim-length-ns 0.2] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 20] [--profile calvados3] [--charged-n-terminal-amine|--no-charged-n-terminal-amine] [--charged-c-terminal-carboxyl|--no-charged-c-terminal-carboxyl] [--charged-histidine|--no-charged-histidine] [--public]`
 - **Submit from an existing OpenMM workflow (preferred when given `/openmm/results/<workflow_id>`):**
-  `fastfold-md-submit-from-workflow <workflow_id> [--name "OpenMM copy"] [--simulation-name my_run] [--sim-length-ns 10] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 50] [--profile calvados3] [--topology center] [--json]` — fetches the source workflow's `input_payload`, reuses the same input file refs, applies explicit parameter overrides, then submits a new workflow.
+  `fastfold-md-submit-from-workflow <workflow_id> [--name "OpenMM copy"] [--simulation-name my_run] [--component-name FUSRGG3] [--sim-length-ns 10] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 50] [--profile calvados3] [--topology center] [--box-eq|--no-box-eq] [--pressure 0.1,0,0] [--periodic|--no-periodic] [--charged-n-terminal-amine|--no-charged-n-terminal-amine] [--charged-c-terminal-carboxyl|--no-charged-c-terminal-carboxyl] [--charged-histidine|--no-charged-histidine] [--json]` — fetches the source workflow's `input_payload`, reuses the same input file refs, applies explicit parameter overrides, then submits a new workflow.
+- **Advanced (on explicit request only): submit from custom YML refs + uploaded files:**
+  `fastfold-md-submit-from-yml-refs --config-yaml ./config.yaml --components-yaml ./components.yaml --residues-csv ./residues.csv --fasta ./input.fasta [--simulation-name my_run] [--component-name FUSRGG3] [--topology center] [--box-length 50] [--json]`  
+  or AF/structure mode:  
+  `fastfold-md-submit-from-yml-refs --config-yaml ./config.yaml --components-yaml ./components.yaml --residues-csv ./residues.csv --pdb ./structure.pdb --pae ./pae.json [...]`
 - **Wait for workflow completion (status + metrics/plots propagation):**
   `fastfold-md-wait-for-workflow <workflow_id> [--timeout 1800] [--metrics-timeout 900] [--poll-interval 5] [--json] [--public]`
 - **Fetch final results (artifacts + metrics summary):**
@@ -79,6 +83,7 @@ Do not replace this flow with ad-hoc Python `requests` code, curl chains, or pro
 
 - **Always** call the skill using the `fastfold-md-…` console commands listed above. They're installed on PATH when the user installs `fastfold-agent-cli`. Do **not** try `python -m …`, `pip list`, `which python`, `uv tool dir`, `find`, `locate`, or `ls` on package directories — you'll waste the user's turns and the commands already work.
 - Do **not** reimplement the workflow with ad-hoc `requests` / `urllib` POSTs to `/v1/workflows`. Use the console commands so preset, file refs, share URLs, polling, and result parsing all behave consistently.
+- Treat `fastfold-md-submit-from-yml-refs` as an advanced lane-2 tool. Use it only when the user explicitly asks for custom YML-reference uploads and file-binding control.
 - **Default to private** — do not pass `--public`. Only add `--public` (to `fastfold-md-submit-from-fold-job` / `fastfold-md-submit-manual-af-pae`) when the user **explicitly** asks for a public link, sharable link, or the workflow to be shared/made public. Correspondingly, only surface the `?shared=true` URL to the user when the workflow is actually public.
 - If any `fastfold-md-…` command fails with `command not found` (or a clear ModuleNotFoundError), the installed `fastfold-agent-cli` is outdated. Tell the user to upgrade: `uv tool install "fastfold-agent-cli[all]" --python 3.10 --upgrade` (or `pip install -U fastfold-agent-cli`). Do not attempt to work around it by hunting for scripts or rolling your own code.
 - Do not generate temporary monitor scripts in `/tmp`; use `fastfold-md-wait-for-workflow`.
@@ -185,11 +190,25 @@ rerun. The script fetches the source workflow, copies its `input_payload`
 explicitly, applies any parameter values the user stated, then submits a new
 `POST /v1/workflows` request.
 
+Component selection rule (important):
+- Use `workflow_input.component_name` to choose which sequence/component CALVADOS runs.
+- For sequence preset (`single_idr_fasta`), `component_name` must match a sequence label or FASTA record ID.
+- Use `--component-name` in `fastfold-md-submit-from-workflow` whenever the source has multiple sequence labels.
+- Box-equilibration controls are standard params: use `--box-eq/--no-box-eq`, `--pressure X,Y,Z`, and `--periodic/--no-periodic` to override `workflow_input.config.box_eq`, `workflow_input.config.pressure`, and `workflow_input.component_defaults.periodic`.
+- Charge-state controls are standard boolean flags: use `--charged-n-terminal-amine/--no-charged-n-terminal-amine`, `--charged-c-terminal-carboxyl/--no-charged-c-terminal-carboxyl`, and `--charged-histidine/--no-charged-histidine`.
+
 Run:
 
 ```bash
 fastfold-md-submit-from-workflow <workflow_id> \
   --sim-length-ns 10 \
+  --component-name FUSRGG3 \
+  --box-eq \
+  --pressure 0.1,0,0 \
+  --periodic \
+  --charged-n-terminal-amine \
+  --no-charged-c-terminal-carboxyl \
+  --no-charged-histidine \
   --step-size-ns 0.01 \
   --temperature 293.15 \
   --ionic 0.15 \
@@ -226,6 +245,21 @@ When the user gives a UniProt accession (e.g. `P00698`) instead of local files, 
 2. `python -m ct.skills.md_simulation.scripts.submit_manual_af_pae --pdb /tmp/uniprot/AF-<UNIPROT_ID>.pdb --pae /tmp/uniprot/AF-<UNIPROT_ID>.json ...`
 
 Use this only with preset `single_af_go`.
+
+## Input Mode 3 (Advanced, on request) — Custom YML refs + uploaded file bindings
+
+Use only when the user explicitly asks for this advanced lane-2 flow.
+
+`fastfold-md-submit-from-yml-refs` does the following:
+
+1. Uploads `config.yaml`, `components.yaml`, and required input files (residues + FASTA or residues + PDB/PAE) to Library.
+2. Submits a runnable OpenMM workflow using explicit supported fields and `files` refs.
+3. Attaches the uploaded YML refs under `workflow_input.yml_reference` for provenance/future YML-native migration.
+
+Important behavior:
+- Runtime execution still follows explicit OpenMM fields and file refs.
+- YML is preserved as reference metadata (`yml_reference`) for reproducibility.
+- This is advanced and should not replace standard `fastfold-md-submit-from-fold-job`, `fastfold-md-submit-manual-af-pae`, or `fastfold-md-submit-from-workflow` flows.
 
 ## Reading Results
 
