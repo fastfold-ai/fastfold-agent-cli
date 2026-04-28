@@ -82,7 +82,7 @@ Response:
 CLI command:
 
 ```bash
-fastfold-md-extract-frame <workflow_id> --time-ns 5.0 [--selection "protein or resname LIG"] [--dt-in-ps 0] [--download ./frame.pdb] [--json]
+fastfold-openmm-calvados-extract-frame <workflow_id> --time-ns 5.0 [--selection "protein or resname LIG"] [--dt-in-ps 0] [--download ./frame.pdb] [--json]
 ```
 
 ## isPublic vs auth

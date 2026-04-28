@@ -56,25 +56,25 @@ Do **not** ask users to paste secrets in chat.
 The md-openmm-calvados skill is shipped inside the `fastfold-agent-cli` Python package. Every script is exposed as a **console command on PATH** after `uv tool install fastfold-agent-cli` (or `pip install fastfold-agent-cli`). **Always invoke these commands directly** — do **not** try to guess the Python interpreter, `find` files on disk, `cd` into package directories, or probe `uv tool dir`.
 
 - **Submit MD from a fold job (AF+PAE auto-attach):**
-  `fastfold-md-submit-from-fold-job <fold_job_id> [--name "OpenMM via fold"] [--simulation-name my_run] [--preset single_af_go] [--sim-length-ns 0.2] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 20] [--force-field calvados3] [--charged-n-terminal-amine|--no-charged-n-terminal-amine] [--charged-c-terminal-carboxyl|--no-charged-c-terminal-carboxyl] [--charged-histidine|--no-charged-histidine] [--public]`
+  `fastfold-openmm-calvados-submit-from-fold-job <fold_job_id> [--name "OpenMM via fold"] [--simulation-name my_run] [--preset single_af_go] [--sim-length-ns 0.2] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 20] [--force-field calvados3] [--charged-n-terminal-amine|--no-charged-n-terminal-amine] [--charged-c-terminal-carboxyl|--no-charged-c-terminal-carboxyl] [--charged-histidine|--no-charged-histidine] [--public]`
 - **Fetch PDB + PAE from AlphaFold DB by UniProt ID:**
-  `fastfold-md-fetch-uniprot <UNIPROT_ID> --out-dir <dir> [--json]` — writes `AF-<ID>.pdb` and `AF-<ID>.json` into `--out-dir` and prints their paths. Pipe these into `fastfold-md-submit-manual-af-pae`.
+  `fastfold-openmm-calvados-fetch-uniprot <UNIPROT_ID> --out-dir <dir> [--json]` — writes `AF-<ID>.pdb` and `AF-<ID>.json` into `--out-dir` and prints their paths. Pipe these into `fastfold-openmm-calvados-submit-manual-af-pae`.
 - **Submit MD from manual PDB+PAE upload:**
-  `fastfold-md-submit-manual-af-pae --pdb path/to/structure.pdb --pae path/to/pae.json [--name "OpenMM manual"] [--simulation-name my_run] [--sim-length-ns 0.2] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 20] [--force-field calvados3] [--charged-n-terminal-amine|--no-charged-n-terminal-amine] [--charged-c-terminal-carboxyl|--no-charged-c-terminal-carboxyl] [--charged-histidine|--no-charged-histidine] [--public]`
+  `fastfold-openmm-calvados-submit-manual-af-pae --pdb path/to/structure.pdb --pae path/to/pae.json [--name "OpenMM manual"] [--simulation-name my_run] [--sim-length-ns 0.2] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 20] [--force-field calvados3] [--charged-n-terminal-amine|--no-charged-n-terminal-amine] [--charged-c-terminal-carboxyl|--no-charged-c-terminal-carboxyl] [--charged-histidine|--no-charged-histidine] [--public]`
 - **Submit from an existing OpenMM workflow (preferred when given `/openmm/results/<workflow_id>`):**
-  `fastfold-md-submit-from-workflow <workflow_id> [--name "OpenMM copy"] [--simulation-name my_run] [--component-name FUSRGG3] [--sim-length-ns 10] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 50] [--force-field calvados3] [--topology center] [--box-eq|--no-box-eq] [--pressure 0.1,0,0] [--periodic|--no-periodic] [--charged-n-terminal-amine|--no-charged-n-terminal-amine] [--charged-c-terminal-carboxyl|--no-charged-c-terminal-carboxyl] [--charged-histidine|--no-charged-histidine] [--json]` — fetches the source workflow's `input_payload`, reuses the same input file refs, applies explicit parameter overrides, then submits a new workflow.
+  `fastfold-openmm-calvados-submit-from-workflow <workflow_id> [--name "OpenMM copy"] [--simulation-name my_run] [--component-name FUSRGG3] [--sim-length-ns 10] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 50] [--force-field calvados3] [--topology center] [--box-eq|--no-box-eq] [--pressure 0.1,0,0] [--periodic|--no-periodic] [--charged-n-terminal-amine|--no-charged-n-terminal-amine] [--charged-c-terminal-carboxyl|--no-charged-c-terminal-carboxyl] [--charged-histidine|--no-charged-histidine] [--json]` — fetches the source workflow's `input_payload`, reuses the same input file refs, applies explicit parameter overrides, then submits a new workflow.
 - **Advanced (on explicit request only): submit from custom YML refs + uploaded files:**
-  `fastfold-md-submit-from-yml-refs --config-yaml ./config.yaml --components-yaml ./components.yaml --residues-csv ./residues.csv --fasta ./input.fasta [--simulation-name my_run] [--component-name FUSRGG3] [--topology center] [--box-length 50] [--json]`  
+  `fastfold-openmm-calvados-submit-from-yml-refs --config-yaml ./config.yaml --components-yaml ./components.yaml --residues-csv ./residues.csv --fasta ./input.fasta [--simulation-name my_run] [--component-name FUSRGG3] [--topology center] [--box-length 50] [--json]`  
   or AF/structure mode:  
-  `fastfold-md-submit-from-yml-refs --config-yaml ./config.yaml --components-yaml ./components.yaml --residues-csv ./residues.csv --pdb ./structure.pdb --pae ./pae.json [...]`
+  `fastfold-openmm-calvados-submit-from-yml-refs --config-yaml ./config.yaml --components-yaml ./components.yaml --residues-csv ./residues.csv --pdb ./structure.pdb --pae ./pae.json [...]`
 - **Wait for workflow completion (status + metrics/plots propagation):**
-  `fastfold-md-wait-for-workflow <workflow_id> [--timeout 1800] [--metrics-timeout 900] [--poll-interval 5] [--json] [--public]`
+  `fastfold-openmm-calvados-wait-for-workflow <workflow_id> [--timeout 1800] [--metrics-timeout 900] [--poll-interval 5] [--json] [--public]`
 - **Fetch final results (artifacts + metrics summary):**
-  `fastfold-md-fetch-results <workflow_id> [--json] [--public]`
+  `fastfold-openmm-calvados-fetch-results <workflow_id> [--json] [--public]`
 - **Extract a trajectory frame as PDB:**
-  `fastfold-md-extract-frame <workflow_id> --time-ns 5.0 [--selection "protein or resname LIG"] [--dt-in-ps 0] [--download ./frame.pdb] [--json]` — validates the requested time against `sim_length_ns` when available, calls the frame extraction endpoint, and prints the extracted PDB URL.
+  `fastfold-openmm-calvados-extract-frame <workflow_id> --time-ns 5.0 [--selection "protein or resname LIG"] [--dt-in-ps 0] [--download ./frame.pdb] [--json]` — validates the requested time against `sim_length_ns` when available, calls the frame extraction endpoint, and prints the extracted PDB URL.
 - **Toggle public/private (share link):**
-  `fastfold-md-toggle-public <workflow_id> --public` (or `--private`) — when set public, prints the shareable URL `https://cloud.fastfold.ai/openmm/results/<workflow_id>?shared=true`.
+  `fastfold-openmm-calvados-toggle-public <workflow_id> --public` (or `--private`) — when set public, prints the shareable URL `https://cloud.fastfold.ai/openmm/results/<workflow_id>?shared=true`.
 
 Use `--force-field` to set `workflow_input.residue_profile`. `--profile` is still accepted as a backwards-compatible alias.
 In workflow payloads, `force_field_family` is the model family (typically `calvados`) and `residue_profile` is the specific force-field parameter set (for example `calvados3` or `c2rna`).
@@ -84,14 +84,14 @@ Do not replace this flow with ad-hoc Python `requests` code, curl chains, or pro
 
 ### Agent execution guardrails (required)
 
-- **Always** call the skill using the `fastfold-md-…` console commands listed above. They're installed on PATH when the user installs `fastfold-agent-cli`. Do **not** try `python -m …`, `pip list`, `which python`, `uv tool dir`, `find`, `locate`, or `ls` on package directories — you'll waste the user's turns and the commands already work.
+- **Always** call the skill using the `fastfold-openmm-calvados-…` console commands listed above. They're installed on PATH when the user installs `fastfold-agent-cli`. Do **not** try `python -m …`, `pip list`, `which python`, `uv tool dir`, `find`, `locate`, or `ls` on package directories — you'll waste the user's turns and the commands already work.
 - Do **not** reimplement the workflow with ad-hoc `requests` / `urllib` POSTs to `/v1/workflows`. Use the console commands so preset, file refs, share URLs, polling, and result parsing all behave consistently.
-- Treat `fastfold-md-submit-from-yml-refs` as an advanced lane-2 tool. Use it only when the user explicitly asks for custom YML-reference uploads and file-binding control.
-- **Default to private** — do not pass `--public`. Only add `--public` (to `fastfold-md-submit-from-fold-job` / `fastfold-md-submit-manual-af-pae`) when the user **explicitly** asks for a public link, sharable link, or the workflow to be shared/made public. Correspondingly, only surface the `?shared=true` URL to the user when the workflow is actually public.
-- If any `fastfold-md-…` command fails with `command not found` (or a clear ModuleNotFoundError), the installed `fastfold-agent-cli` is outdated. Tell the user to upgrade: `uv tool install "fastfold-agent-cli[all]" --python 3.10 --upgrade` (or `pip install -U fastfold-agent-cli`). Do not attempt to work around it by hunting for scripts or rolling your own code.
-- Do not generate temporary monitor scripts in `/tmp`; use `fastfold-md-wait-for-workflow`.
+- Treat `fastfold-openmm-calvados-submit-from-yml-refs` as an advanced lane-2 tool. Use it only when the user explicitly asks for custom YML-reference uploads and file-binding control.
+- **Default to private** — do not pass `--public`. Only add `--public` (to `fastfold-openmm-calvados-submit-from-fold-job` / `fastfold-openmm-calvados-submit-manual-af-pae`) when the user **explicitly** asks for a public link, sharable link, or the workflow to be shared/made public. Correspondingly, only surface the `?shared=true` URL to the user when the workflow is actually public.
+- If any `fastfold-openmm-calvados-…` command fails with `command not found` (or a clear ModuleNotFoundError), the installed `fastfold-agent-cli` is outdated. Tell the user to upgrade: `uv tool install "fastfold-agent-cli[all]" --python 3.10 --upgrade` (or `pip install -U fastfold-agent-cli`). Do not attempt to work around it by hunting for scripts or rolling your own code.
+- Do not generate temporary monitor scripts in `/tmp`; use `fastfold-openmm-calvados-wait-for-workflow`.
 - Use bounded waits (`--timeout` and `--metrics-timeout`), never open-ended loops.
-- Metrics and plot artifacts can appear slightly **after** first terminal status; `fastfold-md-wait-for-workflow` handles the extra settle window for you.
+- Metrics and plot artifacts can appear slightly **after** first terminal status; `fastfold-openmm-calvados-wait-for-workflow` handles the extra settle window for you.
 
 ## Workflow: Submit → Wait → Results
 
@@ -196,14 +196,14 @@ explicitly, applies any parameter values the user stated, then submits a new
 Component selection rule (important):
 - Use `workflow_input.component_name` to choose which sequence/component CALVADOS runs.
 - For sequence preset (`single_idr_fasta`), `component_name` must match a sequence label or FASTA record ID.
-- Use `--component-name` in `fastfold-md-submit-from-workflow` whenever the source has multiple sequence labels.
+- Use `--component-name` in `fastfold-openmm-calvados-submit-from-workflow` whenever the source has multiple sequence labels.
 - Box-equilibration controls are standard params: use `--box-eq/--no-box-eq`, `--pressure X,Y,Z`, and `--periodic/--no-periodic` to override `workflow_input.config.box_eq`, `workflow_input.config.pressure`, and `workflow_input.component_defaults.periodic`.
 - Charge-state controls are standard boolean flags: use `--charged-n-terminal-amine/--no-charged-n-terminal-amine`, `--charged-c-terminal-carboxyl/--no-charged-c-terminal-carboxyl`, and `--charged-histidine/--no-charged-histidine`.
 
 Run:
 
 ```bash
-fastfold-md-submit-from-workflow <workflow_id> \
+fastfold-openmm-calvados-submit-from-workflow <workflow_id> \
   --sim-length-ns 10 \
   --component-name FUSRGG3 \
   --box-eq \
@@ -224,8 +224,8 @@ fastfold-md-submit-from-workflow <workflow_id> \
 Then wait and fetch results:
 
 ```bash
-fastfold-md-wait-for-workflow <new_workflow_id> --timeout 3700 --metrics-timeout 900 --poll-interval 5
-fastfold-md-fetch-results <new_workflow_id>
+fastfold-openmm-calvados-wait-for-workflow <new_workflow_id> --timeout 3700 --metrics-timeout 900 --poll-interval 5
+fastfold-openmm-calvados-fetch-results <new_workflow_id>
 ```
 
 The source workflow's stored input file refs are part of `input_payload.files`.
@@ -235,9 +235,9 @@ copies unless the user explicitly asks to replace inputs.
 If fetching the reference workflow fails, tell the user they may not have access
 to that workflow or it may no longer exist. Ask them to get the owner to share
 the workflow/files, or switch to another input mode:
-- use `fastfold-md-submit-manual-af-pae` if they can provide local PDB + PAE files;
-- use `fastfold-md-fetch-uniprot` followed by `fastfold-md-submit-manual-af-pae` if they know a UniProt accession;
-- use `fastfold-md-submit-from-fold-job` if the source is an accessible FastFold fold job.
+- use `fastfold-openmm-calvados-submit-manual-af-pae` if they can provide local PDB + PAE files;
+- use `fastfold-openmm-calvados-fetch-uniprot` followed by `fastfold-openmm-calvados-submit-manual-af-pae` if they know a UniProt accession;
+- use `fastfold-openmm-calvados-submit-from-fold-job` if the source is an accessible FastFold fold job.
 
 ### Shortcut — From a UniProt ID (AlphaFold DB)
 
@@ -253,7 +253,7 @@ Use this only with preset `single_af_go`.
 
 Use only when the user explicitly asks for this advanced lane-2 flow.
 
-`fastfold-md-submit-from-yml-refs` does the following:
+`fastfold-openmm-calvados-submit-from-yml-refs` does the following:
 
 1. Uploads `config.yaml`, `components.yaml`, and required input files (residues + FASTA or residues + PDB/PAE) to Library.
 2. Submits a runnable OpenMM workflow using explicit supported fields and `files` refs.
@@ -262,7 +262,7 @@ Use only when the user explicitly asks for this advanced lane-2 flow.
 Important behavior:
 - Runtime execution still follows explicit OpenMM fields and file refs.
 - YML is preserved as reference metadata (`yml_reference`) for reproducibility.
-- This is advanced and should not replace standard `fastfold-md-submit-from-fold-job`, `fastfold-md-submit-manual-af-pae`, or `fastfold-md-submit-from-workflow` flows.
+- This is advanced and should not replace standard `fastfold-openmm-calvados-submit-from-fold-job`, `fastfold-openmm-calvados-submit-manual-af-pae`, or `fastfold-openmm-calvados-submit-from-workflow` flows.
 
 ## Reading Results
 
@@ -275,14 +275,14 @@ On a successful run, `tasks[-1].result_raw_json` contains:
   - `analysis_name`, `analysis_parameters`, `output_files`
 - `metricsJson`: raw `analysis/metrics.json` content (also downloadable as artifact).
 
-Use `fastfold-md-fetch-results <workflow_id>` to print a concise summary and the artifact URLs.
+Use `fastfold-openmm-calvados-fetch-results <workflow_id>` to print a concise summary and the artifact URLs.
 
 ## Extracting a Frame as PDB
 
 Use this after an OpenMM workflow has completed and has trajectory artifacts (`top.pdb` + `.dcd`). If the user gives an `/openmm/results/<workflow_id>` page and asks for a snapshot/conformation/frame at a time in ns, run:
 
 ```bash
-fastfold-md-extract-frame <workflow_id> --time-ns <time_ns>
+fastfold-openmm-calvados-extract-frame <workflow_id> --time-ns <time_ns>
 ```
 
 Optional parameters:

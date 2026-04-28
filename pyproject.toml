@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fastfold-agent-cli"
-version = "0.0.28"
+version = "0.0.29"
 description = "Fastfold CLI — An autonomous agent for drug discovery research"
 readme = "README.md"
 license = "MIT"
@@ -83,15 +83,26 @@ fastfold = "ct.cli:entry"
 # Skill console scripts — exposed on PATH after `uv tool install` so agents
 # don't have to hunt for the right Python. These are thin wrappers around the
 # bundled modules in ct.skills.md_openmm_calvados.scripts.*
-fastfold-md-submit-from-fold-job = "ct.skills.md_openmm_calvados.scripts.submit_from_fold_job:main"
-fastfold-md-submit-manual-af-pae = "ct.skills.md_openmm_calvados.scripts.submit_manual_af_pae:main"
-fastfold-md-submit-from-workflow = "ct.skills.md_openmm_calvados.scripts.submit_from_workflow:main"
-fastfold-md-submit-from-yml-refs = "ct.skills.md_openmm_calvados.scripts.submit_from_yml_refs:main"
-fastfold-md-fetch-uniprot = "ct.skills.md_openmm_calvados.scripts.fetch_uniprot:main"
-fastfold-md-wait-for-workflow = "ct.skills.md_openmm_calvados.scripts.wait_for_workflow:main"
-fastfold-md-fetch-results = "ct.skills.md_openmm_calvados.scripts.fetch_results:main"
-fastfold-md-toggle-public = "ct.skills.md_openmm_calvados.scripts.toggle_public:main"
-fastfold-md-extract-frame = "ct.skills.md_openmm_calvados.scripts.extract_frame:main"
+# Preferred explicit command names:
+fastfold-openmm-calvados-submit-from-fold-job = "ct.skills.md_openmm_calvados.scripts.submit_from_fold_job:main"
+fastfold-openmm-calvados-submit-manual-af-pae = "ct.skills.md_openmm_calvados.scripts.submit_manual_af_pae:main"
+fastfold-openmm-calvados-submit-from-workflow = "ct.skills.md_openmm_calvados.scripts.submit_from_workflow:main"
+fastfold-openmm-calvados-submit-from-yml-refs = "ct.skills.md_openmm_calvados.scripts.submit_from_yml_refs:main"
+fastfold-openmm-calvados-fetch-uniprot = "ct.skills.md_openmm_calvados.scripts.fetch_uniprot:main"
+fastfold-openmm-calvados-wait-for-workflow = "ct.skills.md_openmm_calvados.scripts.wait_for_workflow:main"
+fastfold-openmm-calvados-fetch-results = "ct.skills.md_openmm_calvados.scripts.fetch_results:main"
+fastfold-openmm-calvados-toggle-public = "ct.skills.md_openmm_calvados.scripts.toggle_public:main"
+fastfold-openmm-calvados-extract-frame = "ct.skills.md_openmm_calvados.scripts.extract_frame:main"
+
+# md-openmmdl skill console scripts (same pattern)
+fastfold-openmmdl-submit-manual-topology-ligands = "ct.skills.md_openmmdl.scripts.submit_manual_topology_ligands:main"
+fastfold-openmmdl-prepare-script = "ct.skills.md_openmmdl.scripts.prepare_script:main"
+fastfold-openmmdl-submit-from-workflow = "ct.skills.md_openmmdl.scripts.submit_from_workflow:main"
+fastfold-openmmdl-execute-workflow = "ct.skills.md_openmmdl.scripts.execute_workflow:main"
+fastfold-openmmdl-wait-for-workflow = "ct.skills.md_openmmdl.scripts.wait_for_workflow:main"
+fastfold-openmmdl-fetch-results = "ct.skills.md_openmmdl.scripts.fetch_results:main"
+fastfold-openmmdl-extract-frame = "ct.skills.md_openmmdl.scripts.extract_frame:main"
+fastfold-openmmdl-toggle-public = "ct.skills.md_openmmdl.scripts.toggle_public:main"
 
 # fold skill console scripts (same pattern)
 fastfold-fold-create-job = "ct.skills.fold.scripts.create_job:main"
