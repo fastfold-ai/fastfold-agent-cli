@@ -1,5 +1,5 @@
 """
-Small shared HTTP + multipart helpers for the md-simulation skill.
+Small shared HTTP + multipart helpers for the md-openmm-calvados skill.
 
 Keeps scripts stdlib-only (urllib) and avoids duplication across scripts.
 """
@@ -14,7 +14,7 @@ from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from ct.skills.md_simulation.scripts.security_utils import validate_results_payload
+from ct.skills.md_openmm_calvados.scripts.security_utils import validate_results_payload
 
 
 def http_json(

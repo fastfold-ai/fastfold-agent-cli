@@ -18,9 +18,9 @@ from pathlib import Path
 from typing import Any
 from urllib.request import urlopen
 
-from ct.skills.md_simulation.scripts._api import http_json
-from ct.skills.md_simulation.scripts.load_env import resolve_fastfold_api_key
-from ct.skills.md_simulation.scripts.security_utils import (
+from ct.skills.md_openmm_calvados.scripts._api import http_json
+from ct.skills.md_openmm_calvados.scripts.load_env import resolve_fastfold_api_key
+from ct.skills.md_openmm_calvados.scripts.security_utils import (
     validate_artifact_url,
     validate_base_url,
     validate_workflow_id,

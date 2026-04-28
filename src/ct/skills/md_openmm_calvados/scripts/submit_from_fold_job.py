@@ -20,9 +20,9 @@ import argparse
 import json
 import sys
 
-from ct.skills.md_simulation.scripts._api import extract_fold_job_ids, http_json
-from ct.skills.md_simulation.scripts.load_env import resolve_fastfold_api_key
-from ct.skills.md_simulation.scripts.security_utils import validate_base_url, validate_job_id
+from ct.skills.md_openmm_calvados.scripts._api import extract_fold_job_ids, http_json
+from ct.skills.md_openmm_calvados.scripts.load_env import resolve_fastfold_api_key
+from ct.skills.md_openmm_calvados.scripts.security_utils import validate_base_url, validate_job_id
 
 
 def _charge_termini_from_flags(charged_n: bool, charged_c: bool) -> str:

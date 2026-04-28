@@ -1,5 +1,5 @@
 ---
-name: md-simulation
+name: md-openmm-calvados
 description: Run molecular dynamics (MD) simulations via the FastFold Workflows API. Today supports the CALVADOS+OpenMM workflow (calvados_openmm_v1) from either an existing fold job (AF structure + PAE auto-resolved) or manual PDB+PAE upload, then waits for completion, fetches metrics/plots/CSV artifacts, and extracts trajectory frames as PDB files. Use when running an MD simulation with FastFold, CALVADOS + OpenMM, reading MD metrics/plots, extracting frames, or scripting submit → wait → results for an MD run.
 ---
 
@@ -53,7 +53,7 @@ Do **not** ask users to paste secrets in chat.
 
 ## Running Scripts
 
-The md-simulation skill is shipped inside the `fastfold-agent-cli` Python package. Every script is exposed as a **console command on PATH** after `uv tool install fastfold-agent-cli` (or `pip install fastfold-agent-cli`). **Always invoke these commands directly** — do **not** try to guess the Python interpreter, `find` files on disk, `cd` into package directories, or probe `uv tool dir`.
+The md-openmm-calvados skill is shipped inside the `fastfold-agent-cli` Python package. Every script is exposed as a **console command on PATH** after `uv tool install fastfold-agent-cli` (or `pip install fastfold-agent-cli`). **Always invoke these commands directly** — do **not** try to guess the Python interpreter, `find` files on disk, `cd` into package directories, or probe `uv tool dir`.
 
 - **Submit MD from a fold job (AF+PAE auto-attach):**
   `fastfold-md-submit-from-fold-job <fold_job_id> [--name "OpenMM via fold"] [--simulation-name my_run] [--preset single_af_go] [--sim-length-ns 0.2] [--step-size-ns 0.01] [--temperature 293.15] [--ionic 0.15] [--ph 7.5] [--box-length 20] [--force-field calvados3] [--charged-n-terminal-amine|--no-charged-n-terminal-amine] [--charged-c-terminal-carboxyl|--no-charged-c-terminal-carboxyl] [--charged-histidine|--no-charged-histidine] [--public]`
@@ -243,9 +243,9 @@ the workflow/files, or switch to another input mode:
 
 When the user gives a UniProt accession (e.g. `P00698`) instead of local files, mirror the `/openmm/new` UniProt action: pull the AlphaFold DB PDB + PAE JSON, then reuse the manual-upload flow.
 
-1. `python -m ct.skills.md_simulation.scripts.fetch_uniprot <UNIPROT_ID> --out-dir /tmp/uniprot --json`
+1. `python -m ct.skills.md_openmm_calvados.scripts.fetch_uniprot <UNIPROT_ID> --out-dir /tmp/uniprot --json`
    - Hits `https://alphafold.ebi.ac.uk/api/prediction/<UNIPROT_ID>`, reads `pdbUrl` + `paeDocUrl` from the first entry, downloads them, validates the PAE is parseable JSON, and writes `AF-<id>.pdb` + `AF-<id>.json`.
-2. `python -m ct.skills.md_simulation.scripts.submit_manual_af_pae --pdb /tmp/uniprot/AF-<UNIPROT_ID>.pdb --pae /tmp/uniprot/AF-<UNIPROT_ID>.json ...`
+2. `python -m ct.skills.md_openmm_calvados.scripts.submit_manual_af_pae --pdb /tmp/uniprot/AF-<UNIPROT_ID>.pdb --pae /tmp/uniprot/AF-<UNIPROT_ID>.json ...`
 
 Use this only with preset `single_af_go`.
 
@@ -339,7 +339,7 @@ Only trust `artifacts`, `metrics`, `metricsJson` when task status is `COMPLETED`
 Workflows default to **private**. Two ways to make a run public:
 
 1. At submit time: pass `--public` to `submit_from_fold_job` or `submit_manual_af_pae`, which adds `workflow_input.isPublic = true` to `POST /v1/workflows`.
-2. After submit: `python -m ct.skills.md_simulation.scripts.toggle_public <workflow_id> --public` (or `--private`) which calls `PATCH /v1/workflows/<workflow_id>/public` with `{ "isPublic": true | false }`.
+2. After submit: `python -m ct.skills.md_openmm_calvados.scripts.toggle_public <workflow_id> --public` (or `--private`) which calls `PATCH /v1/workflows/<workflow_id>/public` with `{ "isPublic": true | false }`.
 
 Dashboard URL (always share this with the user):
 

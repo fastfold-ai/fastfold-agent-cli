@@ -16,9 +16,9 @@ import json
 import sys
 from typing import Any
 
-from ct.skills.md_simulation.scripts._api import http_json
-from ct.skills.md_simulation.scripts.load_env import resolve_fastfold_api_key
-from ct.skills.md_simulation.scripts.security_utils import validate_base_url, validate_workflow_id
+from ct.skills.md_openmm_calvados.scripts._api import http_json
+from ct.skills.md_openmm_calvados.scripts.load_env import resolve_fastfold_api_key
+from ct.skills.md_openmm_calvados.scripts.security_utils import validate_base_url, validate_workflow_id
 
 
 def _clone_dict(value: Any) -> dict:

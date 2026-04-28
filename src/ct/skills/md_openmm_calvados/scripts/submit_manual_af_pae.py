@@ -19,9 +19,9 @@ import json
 import sys
 from pathlib import Path
 
-from ct.skills.md_simulation.scripts._api import http_json, upload_library_file_and_get_ref
-from ct.skills.md_simulation.scripts.load_env import resolve_fastfold_api_key
-from ct.skills.md_simulation.scripts.security_utils import validate_base_url
+from ct.skills.md_openmm_calvados.scripts._api import http_json, upload_library_file_and_get_ref
+from ct.skills.md_openmm_calvados.scripts.load_env import resolve_fastfold_api_key
+from ct.skills.md_openmm_calvados.scripts.security_utils import validate_base_url
 
 
 def _charge_termini_from_flags(charged_n: bool, charged_c: bool) -> str:

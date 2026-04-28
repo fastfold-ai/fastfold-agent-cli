@@ -16,9 +16,9 @@ import argparse
 import json
 import sys
 
-from ct.skills.md_simulation.scripts._api import http_json
-from ct.skills.md_simulation.scripts.load_env import resolve_fastfold_api_key
-from ct.skills.md_simulation.scripts.security_utils import validate_base_url, validate_workflow_id
+from ct.skills.md_openmm_calvados.scripts._api import http_json
+from ct.skills.md_openmm_calvados.scripts.load_env import resolve_fastfold_api_key
+from ct.skills.md_openmm_calvados.scripts.security_utils import validate_base_url, validate_workflow_id
 
 SHARE_URL_TEMPLATE = "https://cloud.fastfold.ai/openmm/results/{workflow_id}?shared=true"
 

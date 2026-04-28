@@ -25,14 +25,14 @@ import json
 import sys
 import time
 
-from ct.skills.md_simulation.scripts._api import (
+from ct.skills.md_openmm_calvados.scripts._api import (
     TERMINAL_WORKFLOW_STATES,
     build_result_links,
     http_json,
     summarize_task_result,
 )
-from ct.skills.md_simulation.scripts.load_env import resolve_fastfold_api_key
-from ct.skills.md_simulation.scripts.security_utils import validate_base_url, validate_workflow_id
+from ct.skills.md_openmm_calvados.scripts.load_env import resolve_fastfold_api_key
+from ct.skills.md_openmm_calvados.scripts.security_utils import validate_base_url, validate_workflow_id
 
 
 def _latest_task_summary(response_payload: dict) -> dict:
