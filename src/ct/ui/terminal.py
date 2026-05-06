@@ -43,6 +43,7 @@ class MentionCandidate:
 SLASH_COMMANDS = {
     "/help": "Show command reference with examples",
     "/tools": "List all tools with status (stable/experimental)",
+    "/skills": "List currently loaded skills",
     "/model": "Switch LLM model/provider interactively",
     "/settings": "Configure UI and agent preferences",
     "/config": "Show active runtime configuration",
@@ -709,6 +710,10 @@ class InteractiveTerminal:
 
             # Handle slash commands and plain commands
             cmd = query.lower()
+            # Normalize accidental "/ command" spacing to "/command"
+            if cmd.startswith("/ "):
+                cmd = "/" + cmd[2:].lstrip()
+                query = "/" + query[2:].lstrip()
 
             # Auto-resolve partial slash commands — first match wins
             # (e.g. "/mod" → "/model", "/co" → "/config")
@@ -737,6 +742,10 @@ class InteractiveTerminal:
                         f"[yellow]Warning:[/yellow] {len(errors)} tool module(s) failed to load: "
                         f"{names}{extra}"
                     )
+                self._advance_suggestion()
+                continue
+            if cmd in ("skill", "/skill", "skills", "/skills"):
+                self._show_skills()
                 self._advance_suggestion()
                 continue
             if cmd in ("model", "/model"):
@@ -1103,6 +1112,130 @@ class InteractiveTerminal:
         except (FileNotFoundError, subprocess.TimeoutExpired):
             self.console.print(f"  [yellow]Clipboard not available. Use /export instead.[/yellow]")
 
+    def _truncate_for_export(self, text: str, max_chars: int = 800) -> str:
+        """Trim long text fields for readable markdown export."""
+        if not text:
+            return ""
+        value = text.strip()
+        if len(value) <= max_chars:
+            return value
+        return value[:max_chars] + f"... [{len(value)} chars total]"
+
+    def _format_tool_args_for_export(self, args: dict | None) -> str:
+        """Compactly render tool args in export timeline."""
+        if not isinstance(args, dict) or not args:
+            return ""
+        parts = []
+        for key, value in args.items():
+            if str(key).startswith("_"):
+                continue
+            raw = str(value).replace("\n", " ")
+            if len(raw) > 120:
+                raw = raw[:120] + "..."
+            parts.append(f"{key}={raw}")
+        return ", ".join(parts)
+
+    def _load_trace_blocks(self) -> list[dict]:
+        """Load and group trace events into query blocks."""
+        if not hasattr(self, "agent") or not hasattr(self.agent, "trace_store"):
+            return []
+        trace_path = getattr(self.agent.trace_store, "path", None)
+        if trace_path is None or not Path(trace_path).exists():
+            return []
+
+        try:
+            from ct.agent.trace_store import TraceStore
+            events = TraceStore.load(trace_path)
+        except Exception:
+            return []
+
+        blocks: list[dict] = []
+        current: dict | None = None
+        for event in events:
+            etype = event.get("type")
+            if etype == "query_start":
+                if current is not None:
+                    blocks.append(current)
+                current = {"start": event, "events": [], "end": None}
+                continue
+            if etype == "query_end":
+                if current is None:
+                    current = {"start": None, "events": [], "end": event}
+                else:
+                    current["end"] = event
+                blocks.append(current)
+                current = None
+                continue
+
+            if current is None:
+                current = {"start": None, "events": [], "end": None}
+            current["events"].append(event)
+
+        if current is not None:
+            blocks.append(current)
+
+        return blocks
+
+    def _render_trace_timeline_markdown(self, block: dict) -> list[str]:
+        """Render detailed chronological timeline for one query block."""
+        events = block.get("events", [])
+        if not isinstance(events, list) or not events:
+            return ["### Timeline", "", "_No detailed trace events captured for this query._", ""]
+
+        lines: list[str] = ["### Timeline", ""]
+        attempts_by_tool: dict[str, int] = {}
+        attempts_by_tool_use_id: dict[str, int] = {}
+
+        for event in events:
+            etype = str(event.get("type") or "")
+
+            if etype == "text":
+                snippet = self._truncate_for_export(str(event.get("content") or ""), max_chars=260)
+                if snippet:
+                    lines.append(f"- assistant: {snippet}")
+                continue
+
+            if etype == "tool_start":
+                tool = str(event.get("tool") or "unknown_tool")
+                tool_use_id = str(event.get("tool_use_id") or "")
+                attempts_by_tool[tool] = attempts_by_tool.get(tool, 0) + 1
+                attempt = attempts_by_tool[tool]
+                if tool_use_id:
+                    attempts_by_tool_use_id[tool_use_id] = attempt
+                arg_text = self._format_tool_args_for_export(event.get("input"))
+                if arg_text:
+                    lines.append(
+                        f"- tool start: `{tool}` (attempt {attempt})"
+                        f" — args: `{arg_text}`"
+                    )
+                else:
+                    lines.append(f"- tool start: `{tool}` (attempt {attempt})")
+                continue
+
+            if etype == "tool_result":
+                tool = str(event.get("tool") or "unknown_tool")
+                tool_use_id = str(event.get("tool_use_id") or "")
+                attempt = attempts_by_tool_use_id.get(tool_use_id, attempts_by_tool.get(tool, 1))
+                status = "error" if bool(event.get("is_error")) else "ok"
+                duration = event.get("duration_s")
+                duration_text = ""
+                if isinstance(duration, (int, float)):
+                    duration_text = f", duration={duration:.2f}s"
+                lines.append(
+                    f"- tool result: `{tool}` (attempt {attempt})"
+                    f" — status={status}{duration_text}"
+                )
+                output = self._truncate_for_export(str(event.get("result_text") or ""), max_chars=400)
+                if output:
+                    lines.append(f"  - output: `{output}`")
+                continue
+
+            # Keep unknown event types visible for debugging.
+            lines.append(f"- event: `{etype or 'unknown'}`")
+
+        lines.append("")
+        return lines
+
     def _export_session(self, filename: str = None):
         """Export the session transcript to a markdown file and return the path."""
         if not hasattr(self, 'agent') or not self.agent.trajectory.turns:
@@ -1119,8 +1252,8 @@ class InteractiveTerminal:
             path = output_dir / f"session_{ts}.md"
 
         lines = ["# FastFold Agent CLI Session Export\n"]
-        lines.append(f"*Exported {time.strftime('%Y-%m-%d %H:%M')}*\n")
         lines.append(f"*Model: {self._model_display_name()}*\n\n---\n")
+        trace_blocks = self._load_trace_blocks()
 
         for i, turn in enumerate(self.agent.trajectory.turns, 1):
             lines.append(f"## Query {i}\n")
@@ -1130,7 +1263,36 @@ class InteractiveTerminal:
                 lines.append(f"*Entities: {', '.join(turn.entities)}*\n")
             if turn.tools_used:
                 lines.append(f"*Tools: {', '.join(turn.tools_used)}*\n")
+            if i <= len(trace_blocks):
+                block = trace_blocks[i - 1]
+                start = block.get("start") or {}
+                end = block.get("end") or {}
+                if start:
+                    query_model = start.get("model")
+                    if query_model:
+                        lines.append(f"*Trace model: {query_model}*\n")
+                if end:
+                    duration = end.get("duration_s")
+                    cost = end.get("cost_usd")
+                    if isinstance(duration, (int, float)):
+                        lines.append(f"*Trace duration: {duration:.2f}s*\n")
+                    if isinstance(cost, (int, float)):
+                        lines.append(f"*Trace cost (USD): {cost:.6f}*\n")
+                lines.extend(self._render_trace_timeline_markdown(block))
             lines.append("\n---\n")
+
+        if len(trace_blocks) > len(self.agent.trajectory.turns):
+            lines.append("## Additional Trace Blocks\n")
+            for j in range(len(self.agent.trajectory.turns), len(trace_blocks)):
+                block_num = j + 1
+                lines.append(f"### Trace Block {block_num}\n")
+                start = trace_blocks[j].get("start") or {}
+                if start:
+                    raw_query = start.get("query")
+                    if raw_query:
+                        lines.append(f"**Q:** {raw_query}\n")
+                lines.extend(self._render_trace_timeline_markdown(trace_blocks[j]))
+                lines.append("\n---\n")
 
         path.write_text("\n".join(lines))
         self.console.print(f"  [green]Exported to[/green] {path}")
@@ -1550,3 +1712,58 @@ class InteractiveTerminal:
             title="fastfold Help",
             border_style="cyan",
         ))
+
+    def _show_skills(self):
+        """List currently loaded skills in interactive mode."""
+        from rich.table import Table
+
+        skill_entries: dict[str, dict[str, str | Path]] = {}
+
+        # Bundled skills shipped with ct
+        bundled_dir = Path(__file__).resolve().parents[1] / "skills"
+        if bundled_dir.exists():
+            for d in sorted(bundled_dir.iterdir()):
+                skill_md = d / "SKILL.md"
+                if d.is_dir() and skill_md.exists():
+                    skill_entries[d.name] = {"source": "bundled", "path": skill_md}
+
+        # User-installed skills from skills-lock.json
+        lock_file = Path.cwd() / "skills-lock.json"
+        claude_skills_dir = Path.cwd() / ".claude" / "skills"
+        if lock_file.exists() and claude_skills_dir.exists():
+            try:
+                lock = json.loads(lock_file.read_text())
+                for name, meta in lock.get("skills", {}).items():
+                    skill_md = claude_skills_dir / name / "SKILL.md"
+                    if skill_md.exists():
+                        source = "installed"
+                        if isinstance(meta, dict):
+                            source = f"installed ({meta.get('source', 'user')})"
+                        skill_entries[name] = {"source": source, "path": skill_md}
+            except Exception:
+                pass
+
+        if not skill_entries:
+            self.console.print("  [yellow]No skills loaded.[/yellow]")
+            return
+
+        table = Table(title=f"Loaded Skills ({len(skill_entries)})", show_lines=False)
+        table.add_column("Skill", style="bold cyan", no_wrap=True)
+        table.add_column("Source", style="dim")
+        table.add_column("Description", style="white")
+
+        for name, entry in sorted(skill_entries.items()):
+            description = ""
+            skill_md_path = entry["path"]
+            try:
+                content = Path(skill_md_path).read_text(encoding="utf-8")
+                for line in content.splitlines():
+                    if line.startswith("description:"):
+                        description = line.split(":", 1)[1].strip().strip('"').strip("'")
+                        break
+            except Exception:
+                pass
+
+            table.add_row(name, str(entry["source"]), description)
+
+        self.console.print(table)
