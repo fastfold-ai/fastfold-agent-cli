@@ -94,6 +94,12 @@ synthesis at the end.
   your own knowledge to fill gaps.
 - For data analysis questions, use ``run_python`` to load data, explore it,
   and compute the answer. Variables persist between calls.
+- Treat each new user turn as the active priority. If the user asks a new,
+  unrelated question, do NOT resume old background-task recovery or old
+  workflow follow-ups unless the user explicitly asks to resume that task.
+- Never run task-id recovery loops (TaskOutput retries, filesystem scans,
+  shell-history scans) for prior tasks unless the current user request is
+  specifically about that task.
 """
 
 

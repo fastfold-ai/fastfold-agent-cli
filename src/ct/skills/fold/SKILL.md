@@ -60,6 +60,22 @@ python -c "import ct.skills.fold.scripts; import os; print(os.path.dirname(ct.sk
 The agent should run these scripts for the user, not hand them a list of commands.
 Do not replace this flow with ad-hoc Python `requests` code, curl chains, or background polling tasks; use the bundled scripts.
 
+## Background Execution Protocol (Required)
+
+When users ask to "run fold in background", use this exact split:
+
+1. `create_job` in foreground (blocking) to obtain `job_id`.
+2. Print `job_id` back to the user immediately in plain text.
+3. Only background the long waiter step (`wait_for_completion` / `wait_for_evolla_linked` / `wait_for_openmm_linked`).
+4. On completion, fetch results using the same preserved `job_id`.
+
+Non-negotiable rules:
+
+- Never background `create_job` (submission step) because this can lose `job_id`.
+- Never attempt ID recovery via filesystem hunting (`find`, `locate`, `ls /tmp`, shell history grep).
+- Never ask the user to recover an ID when the agent initiated the submission; if ID capture failed, resubmit in foreground and return the new `job_id`.
+- Keep `job_id` visible in every relevant update message so the user can track externally.
+
 ### Agent execution guardrails (required)
 
 - **Always** invoke scripts via their Python module path: `python -m ct.skills.fold.scripts.<script>`. They are shipped **inside this CLI's Python package** (`fastfold-agent-cli`). They are **not** on disk under `~/.claude/skills/`, `~/.cursor/skills/`, or any `.claude/skills/` subfolder — **do not search those paths** with `find`, `locate`, or `ls`.

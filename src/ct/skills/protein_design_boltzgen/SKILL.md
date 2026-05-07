@@ -72,6 +72,22 @@ If `fastfold-boltzgen-workflow` or `fastfold-boltzgen-fetch-cif` returns an erro
 2. Ask the user to upgrade/reinstall using the command above.
 3. **Stop**. Do not attempt fallback discovery (`find`, `locate`, `ls` package trees, `python -c`, `python -m`).
 
+### Background execution protocol (required)
+
+When users ask to run BoltzGen "in background", use this split:
+
+1. Run draft/submit/execute in foreground.
+2. Capture and print `workflow_id` immediately.
+3. Only background the long wait/log watch step.
+4. Fetch results using the same preserved `workflow_id`.
+
+Non-negotiable rules:
+
+- Never background create/submit/execute steps that produce the canonical ID.
+- Never ask the user to recover `workflow_id` for an agent-initiated run.
+- Never use filesystem hunting for ID recovery (`find`, `locate`, `ls /tmp`, shell history grep).
+- If ID capture failed due command error, rerun submit in foreground and return the new `workflow_id`.
+
 ### Fast path for "show examples"
 
 For prompts like "Show me Boltzgen protein design examples":
@@ -113,12 +129,12 @@ For prompts like "Show me Boltzgen protein design examples":
 - Execute:
   - `fastfold-boltzgen-workflow execute`
 - Wait:
-  - `fastfold-boltzgen-workflow wait --poll-seconds 10 --timeout-seconds 7200`
+  - `fastfold-boltzgen-workflow wait --poll-seconds 30 --timeout-seconds 7200`
 - Logs (single snapshot + interpretation):
   - `fastfold-boltzgen-workflow logs`
   - `fastfold-boltzgen-workflow logs --tail-lines 200`
 - Live logs while running:
-  - `fastfold-boltzgen-workflow logs --watch --poll-seconds 10 --timeout-seconds 1800`
+  - `fastfold-boltzgen-workflow logs --watch --poll-seconds 30 --timeout-seconds 1800`
 - Logs JSON payload:
   - `fastfold-boltzgen-workflow logs --json`
 - Get candidates/metrics + links:

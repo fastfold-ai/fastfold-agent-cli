@@ -50,6 +50,7 @@ SLASH_COMMANDS = {
     "/keys": "Show API key setup status by service",
     "/doctor": "Run readiness diagnostics and fix hints",
     "/usage": "Show session token/cost usage",
+    "/tasks": "Show background task watcher status (/tasks refresh for live probe)",
     "/copy": "Copy the last answer to clipboard",
     "/export": "Export current session transcript to markdown",
     "/export-share": "Export session, send to Slack, and save to library",
@@ -764,6 +765,12 @@ class InteractiveTerminal:
                 self._show_usage()
                 self._advance_suggestion()
                 continue
+            if cmd == "tasks" or cmd.startswith("/tasks"):
+                parts = query.strip().lower().split()
+                force_refresh = len(parts) > 1 and parts[1] in {"refresh", "-r", "--refresh", "force"}
+                self._show_tasks(force_refresh=force_refresh)
+                self._advance_suggestion()
+                continue
             if cmd in ("config", "/config"):
                 from ct.agent.config import Config
                 self.console.print(Config.load().to_table())
@@ -1091,6 +1098,92 @@ class InteractiveTerminal:
             self.console.print("  [dim]No LLM calls made yet.[/dim]")
             return
         self.console.print(f"  {llm.usage.summary()}")
+
+    def _show_tasks(self, force_refresh: bool = False):
+        """Show current background task watcher state from the SDK runner."""
+        runner = None
+        if hasattr(self, "agent"):
+            runner = getattr(self.agent, "_runner", None)
+        if runner is None or not hasattr(runner, "get_background_watch_status"):
+            self.console.print("  [dim]No background watcher available in this session.[/dim]")
+            return
+
+        # Reconcile pending tasks before rendering so /tasks reflects
+        # any just-completed tasks from SDK notifications or fallback probes.
+        if hasattr(runner, "refresh_background_watch_status"):
+            runner.refresh_background_watch_status(
+                force=force_refresh,
+                include_taskoutput=force_refresh,
+            )
+
+        statuses = runner.get_background_watch_status(include_inactive=True)
+        if not statuses:
+            self.console.print("  [dim]No background tasks tracked yet.[/dim]")
+            return
+
+        from rich.table import Table
+        table = Table(title="Background Task Watchers", show_lines=False)
+        table.add_column("Session", style="cyan", no_wrap=True)
+        table.add_column("Status", style="bold")
+        table.add_column("Watcher", style="dim")
+        table.add_column("Attempts", style="dim")
+        table.add_column("Pending", style="yellow")
+        table.add_column("Completed", style="green")
+        table.add_column("Updated", style="dim")
+
+        for item in statuses:
+            session_id = str(item.get("session_id") or "")
+            session_short = session_id[:8] + "…" if len(session_id) > 8 else session_id
+            status = str(item.get("status") or "unknown")
+            if status == "running":
+                status_markup = "[cyan]running[/cyan]"
+            elif status == "completed":
+                status_markup = "[green]completed[/green]"
+            elif status == "timeout":
+                status_markup = "[yellow]timeout[/yellow]"
+            else:
+                status_markup = f"[red]{status}[/red]"
+
+            watcher_alive = bool(item.get("watcher_alive"))
+            watcher_text = "alive" if watcher_alive else "stopped"
+            attempts_text = str(int(item.get("connection_attempts") or 0))
+            disconnect_reason = str(item.get("last_disconnect_reason") or "").strip()
+            if disconnect_reason and disconnect_reason != "unknown":
+                watcher_text = f"{watcher_text} ({disconnect_reason})"
+
+            pending_ids = [str(x) for x in (item.get("pending_task_ids") or []) if str(x)]
+            completed_ids = [str(x) for x in (item.get("completed_task_ids") or []) if str(x)]
+
+            def _compact_ids(ids: list[str]) -> str:
+                if not ids:
+                    return "—"
+                shown = [i[:8] + "…" if len(i) > 8 else i for i in ids[:3]]
+                suffix = f" (+{len(ids) - 3})" if len(ids) > 3 else ""
+                return ", ".join(shown) + suffix
+
+            updated_at = item.get("last_update_at")
+            if isinstance(updated_at, (int, float)) and updated_at > 0:
+                age_s = max(0, int(time.time() - updated_at))
+                if age_s < 60:
+                    updated_text = f"{age_s}s ago"
+                elif age_s < 3600:
+                    updated_text = f"{age_s // 60}m ago"
+                else:
+                    updated_text = f"{age_s // 3600}h ago"
+            else:
+                updated_text = "—"
+
+            table.add_row(
+                session_short or "—",
+                status_markup,
+                watcher_text,
+                attempts_text,
+                _compact_ids(pending_ids),
+                _compact_ids(completed_ids),
+                updated_text,
+            )
+
+        self.console.print(table)
 
     def _copy_last_response(self):
         """Copy the last synthesis response to the system clipboard."""

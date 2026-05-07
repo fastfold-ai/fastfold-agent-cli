@@ -93,6 +93,22 @@ Do not replace this flow with ad-hoc Python `requests` code, curl chains, or pro
 - Use bounded waits (`--timeout` and `--metrics-timeout`), never open-ended loops.
 - Metrics and plot artifacts can appear slightly **after** first terminal status; `fastfold-openmm-calvados-wait-for-workflow` handles the extra settle window for you.
 
+### Background execution protocol (required)
+
+When users ask to run OpenMM-CALVADOS "in background", use this split:
+
+1. Run submit command in foreground (`submit-from-fold-job`, `submit-manual-af-pae`, or `submit-from-workflow`).
+2. Capture and print `workflow_id` immediately.
+3. Background only `fastfold-openmm-calvados-wait-for-workflow <workflow_id> ...`.
+4. On completion, fetch results using the same preserved `workflow_id`.
+
+Non-negotiable rules:
+
+- Never background submit commands that produce `workflow_id`.
+- Never ask the user to recover `workflow_id` for an agent-initiated run.
+- Never attempt ID recovery with filesystem/shell hunting (`find`, `locate`, `ls /tmp`, history grep).
+- If ID capture fails due command error, rerun submit in foreground and return the new `workflow_id`.
+
 ## Workflow: Submit → Wait → Results
 
 1. **Submit** the MD workflow:
