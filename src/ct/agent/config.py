@@ -133,6 +133,7 @@ DEFAULTS = {
     "agent.parallel_default_count": 3,
     "agent.parallel_auto_suggest": True,
     "agent.parallel_max_threads": 5,
+    "agent.background_watch_timeout_s": 7200,
     "agent.planner_max_tools": 90,
     "agent.planner_compact_tool_descriptions": True,
     "agent.tool_health_enabled": True,
@@ -325,6 +326,7 @@ def _validate_config(config_dict: dict) -> list[str]:
     _check_positive_int("agent.executor_max_retries", "executor max retries")
     _check_positive_int("agent.executor_loop_limit", "executor loop limit")
     _check_positive_int("agent.parallel_max_threads", "parallel max threads")
+    _check_positive_int("agent.background_watch_timeout_s", "background watch timeout")
     _check_min("agent.synthesis_max_tokens", 512, "synthesis max tokens")
     _check_min("sandbox.timeout", 1, "sandbox timeout")
 

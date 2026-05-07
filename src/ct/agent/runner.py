@@ -574,7 +574,14 @@ class AgentRunner:
         self._bg_watch_lock = threading.Lock()
         self._bg_watchers: dict[str, threading.Thread] = {}
         self._bg_watch_state: dict[str, dict[str, Any]] = {}
-        self._bg_watch_timeout_s = 60 * 60  # 1 hour max watch window
+        cfg = getattr(self.session, "config", None)
+        timeout_raw = cfg.get("agent.background_watch_timeout_s", 7200) if cfg else 7200
+        try:
+            timeout_s = int(timeout_raw)
+        except (TypeError, ValueError):
+            timeout_s = 7200
+        # Guardrails: minimum 1 minute, maximum 24 hours.
+        self._bg_watch_timeout_s = max(60, min(timeout_s, 24 * 60 * 60))
         self._bg_watch_retry_min_s = 5.0
         self._bg_watch_retry_max_s = 60.0
         self._bg_watch_probe_interval_s = 30.0
