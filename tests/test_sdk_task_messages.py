@@ -200,3 +200,63 @@ def test_sanitize_notification_text():
     assert ";" not in cleaned
     assert "\n" not in cleaned
     assert "\r" not in cleaned
+
+
+def test_runner_interrupt_timeout_config_clamped():
+    class _DummyConfig:
+        def __init__(self, values):
+            self._values = dict(values)
+
+        def get(self, key, default=None):
+            return self._values.get(key, default)
+
+    class _DummySession:
+        def __init__(self, values):
+            self.console = Console(file=StringIO(), no_color=True, width=120)
+            self.config = _DummyConfig(values)
+
+    runner_low = AgentRunner(
+        session=_DummySession({"agent.interrupt_drain_timeout_s": 0}),
+        headless=True,
+    )
+    assert runner_low._interrupt_drain_timeout_s == 1
+
+    runner_high = AgentRunner(
+        session=_DummySession({"agent.interrupt_drain_timeout_s": 999}),
+        headless=True,
+    )
+    assert runner_high._interrupt_drain_timeout_s == 120
+
+
+def test_interrupt_active_query_helper():
+    class _DummySession:
+        def __init__(self):
+            self.console = Console(file=StringIO(), no_color=True, width=120)
+
+    class _OkClient:
+        def __init__(self):
+            self.interrupted = False
+
+        async def interrupt(self):
+            self.interrupted = True
+
+    class _FailClient:
+        async def interrupt(self):
+            raise RuntimeError("boom")
+
+    runner = AgentRunner(session=_DummySession(), headless=True)
+
+    # No active client.
+    assert asyncio.run(runner._interrupt_active_query()) is False
+
+    # Successful interrupt.
+    ok = _OkClient()
+    with runner._active_client_lock:
+        runner._active_client = ok
+    assert asyncio.run(runner._interrupt_active_query()) is True
+    assert ok.interrupted is True
+
+    # Failing interrupt.
+    with runner._active_client_lock:
+        runner._active_client = _FailClient()
+    assert asyncio.run(runner._interrupt_active_query()) is False

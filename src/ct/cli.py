@@ -1786,6 +1786,20 @@ def run_interactive(
     """Run interactive session."""
     from ct.agent.config import Config
 
+    def _pin_startup_to_bottom() -> None:
+        """Place startup banner/prompt near terminal bottom like Claude Code."""
+        try:
+            rows = int(getattr(console.size, "height", 0) or 0)
+        except Exception:
+            rows = 0
+        # Approximate visible startup footprint:
+        # banner (~11 lines) + spacing + first prompt/separator.
+        startup_lines = 15
+        spacer = max(0, rows - startup_lines)
+        console.clear()
+        if spacer:
+            console.print("\n" * spacer, end="")
+
     cfg = Config.load()
     if model:
         cfg.set("llm.model", model)
@@ -1801,6 +1815,7 @@ def run_interactive(
             console.print(f"\n  [red]Setup incomplete:[/red] {llm_issue}")
             return
 
+    _pin_startup_to_bottom()
     print_banner()
 
     console.print()

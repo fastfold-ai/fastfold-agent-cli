@@ -12,6 +12,7 @@ import time
 import threading
 import json
 import os
+from collections import deque
 from dataclasses import dataclass
 import urllib.error
 import urllib.request
@@ -26,6 +27,7 @@ from prompt_toolkit.filters import has_completions
 from prompt_toolkit.formatted_text import HTML, ANSI
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.patch_stdout import patch_stdout
 from prompt_toolkit.styles import Style
 from pathlib import Path
 
@@ -51,6 +53,7 @@ SLASH_COMMANDS = {
     "/doctor": "Run readiness diagnostics and fix hints",
     "/usage": "Show session token/cost usage",
     "/tasks": "Show background task watcher status (/tasks refresh for live probe)",
+    "/interrupt": "Interrupt the active generation (add ! to force)",
     "/copy": "Copy the last answer to clipboard",
     "/export": "Export current session transcript to markdown",
     "/export-share": "Export session, send to Slack, and save to library",
@@ -222,7 +225,10 @@ def _extract_llm_suggestions(synthesis_text: str) -> list[str]:
 PT_STYLE = Style.from_dict({
     "prompt": "bold #50fa7b",
     "placeholder": "#555555",
-    "bottom-toolbar": "#888888 bg:#1a1a2e",
+    # Force plain, non-reversed toolbar text so no default
+    # prompt_toolkit badge/background styling bleeds through.
+    "bottom-toolbar": "noinherit noreverse #8a8f98 bg:default",
+    "bottom-toolbar.text": "noinherit noreverse #8a8f98 bg:default",
     # Completion menu — dark background so mention colors stay readable
     "completion-menu": "bg:#1a1a2e #cccccc",
     "completion-menu.completion": "bg:#1a1a2e #cccccc",
@@ -408,6 +414,26 @@ def _build_key_bindings(terminal):
     def _handle_ctrl_c(event):
         buf = event.app.current_buffer
         now = time.time()
+        if terminal._has_active_query():
+            force = (now - terminal._last_interrupt) < 0.7
+            terminal._last_interrupt = now
+            terminal._show_interrupt_hint = True
+            terminal._request_interrupt(force=force)
+            buf.reset()
+            event.app.invalidate()
+
+            def _clear_interrupt_hint():
+                time.sleep(1.0)
+                terminal._show_interrupt_hint = False
+                try:
+                    if event.app.is_running:
+                        event.app.invalidate()
+                except Exception:
+                    pass
+
+            threading.Thread(target=_clear_interrupt_hint, daemon=True).start()
+            return
+
         if now - terminal._last_interrupt < 0.5:
             # Double Ctrl+C — signal exit
             event.app.exit(result="__EXIT__")
@@ -514,11 +540,26 @@ class InteractiveTerminal:
         self.history_file.parent.mkdir(parents=True, exist_ok=True)
         self._last_interrupt = 0.0
         self._show_exit_hint = False
+        self._show_interrupt_hint = False
         self._verbose_hint = None
         self._last_response = None  # Last synthesis text for /copy
         self._suggestions = list(DEFAULT_SUGGESTIONS)
         random.shuffle(self._suggestions)
         self._suggestion_idx = 0
+        self._run_lock = threading.Lock()
+        self._worker_thread: threading.Thread | None = None
+        self._active_query: str | None = None
+        self._active_query_started_at: float = 0.0
+        self._active_activity: str = ""
+        self._active_activity_updated_at: float = 0.0
+        self._queued_queries: deque[tuple[str, dict]] = deque()
+        self._live_refresh_thread: threading.Thread | None = None
+        self._toolbar_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        self._toolbar_frame_interval_s = 0.25
+        self._toolbar_words = ["Thinking", "Planning", "Evaluating"]
+        self._toolbar_word_interval_s = 3.0
+        self._toolbar_spinner_palette = ["#50fa7b", "#8be9fd", "#7aa2f7", "#ffb86c"]
+        self._init_toolbar_animation_profile()
         # Build @ mention completer with tool + dataset + file candidates
         mention_candidates = self._build_mention_candidates()
         self._merged_completer = MergedCompleter(
@@ -544,6 +585,24 @@ class InteractiveTerminal:
                 buf.complete_state.go_to_index(0)
 
         self._prompt_session.default_buffer.on_completions_changed += _auto_highlight_first
+
+    def _init_toolbar_animation_profile(self) -> None:
+        """Load spinner/word profile for prompt-owned live animation."""
+        try:
+            from ct.ui.status import SPINNERS, THINKING_WORDS
+            style = str(self.session.config.get("ui.spinner", "benzene_breathing"))
+            spinner_conf = SPINNERS.get(style, SPINNERS["benzene_breathing"])
+            frames = [str(f) for f in spinner_conf.get("frames", []) if str(f)]
+            if frames:
+                self._toolbar_frames = frames
+            interval_ms = int(spinner_conf.get("interval_ms", 125))
+            self._toolbar_frame_interval_s = max(0.12, min(interval_ms / 1000.0, 0.6))
+            words = list(THINKING_WORDS.get("planning", []))
+            random.shuffle(words)
+            if words:
+                self._toolbar_words = words
+        except Exception:
+            pass
 
     def _build_mention_candidates(self) -> list[tuple[str, str, str, str]]:
         """Build the candidate list for @ mention completion.
@@ -588,6 +647,166 @@ class InteractiveTerminal:
         except Exception:
             pass  # Best-effort file scanning
         return candidates
+
+    def _has_active_query(self) -> bool:
+        with self._run_lock:
+            worker = self._worker_thread
+            return bool(worker and worker.is_alive())
+
+    def _queued_query_count(self) -> int:
+        with self._run_lock:
+            return len(self._queued_queries)
+
+    def _request_interrupt(self, force: bool = False) -> bool:
+        runner = getattr(getattr(self, "agent", None), "_runner", None)
+        if runner is None or not hasattr(runner, "request_interrupt"):
+            self.console.print("  [dim]No active runner to interrupt.[/dim]")
+            return False
+        ok = bool(runner.request_interrupt(force=force))
+        if ok:
+            if force:
+                self.console.print("  [yellow]Force stop requested.[/yellow]")
+            else:
+                self.console.print("  [dim]Interrupt requested…[/dim]")
+        else:
+            self.console.print("  [dim]No active generation to interrupt.[/dim]")
+        return ok
+
+    def _ensure_live_refresh_thread(self) -> None:
+        """Keep toolbar status live while generation runs."""
+        with self._run_lock:
+            t = self._live_refresh_thread
+            if t and t.is_alive():
+                return
+            t = threading.Thread(
+                target=self._live_refresh_loop,
+                daemon=True,
+                name="ct-live-toolbar-refresh",
+            )
+            self._live_refresh_thread = t
+            t.start()
+
+    def _live_refresh_loop(self) -> None:
+        while True:
+            try:
+                if self._has_active_query():
+                    app = self._prompt_session.app
+                    if app and app.is_running:
+                        app.invalidate()
+            except Exception:
+                pass
+            time.sleep(0.25)
+
+    def _set_active_activity(self, text: str) -> None:
+        clean = str(text or "").replace("\n", " ").strip()
+        if len(clean) > 80:
+            clean = clean[:77] + "..."
+        with self._run_lock:
+            self._active_activity = clean
+            self._active_activity_updated_at = time.time()
+
+    def _toolbar_spinner_markup(self) -> str:
+        """Render spinner frame with subtle cycling color."""
+        frames = self._toolbar_frames or ["⠋"]
+        frame_idx = int(time.time() / self._toolbar_frame_interval_s) % len(frames)
+        palette = self._toolbar_spinner_palette or ["#8be9fd"]
+        color_idx = int(time.time() * 4) % len(palette)
+        frame = str(frames[frame_idx])
+        color = str(palette[color_idx])
+        return f'<style fg="{color}" bg="default">{frame}</style>'
+
+    def _submit_query(self, query: str, context: dict) -> None:
+        payload = (query, dict(context))
+        start_refresh = False
+        with self._run_lock:
+            worker = self._worker_thread
+            if worker and worker.is_alive():
+                self._queued_queries.append(payload)
+                # Do not print queue notices immediately; users found it
+                # confusing when this appears before the prior response.
+                # The worker prints a "running queued message" notice right
+                # before execution, which naturally appears below the
+                # previous response.
+                return
+
+            worker = threading.Thread(
+                target=self._run_query_worker,
+                args=(payload,),
+                daemon=True,
+                name="ct-query-worker",
+            )
+            self._worker_thread = worker
+            self._active_query = query
+            self._active_query_started_at = time.time()
+            self._active_activity = "starting..."
+            self._active_activity_updated_at = time.time()
+            start_refresh = True
+            worker.start()
+        if start_refresh:
+            self._ensure_live_refresh_thread()
+
+    def _run_query_worker(self, first_payload: tuple[str, dict]) -> None:
+        current = first_payload
+        try:
+            while True:
+                query, ctx = current
+                with self._run_lock:
+                    self._active_query = query
+                    self._active_query_started_at = time.time()
+                    self._active_activity = "thinking..."
+                    self._active_activity_updated_at = time.time()
+                preview = query.replace("\n", " ").strip()
+                if len(preview) > 80:
+                    preview = preview[:77] + "..."
+                self.console.print(f"  [dim]Running: {preview}[/dim]")
+
+                def _progress_update(msg: str) -> None:
+                    self._set_active_activity(msg)
+
+                try:
+                    self.console.print()
+                    result = self._run_with_clarification(
+                        query,
+                        ctx,
+                        progress_callback=_progress_update,
+                    )
+                    self.console.print()
+                except KeyboardInterrupt:
+                    self.console.print("\n  [yellow]Interrupted.[/yellow]")
+                    result = None
+                except Exception as e:
+                    self.console.print(f"\n  [red]Execution error:[/red] {e}")
+                    result = None
+
+                if result is not None:
+                    self._last_response = result.summary
+                    self._update_suggestions(query, result.plan, result)
+
+                with self._run_lock:
+                    if self._queued_queries:
+                        current = self._queued_queries.popleft()
+                        remaining = len(self._queued_queries)
+                    else:
+                        self._worker_thread = None
+                        self._active_query = None
+                        self._active_query_started_at = 0.0
+                        self._active_activity = ""
+                        self._active_activity_updated_at = 0.0
+                        break
+
+                preview = current[0].replace("\n", " ").strip()
+                if len(preview) > 80:
+                    preview = preview[:77] + "..."
+                self.console.print(
+                    f"  [dim]Running queued message ({remaining} remaining after this): {preview}[/dim]"
+                )
+        finally:
+            with self._run_lock:
+                self._worker_thread = None
+                self._active_query = None
+                self._active_query_started_at = 0.0
+                self._active_activity = ""
+                self._active_activity_updated_at = 0.0
 
     def _current_placeholder(self):
         """Return the current ghost suggestion as dim placeholder text."""
@@ -640,9 +859,11 @@ class InteractiveTerminal:
 
     def _bottom_toolbar(self):
         if self._show_exit_hint:
-            return HTML('<style fg="#888888">  Press Ctrl+C again to exit</style>')
+            return HTML('<style fg="#888888" bg="default">Press Ctrl+C again to exit</style>')
+        if self._show_interrupt_hint:
+            return HTML('<style fg="#ffb86c" bg="default">Interrupt requested · press Ctrl+C again to force stop</style>')
         if self._verbose_hint:
-            return HTML(f'<style fg="#50fa7b">  {self._verbose_hint}</style>')
+            return HTML(f'<style fg="#50fa7b" bg="default">{self._verbose_hint}</style>')
 
         # Show tab bar when @ mention completions are active
         if self._mention_completing():
@@ -650,16 +871,42 @@ class InteractiveTerminal:
             tabs = []
             for i, label in enumerate(mc.TABS):
                 if i == mc._active_tab:
-                    tabs.append(f'<style fg="#50fa7b" bg="#333333"><b>[{label}]</b></style>')
+                    tabs.append(f'<style fg="#50fa7b" bg="default"><b>[{label}]</b></style>')
                 else:
-                    tabs.append(f'<style fg="#555555"> {label} </style>')
+                    tabs.append(f'<style fg="#555555" bg="default"> {label} </style>')
             tab_bar = "  ".join(tabs)
-            return HTML(f'  {tab_bar}  <style fg="#555555">·  ←/→ switch tab</style>')
+            return HTML(f'{tab_bar}  <style fg="#555555" bg="default">·  ←/→ switch tab</style>')
 
         model = self._model_display_name()
-        verbose = '<style fg="#555555">  </style><style fg="#1a1a2e" bg="#50fa7b"> verbose </style>' if self.session.verbose else ""
-        plan = '<style fg="#555555">  </style><style fg="#1a1a2e" bg="#ff79c6"> plan mode </style>' if self.session.config.get("agent.plan_preview", False) else ""
-        return HTML(f'  <style fg="#ffffff" bg="#50a0ff"> {model} </style>{verbose}{plan}<style fg="#555555">  ? for commands  ·  Ctrl+O verbose</style>')
+        if self._has_active_query():
+            with self._run_lock:
+                queued = len(self._queued_queries)
+                status = self._active_activity or "thinking..."
+                status_updated_at = self._active_activity_updated_at
+                started_at = self._active_query_started_at
+            elapsed_s = max(0, int(time.time() - started_at)) if started_at else 0
+            if elapsed_s < 60:
+                elapsed = f"{elapsed_s}s"
+            else:
+                elapsed = f"{elapsed_s // 60}m{elapsed_s % 60:02d}s"
+            stale_status = (time.time() - status_updated_at) > 2.5
+            if stale_status or status in {"thinking...", "starting..."}:
+                word_idx = int(time.time() / self._toolbar_word_interval_s) % max(1, len(self._toolbar_words))
+                status = f"{self._toolbar_words[word_idx]}..."
+            queued_label = f" · queued {queued}" if queued else ""
+            spinner = self._toolbar_spinner_markup()
+            return HTML(
+                f"{spinner}"
+                f'<style fg="#8be9fd" bg="default"> running {elapsed}{queued_label}</style>'
+                f'<style fg="#50fa7b" bg="default"> {status}</style>'
+                '<style fg="#555555" bg="default"> · /interrupt · Ctrl+C interrupt</style>'
+            )
+        verbose = ' <style fg="#50fa7b" bg="default">verbose</style>' if self.session.verbose else ""
+        plan = ' <style fg="#ff79c6" bg="default">plan mode</style>' if self.session.config.get("agent.plan_preview", False) else ""
+        return HTML(
+            f'<style fg="#8be9fd" bg="default">{model}</style>{verbose}{plan}'
+            '<style fg="#555555" bg="default"> · ? for commands · Ctrl+O verbose</style>'
+        )
 
     def run(self, initial_context: dict = None, resume_id: str = None):
         """Run the interactive session."""
@@ -690,18 +937,24 @@ class InteractiveTerminal:
                 # Separator line above prompt
                 self.console.print(f"[#333333]{'─' * term_width}[/]")
 
-                query = self._prompt_session.prompt(
-                    [("class:prompt", "❯ ")],
-                    bottom_toolbar=self._bottom_toolbar,
-                    placeholder=self._current_placeholder(),
-                ).strip()
+                with patch_stdout(raw=True):
+                    query = self._prompt_session.prompt(
+                        [("class:prompt", "❯ ")],
+                        bottom_toolbar=self._bottom_toolbar,
+                        placeholder=self._current_placeholder(),
+                    ).strip()
                 self._show_exit_hint = False
+                self._show_interrupt_hint = False
             except EOFError:
+                if self._has_active_query():
+                    self._request_interrupt(force=True)
                 self.console.print("\nGoodbye.")
                 break
 
             # Handle double Ctrl+C exit signal from key binding
             if query == "__EXIT__":
+                if self._has_active_query():
+                    self._request_interrupt(force=True)
                 self.console.print("Goodbye.")
                 break
 
@@ -724,9 +977,34 @@ class InteractiveTerminal:
                 if matches:
                     cmd = matches[0] + cmd[len(prefix):]
                     query = matches[0] + query[len(prefix):]
+
+            busy = self._has_active_query()
             if cmd in ("exit", "quit", "q", "/exit", "/quit"):
+                if busy:
+                    self._request_interrupt(force=True)
                 self.console.print("Goodbye.")
                 break
+            if cmd.startswith("/interrupt") or cmd == "interrupt":
+                force = cmd.endswith("!") or "--force" in cmd or " force" in cmd
+                self._request_interrupt(force=force)
+                self._advance_suggestion()
+                continue
+            if busy and (
+                cmd.startswith("/model")
+                or cmd.startswith("/settings")
+                or cmd.startswith("/plan")
+                or cmd.startswith("/sessions")
+                or cmd.startswith("/resume")
+                or cmd.startswith("/agents")
+                or cmd.startswith("/case-study")
+                or cmd.startswith("/compact")
+                or cmd.startswith("/export")
+                or cmd.startswith("/notebook")
+            ):
+                self.console.print("  [dim]Command unavailable while a generation is running.[/dim]")
+                self.console.print("  [dim]Use /interrupt, or wait for queued messages to run.[/dim]")
+                self._advance_suggestion()
+                continue
             if cmd in ("help", "/help", "?"):
                 self._show_help()
                 self._advance_suggestion()
@@ -857,21 +1135,17 @@ class InteractiveTerminal:
                 # No interrupted state — fall through to normal query
                 # (planner will use session history to understand context)
 
-            # Execute query via AgentLoop (observe-replan loop + trajectory)
-            # Synthesis is streamed to stdout in real-time by the executor.
-            try:
-                self.console.print()
-                result = self._run_with_clarification(query, context)
-                self.console.print()
-            except KeyboardInterrupt:
-                self.console.print("\n  [yellow]Interrupted.[/yellow]")
-                continue
+            # Keep prompt available while one generation runs; extra user messages
+            # are queued and executed serially by the worker.
+            self._submit_query(query, context)
+            self._advance_suggestion()
 
-            if result is not None:
-                self._last_response = result.summary
-                self._update_suggestions(query, result.plan, result)
-
-    def _run_with_clarification(self, query: str, context: dict):
+    def _run_with_clarification(
+        self,
+        query: str,
+        context: dict,
+        progress_callback=None,
+    ):
         """Run a query, handling clarification requests interactively."""
         from ct.agent.loop import ClarificationNeeded
 
@@ -888,7 +1162,11 @@ class InteractiveTerminal:
 
         for _ in range(max_clarifications):
             try:
-                return self.agent.run(query, run_context)
+                return self.agent.run(
+                    query,
+                    run_context,
+                    progress_callback=progress_callback,
+                )
             except ClarificationNeeded as e:
                 clar = e.clarification
                 self.console.print(f"  [cyan]{clar.question}[/cyan]")
@@ -913,7 +1191,11 @@ class InteractiveTerminal:
                 # Also append to the query so the planner gets full context
                 query = f"{query} — {answer}"
 
-        return self.agent.run(query, run_context)
+        return self.agent.run(
+            query,
+            run_context,
+            progress_callback=progress_callback,
+        )
 
     def _switch_model(self):
         """Interactive model switcher."""
@@ -1792,7 +2074,8 @@ class InteractiveTerminal:
             "- `Ctrl+O` — toggle verbose mode\n"
             "- `Ctrl+J` or `Alt+Enter` — insert newline (multi-line input)\n"
             "- `Tab` — accept ghost suggestion\n"
-            "- `Ctrl+C` × 2 — exit\n"
+            "- `Ctrl+C` — interrupt active generation (double-tap forces stop)\n"
+            "- `Ctrl+C` × 2 at idle prompt — exit\n"
             "\n"
             "**Examples:**\n"
             '- `find top genetically supported Parkinson targets`\n'
