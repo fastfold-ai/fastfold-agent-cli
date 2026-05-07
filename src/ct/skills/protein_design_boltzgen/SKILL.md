@@ -52,60 +52,78 @@ If no key is available:
 
 ## Scripts
 
-Run from this directory:
+Always invoke BoltzGen via PATH console commands after installing/upgrading `fastfold-agent-cli`.
+Do **not** hunt for files with `find`/`locate`, and do **not** `cd` into package directories.
+Do **not** use `python -c`, `python -m ct.skills...`, or ad-hoc import probing.
 
-```bash
-# In fastfold-agent-cli repo:
-cd src/ct/skills/protein_design_boltzgen
+Primary commands:
 
-# In fastfold-skills repo:
-cd skills/protein_design_boltzgen
-```
+- `fastfold-boltzgen-workflow` (wrapper around `workflow_api.py`)
+- `fastfold-boltzgen-fetch-cif` (wrapper around `fetch_cif.py`)
+
+If these commands are missing (`command not found`), the installed CLI is outdated. Ask user to upgrade:
+
+- `uv tool install "fastfold-agent-cli[all]" --python 3.10 --upgrade`
+
+### Critical execution guardrail (non-negotiable)
+
+If `fastfold-boltzgen-workflow` or `fastfold-boltzgen-fetch-cif` returns an error:
+1. Report the exact command + concise error.
+2. Ask the user to upgrade/reinstall using the command above.
+3. **Stop**. Do not attempt fallback discovery (`find`, `locate`, `ls` package trees, `python -c`, `python -m`).
+
+### Fast path for "show examples"
+
+For prompts like "Show me Boltzgen protein design examples":
+1. Run `fastfold-boltzgen-workflow example-files --list`.
+2. Present that output directly.
+3. Optionally run one preset resolution command (`--preset ... --json`) if user asks for details.
+4. Do not scan directories unless the user explicitly requests file-level inspection.
 
 - Create draft workflow:
   - explicit name:
-    - `python scripts/workflow_api.py new --name "API - vanilla target binding site"`
+    - `fastfold-boltzgen-workflow new --name "API - vanilla target binding site"`
   - auto simple name:
-    - `python scripts/workflow_api.py new --preset vanilla_target_binding_site`
+    - `fastfold-boltzgen-workflow new --preset vanilla_target_binding_site`
 - Resolve bundled example files (recommended first step for examples):
   - list available presets:
-    - `python scripts/workflow_api.py example-files --list`
+    - `fastfold-boltzgen-workflow example-files --list`
   - resolve files for a preset:
-    - `python scripts/workflow_api.py example-files --preset vanilla_target_binding_site --json`
+    - `fastfold-boltzgen-workflow example-files --preset vanilla_target_binding_site --json`
   - quick alias for 5CQG:
-    - `python scripts/workflow_api.py example-files --preset 5cqg --json`
+    - `fastfold-boltzgen-workflow example-files --preset 5cqg --json`
 - Build workflow spec from official template (after uploads):
-  - `python scripts/workflow_api.py build-spec --preset vanilla_target_binding_site --out /tmp/boltzgen_workflow.yml`
-  - `python scripts/workflow_api.py build-spec --preset 5cqg --json`
+  - `fastfold-boltzgen-workflow build-spec --preset vanilla_target_binding_site --out /tmp/boltzgen_workflow.yml`
+  - `fastfold-boltzgen-workflow build-spec --preset 5cqg --json`
 - Fetch and clean CIF:
-  - `python scripts/fetch_cif.py --pdb-id 5cqg --out-dir /tmp/boltzgen_inputs`
+  - `fastfold-boltzgen-fetch-cif --pdb-id 5cqg --out-dir /tmp/boltzgen_inputs`
 - Upload file to workflow workspace:
-  - `python scripts/workflow_api.py upload --file /tmp/boltzgen_inputs/5cqg.cif --file-type protein`
-  - `python scripts/workflow_api.py upload --file ./my_design.yaml --file-type yml`
+  - `fastfold-boltzgen-workflow upload --file /tmp/boltzgen_inputs/5cqg.cif --file-type protein`
+  - `fastfold-boltzgen-workflow upload --file ./my_design.yaml --file-type yml`
 - Save graph spec (single upsert):
-  - `python scripts/workflow_api.py upsert --spec /tmp/workflow.yml`
+  - `fastfold-boltzgen-workflow upsert --spec /tmp/workflow.yml`
 - Draft review for user validation (after upsert):
-  - `python scripts/workflow_api.py draft-review`
-  - `python scripts/workflow_api.py draft-review --json`
+  - `fastfold-boltzgen-workflow draft-review`
+  - `fastfold-boltzgen-workflow draft-review --json`
   - includes:
     - upserted `workflow.yml` preview
     - per design-spec YAML preview (binding-site fields visible before run)
 - Print/share full Composer link (after upsert):
-  - `python scripts/workflow_api.py composer-link`
+  - `fastfold-boltzgen-workflow composer-link`
 - Execute:
-  - `python scripts/workflow_api.py execute`
+  - `fastfold-boltzgen-workflow execute`
 - Wait:
-  - `python scripts/workflow_api.py wait --poll-seconds 10 --timeout-seconds 7200`
+  - `fastfold-boltzgen-workflow wait --poll-seconds 10 --timeout-seconds 7200`
 - Logs (single snapshot + interpretation):
-  - `python scripts/workflow_api.py logs`
-  - `python scripts/workflow_api.py logs --tail-lines 200`
+  - `fastfold-boltzgen-workflow logs`
+  - `fastfold-boltzgen-workflow logs --tail-lines 200`
 - Live logs while running:
-  - `python scripts/workflow_api.py logs --watch --poll-seconds 10 --timeout-seconds 1800`
+  - `fastfold-boltzgen-workflow logs --watch --poll-seconds 10 --timeout-seconds 1800`
 - Logs JSON payload:
-  - `python scripts/workflow_api.py logs --json`
+  - `fastfold-boltzgen-workflow logs --json`
 - Get candidates/metrics + links:
-  - `python scripts/workflow_api.py results`
-  - `python scripts/workflow_api.py results --json` (includes full `parsed_results_raw`, all metric field names, and `ranked_table`)
+  - `fastfold-boltzgen-workflow results`
+  - `fastfold-boltzgen-workflow results --json` (includes full `parsed_results_raw`, all metric field names, and `ranked_table`)
 
 The agent should run these scripts for the user rather than only listing commands.
 
@@ -134,7 +152,7 @@ Only fetch/clean CIF from external sources when:
 For preset smoke tests, do not hand-write workflow YAML. Always use:
 
 - `references/workflow_specs/*.workflow.yml` (official templates)
-- `python scripts/workflow_api.py build-spec ...` (placeholder replacement)
+- `fastfold-boltzgen-workflow build-spec ...` (placeholder replacement)
 
 ## From-Scratch YAML Authoring (When no preset fits)
 
@@ -173,7 +191,7 @@ If no bundled preset matches the user's request, create a design-spec YAML from 
 5. **Ask user**: "Please check the draft. If all looks good, tell me and I will run it."
 6. **Execute** via `POST /v1/workflows/execute` only after confirmation.
 7. **Poll status** via `GET /v1/workflows/status/{id}` until terminal.
-8. **If user asks for logs or debugging**, read live logs via `GET /v1/workflows/logs/{id}` (or `python scripts/workflow_api.py logs --watch`) and explain key markers.
+8. **If user asks for logs or debugging**, read live logs via `GET /v1/workflows/logs/{id}` (or `fastfold-boltzgen-workflow logs --watch`) and explain key markers.
 9. **Read results** via `GET /v1/workflows/task-results/{id}`.
 
 ## Design-Spec Authoring

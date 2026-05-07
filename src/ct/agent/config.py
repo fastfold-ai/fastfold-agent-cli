@@ -72,6 +72,7 @@ DEFAULTS = {
     "api.data_endpoint": None,
     "api.clue_key": None,
     "api.fastfold_cloud_key": None,
+    "fastfold.subscription_tier": None,
 
     "output.format": "markdown",
     "output.verbose": False,

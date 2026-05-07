@@ -154,7 +154,7 @@ class OrchestratorResult:
 # ─── Meta-planner prompt ────────────────────────────────────
 
 META_PLANNER_SYSTEM_PROMPT = """\
-You are ct's meta-planner for multi-agent parallel research.
+You are Fastfold Agent's meta-planner for multi-agent parallel research.
 
 Your job is to decompose a complex drug discovery query into N independent
 research threads that can run in parallel. Each thread should focus on a

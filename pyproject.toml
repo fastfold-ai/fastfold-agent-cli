@@ -113,6 +113,10 @@ fastfold-fold-fetch-results = "ct.skills.fold.scripts.fetch_results:main"
 fastfold-fold-download-cif = "ct.skills.fold.scripts.download_cif:main"
 fastfold-fold-get-viewer-link = "ct.skills.fold.scripts.get_viewer_link:main"
 
+# protein_design_boltzgen skill console scripts (same pattern)
+fastfold-boltzgen-workflow = "ct.skills.protein_design_boltzgen.scripts.workflow_api:main"
+fastfold-boltzgen-fetch-cif = "ct.skills.protein_design_boltzgen.scripts.fetch_cif:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/ct"]
 # hatchling includes all files under the package path, so skills/ data files

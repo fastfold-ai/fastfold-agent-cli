@@ -26,20 +26,37 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from _api import (
-    TERMINAL_TASK_STATUSES,
-    TERMINAL_WORKFLOW_STATUSES,
-    composer_url,
-    create_library_item,
-    get_library_stored_file_name,
-    request_json,
-    request_text,
-    request_text_response,
-    resolve_fastfold_folder_id,
-    resolve_urls,
-    upload_file,
-)
-from load_env import resolve_fastfold_api_key
+try:
+    from ._api import (
+        TERMINAL_TASK_STATUSES,
+        TERMINAL_WORKFLOW_STATUSES,
+        composer_url,
+        create_library_item,
+        get_library_stored_file_name,
+        request_json,
+        request_text,
+        request_text_response,
+        resolve_fastfold_folder_id,
+        resolve_urls,
+        upload_file,
+    )
+    from .load_env import resolve_fastfold_api_key
+except ImportError:
+    # Support direct execution: python scripts/workflow_api.py ...
+    from _api import (  # pyright: ignore[reportMissingImports]
+        TERMINAL_TASK_STATUSES,
+        TERMINAL_WORKFLOW_STATUSES,
+        composer_url,
+        create_library_item,
+        get_library_stored_file_name,
+        request_json,
+        request_text,
+        request_text_response,
+        resolve_fastfold_folder_id,
+        resolve_urls,
+        upload_file,
+    )
+    from load_env import resolve_fastfold_api_key  # pyright: ignore[reportMissingImports]
 
 
 DEFAULT_STATE_FILE = Path("/tmp/protein_design_boltzgen_state.json")

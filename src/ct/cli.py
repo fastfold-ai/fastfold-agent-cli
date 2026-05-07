@@ -11,9 +11,12 @@ Usage:
 
 import os
 import json
+import random
 import shutil
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 import typer
 from typing import Optional
 from pathlib import Path
@@ -24,19 +27,19 @@ from rich.table import Table
 
 from ct import __version__
 from ct.agent.session import Session
-from ct.ui.terminal import InteractiveTerminal
+from ct.ui.terminal import InteractiveTerminal, SLASH_COMMANDS
 
 
 # ─── Startup banner ─────────────────────────────────────────
 BANNER = """
-[bold #2D7BEA]     ▃▃[/]      [bold #BFBFBF]███████╗ █████╗ ███████╗████████╗███████╗ ██████╗ ██╗     ██████╗ [/]
-[bold #2D7BEA]    ▃▃▃▃[/]     [bold #AFAFAF]██╔════╝██╔══██╗██╔════╝╚══██╔══╝██╔════╝██╔═══██╗██║     ██╔══██╗[/]
-[bold #25C19F]  ▅▅ ▃▃▃[/]     [bold #AFAFAF]█████╗  ███████║███████╗   ██║   █████╗  ██║   ██║██║     ██║  ██║[/]
-[bold #25C19F] ▅▅▅▅▅[/]       [bold #9A9A9A]██╔══╝  ██╔══██║╚════██║   ██║   ██╔══╝  ██║   ██║██║     ██║  ██║[/]
-[bold #F5A623]  ▅▅▅ ▆▆[/]     [bold #888888]██║     ██║  ██║███████║   ██║   ██║     ╚██████╔╝███████╗██████╔╝[/]
-[bold #F5A623]    ▆▆▆▆▆[/]     [bold #777777]╚═╝     ╚═╝  ╚═╝╚══════╝   ╚═╝   ╚═╝      ╚═════╝ ╚══════╝╚═════╝ [/]
-[bold #D4148E]   ▃  ▆▆▆▆[/]
-[bold #D4148E]  ▃▂▃▂ ▆[/]
+[bold #2D7BEA]     ▃▃[/]
+[bold #2D7BEA]    ▃▃▃▃[/]
+[bold #25C19F]  ▅▅ ▃▃▃[/]
+[bold #25C19F] ▅▅▅▅▅[/]
+[bold #F5A623]  ▅▅▅ ▆▆[/]
+[bold #F5A623]    ▆▆▆▆▆[/]
+[bold #D4148E]   ▃ ▆▆▆▆[/]
+[bold #D4148E]  ▃▃▃ ▆[/]
 [bold #D4148E]   ▃▃▃[/]
 """
 
@@ -56,8 +59,8 @@ console = Console()
 FASTFOLD_CLOUD_API_KEYS_URL = "https://cloud.fastfold.ai/api-keys"
 
 
-def _count_installed_claude_skills() -> int:
-    """Count agent skills: bundled catalog + user-installed (skills-lock.json)."""
+def _installed_claude_skill_names() -> list[str]:
+    """Return installed skill names: bundled catalog + user-installed lockfile."""
     import json
 
     skill_names: set[str] = set()
@@ -81,7 +84,126 @@ def _count_installed_claude_skills() -> int:
         except Exception:
             pass
 
-    return len(skill_names)
+    return sorted(skill_names)
+
+
+def _count_installed_claude_skills() -> int:
+    """Count installed agent skills."""
+    return len(_installed_claude_skill_names())
+
+
+def _resolve_fastfold_subscription_tier(cfg) -> str:
+    """Resolve Fastfold subscription tier from API, with local fallback."""
+    fallback_raw = str(
+        os.environ.get("FASTFOLD_SUBSCRIPTION_TIER")
+        or cfg.get("fastfold.subscription_tier", "")
+        or ""
+    ).strip().lower()
+
+    def _normalize_plan_code(raw: str) -> str:
+        value = str(raw or "").strip().lower()
+        if value in {"pro+", "pro-plus", "pro plus"}:
+            return "pro_plus"
+        return value
+
+    def _plan_rank(plan_code: str) -> int:
+        ranks = {
+            "free": 0,
+            "pro": 1,
+            "pro_plus": 2,
+            "ultra": 3,
+        }
+        return ranks.get(plan_code, -1)
+
+    fallback = _normalize_plan_code(fallback_raw)
+    if _plan_rank(fallback) < 0:
+        fallback = ""
+
+    api_key = str(
+        os.environ.get("FASTFOLD_API_KEY")
+        or cfg.get("api.fastfold_cloud_key")
+        or ""
+    ).strip()
+    if not api_key:
+        return fallback
+
+    base_url = (
+        os.environ.get("FASTFOLD_API_BASE_URL", "https://api.fastfold.ai").strip()
+        or "https://api.fastfold.ai"
+    )
+    url = f"{base_url.rstrip('/')}/v1/billing/workspaces/plans"
+    req = urllib.request.Request(
+        url=url,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "X-API-Key": api_key,
+            "Accept": "application/json",
+        },
+        method="GET",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=2.5) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        # Billing endpoints are currently cookie-auth only. For API-key callers,
+        # avoid showing a misleading default plan when backend returns 401.
+        if exc.code == 401:
+            return fallback
+        return fallback
+    except (urllib.error.URLError, TimeoutError):
+        return fallback
+
+    try:
+        payload = json.loads(text) if text else {}
+    except Exception:
+        return fallback
+    if not isinstance(payload, dict):
+        return fallback
+
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return fallback
+
+    best_plan = None
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        raw_plan = _normalize_plan_code(str(item.get("plan_code") or ""))
+        if not raw_plan:
+            continue
+        if best_plan is None or _plan_rank(raw_plan) > _plan_rank(best_plan):
+            best_plan = raw_plan
+
+    resolved = best_plan or fallback
+    return resolved if _plan_rank(resolved) >= 0 else fallback
+
+
+def _format_plan_label(plan_code: str) -> str:
+    """Convert normalized plan code to friendly display label."""
+    normalized = str(plan_code or "").strip().lower()
+    if normalized == "pro_plus":
+        return "Pro+"
+    if not normalized:
+        return ""
+    return normalized.replace("_", " ").title()
+
+
+def _random_command_tip_markup() -> str:
+    """Return a random slash-command tip from actual terminal commands."""
+    if not SLASH_COMMANDS:
+        return "[dim]Tip: use slash commands in interactive mode.[/dim]"
+
+    command, description = random.choice(list(SLASH_COMMANDS.items()))
+    return f"[dim]Tip: try [/][bold #D4148E]{command}[/][dim] — {description}[/dim]"
+
+
+def _random_news_item_markup() -> str:
+    """Return the BoltzGen-only news/action line."""
+    installed = set(_installed_claude_skill_names())
+    if "protein_design_boltzgen" in installed:
+        return "[bold #25C19F]BoltzGen universal protein design now available![/] [#7A7A7A]· Try: Show me Boltzgen protein design examples[/]"
+    return "[bold #25C19F]BoltzGen universal protein design now available[/] [#7A7A7A]· Try: Show me Boltzgen protein design examples[/]"
 
 
 # ─── Config subcommand ────────────────────────────────────────
@@ -1607,27 +1729,51 @@ def bench(
 
 def print_banner():
     """Print the startup banner with molecule illustration."""
+    from ct.agent.config import Config
+    from rich.padding import Padding
     from ct.tools import registry, ensure_loaded
-    from rich.panel import Panel
+    from rich.table import Table
     from rich.text import Text
 
     ensure_loaded()
+    cfg = Config.load()
     n_tools = len(registry.list_tools())
     n_skills = _count_installed_claude_skills()
+    model_raw = str(cfg.get("llm.model") or "").strip()
+    model_names = {
+        "claude-sonnet-4-5-20250929": "Sonnet 4.5",
+        "claude-haiku-4-5-20251001": "Haiku 4.5",
+        "claude-opus-4-6": "Opus 4.6",
+        "gpt-4o": "GPT-4o",
+        "gpt-4o-mini": "GPT-4o Mini",
+    }
+    model_name = model_names.get(model_raw, model_raw)
 
-    # Print the ASCII logo (just the CELLTYPE art)
-    console.print(BANNER)
+    tier = _resolve_fastfold_subscription_tier(cfg)
+    tier_display = _format_plan_label(tier)
+    status_parts: list[str] = []
+    if model_name:
+        status_parts.append(model_name)
+    if tier_display:
+        status_parts.append(tier_display)
+    status_line = " · ".join(status_parts)
 
-    # Create a nice enclosed dashboard panel for the metadata
-    meta_text = Text.from_markup(
-        f"[bold white]Autonomous Drug Discovery Agent[/]\n"
-        f"[dim]v{__version__}  ·  {n_tools} tools loaded  · {n_skills} skills loaded · Powered by Fastfold AI Cloud[/dim]",
-        justify="center",
-    )
+    logo_text = Text.from_markup(BANNER.strip("\n"))
+    meta_lines = [
+        f"[bold white]Fastfold Agent CLI[/] [dim]v{__version__}[/]",
+    ]
+    if status_line:
+        meta_lines.append(f"[dim]{status_line}[/dim]")
+    meta_lines.append(f"[dim]{n_tools} tools · {n_skills} skills[/dim]")
+    meta_lines.append(_random_command_tip_markup())
+    meta_lines.append(_random_news_item_markup())
+    meta_text = Text.from_markup("\n".join(meta_lines))
 
-    console.print(
-        Panel(meta_text, title="[bold cyan]Fastfold Agent CLI[/]", border_style="dim", width=65)
-    )
+    header = Table.grid(padding=(0, 2))
+    header.add_column(no_wrap=True)
+    header.add_column()
+    header.add_row(logo_text, Padding(meta_text, (2, 0, 0, 1)))
+    console.print(header)
 
 
 def run_interactive(
@@ -1657,8 +1803,6 @@ def run_interactive(
 
     print_banner()
 
-    # Show model info like Claude Code does
-    console.print("  [dim]Type a research question, or /help for commands.[/dim]")
     console.print()
 
     terminal = InteractiveTerminal(config=cfg, verbose=verbose)
