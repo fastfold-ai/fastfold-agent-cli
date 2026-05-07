@@ -112,6 +112,22 @@ THINKING_WORDS = {
     ],
 }
 
+FOOTER_PAST_TENSE_WORDS = {
+    "analysis": [
+        "Analyzed", "Calculated", "Computed", "Considered", "Determined",
+        "Evaluated", "Inferred", "Pondered", "Processed", "Reasoned",
+        "Synthesized", "Thought", "Triaged", "Validated",
+    ],
+    "build": [
+        "Architected", "Built", "Composed", "Crafted", "Created", "Forged",
+        "Generated", "Implemented", "Refactored", "Reworked",
+    ],
+    "motion": [
+        "Brewed", "Churned", "Crunched", "Flowed", "Harmonized", "Swirled",
+        "Warped", "Whisked", "Wove", "Wrangled",
+    ],
+}
+
 
 class _ThinkingRenderable:
     """Self-updating renderable: Animated spinner + rotating bio-themed word + elapsed time.

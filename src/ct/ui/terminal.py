@@ -552,6 +552,19 @@ class InteractiveTerminal:
         self._active_query_started_at: float = 0.0
         self._active_activity: str = ""
         self._active_activity_updated_at: float = 0.0
+        self._active_input_tokens: int = 0
+        self._active_output_tokens: int = 0
+        self._active_streamed_chars: int = 0
+        self._session_sdk_calls: int = 0
+        self._session_sdk_input_tokens: int = 0
+        self._session_sdk_output_tokens: int = 0
+        self._session_sdk_cache_read_tokens: int = 0
+        self._session_sdk_cache_creation_tokens: int = 0
+        self._session_sdk_cost_usd: float = 0.0
+        self._session_sdk_total_cost_usd: float = 0.0
+        self._session_sdk_extra_server_tool_cost_usd: float = 0.0
+        self._session_sdk_models: set[str] = set()
+        self._session_sdk_turn_rows: list[dict] = []
         self._queued_queries: deque[tuple[str, dict]] = deque()
         self._live_refresh_thread: threading.Thread | None = None
         self._toolbar_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -705,6 +718,138 @@ class InteractiveTerminal:
             self._active_activity = clean
             self._active_activity_updated_at = time.time()
 
+    @staticmethod
+    def _coerce_token_count(value) -> int:
+        try:
+            if value is None:
+                return 0
+            if isinstance(value, bool):
+                return int(value)
+            if isinstance(value, int):
+                return max(0, value)
+            if isinstance(value, float):
+                return max(0, int(value))
+            text = str(value).strip()
+            if not text:
+                return 0
+            return max(0, int(float(text)))
+        except Exception:
+            return 0
+
+    def _set_active_usage(self, input_tokens=None, output_tokens=None) -> None:
+        in_tokens = self._coerce_token_count(input_tokens)
+        out_tokens = self._coerce_token_count(output_tokens)
+        with self._run_lock:
+            if in_tokens > self._active_input_tokens:
+                self._active_input_tokens = in_tokens
+            if out_tokens > self._active_output_tokens:
+                self._active_output_tokens = out_tokens
+
+    def _set_active_streamed_chars(self, streamed_chars=None) -> None:
+        chars = self._coerce_token_count(streamed_chars)
+        with self._run_lock:
+            if chars > self._active_streamed_chars:
+                self._active_streamed_chars = chars
+
+    @staticmethod
+    def _estimate_output_tokens_from_chars(char_count: int) -> int:
+        # Rough fallback while SDK usage counters are not yet emitted.
+        return max(0, int(round(char_count / 4.0)))
+
+    @staticmethod
+    def _coerce_cost(value) -> float:
+        try:
+            if value is None:
+                return 0.0
+            if isinstance(value, bool):
+                return float(int(value))
+            if isinstance(value, (int, float)):
+                return max(0.0, float(value))
+            text = str(value).strip()
+            if not text:
+                return 0.0
+            return max(0.0, float(text))
+        except Exception:
+            return 0.0
+
+    def _record_sdk_usage(self, result) -> None:
+        metadata = getattr(result, "metadata", {}) or {}
+        if not isinstance(metadata, dict):
+            return
+
+        input_tokens = self._coerce_token_count(metadata.get("sdk_input_tokens"))
+        output_tokens = self._coerce_token_count(metadata.get("sdk_output_tokens"))
+        cache_read_tokens = self._coerce_token_count(metadata.get("sdk_cache_read_input_tokens"))
+        cache_creation_tokens = self._coerce_token_count(metadata.get("sdk_cache_creation_input_tokens"))
+        sdk_turns = self._coerce_token_count(metadata.get("sdk_turns"))
+        cost_split_known = bool(metadata.get("sdk_cost_split_known", False))
+        total_cost_usd = self._coerce_cost(metadata.get("sdk_total_cost_usd"))
+        model_usage_cost_usd = self._coerce_cost(metadata.get("sdk_model_usage_cost_usd"))
+        if total_cost_usd <= 0.0:
+            total_cost_usd = self._coerce_cost(metadata.get("sdk_cost_usd"))
+        # Main display cost aligns with token rows when split is known.
+        if cost_split_known and model_usage_cost_usd > 0.0:
+            cost_usd = model_usage_cost_usd
+            extra_server_tool_cost_usd = self._coerce_cost(
+                metadata.get("sdk_server_tool_cost_usd")
+            )
+            if extra_server_tool_cost_usd <= 0.0 and total_cost_usd > cost_usd:
+                extra_server_tool_cost_usd = total_cost_usd - cost_usd
+        else:
+            # SDK didn't provide model-usage cost; avoid double-reporting.
+            cost_usd = total_cost_usd
+            extra_server_tool_cost_usd = 0.0
+        models_raw = metadata.get("sdk_models") or []
+        if isinstance(models_raw, str):
+            models = [models_raw]
+        elif isinstance(models_raw, (list, tuple, set)):
+            models = [str(m).strip() for m in models_raw if str(m).strip()]
+        else:
+            models = []
+        if not models:
+            fallback_model = str(metadata.get("sdk_model") or self.session.current_model or "").strip()
+            if fallback_model:
+                models = [fallback_model]
+
+        has_usage = any((
+            input_tokens > 0,
+            output_tokens > 0,
+            cache_read_tokens > 0,
+            cache_creation_tokens > 0,
+            cost_usd > 0.0,
+            sdk_turns > 0,
+        ))
+        if not has_usage:
+            return
+
+        with self._run_lock:
+            self._session_sdk_calls += 1
+            turn_idx = self._session_sdk_calls
+            self._session_sdk_input_tokens += input_tokens
+            self._session_sdk_output_tokens += output_tokens
+            self._session_sdk_cache_read_tokens += cache_read_tokens
+            self._session_sdk_cache_creation_tokens += cache_creation_tokens
+            self._session_sdk_cost_usd += cost_usd
+            self._session_sdk_total_cost_usd += total_cost_usd
+            self._session_sdk_extra_server_tool_cost_usd += extra_server_tool_cost_usd
+            for model in models:
+                if model:
+                    self._session_sdk_models.add(model)
+            self._session_sdk_turn_rows.append(
+                {
+                    "turn": turn_idx,
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "cache_read_tokens": cache_read_tokens,
+                    "cache_creation_tokens": cache_creation_tokens,
+                    "cost_usd": cost_usd,
+                    "total_cost_usd": total_cost_usd,
+                    "extra_server_tool_cost_usd": extra_server_tool_cost_usd,
+                    "models": list(models),
+                    "timestamp": time.time(),
+                }
+            )
+
     def _toolbar_spinner_markup(self) -> str:
         """Render spinner frame with subtle cycling color."""
         frames = self._toolbar_frames or ["⠋"]
@@ -738,8 +883,11 @@ class InteractiveTerminal:
             self._worker_thread = worker
             self._active_query = query
             self._active_query_started_at = time.time()
-            self._active_activity = "starting..."
+            self._active_activity = "Running..."
             self._active_activity_updated_at = time.time()
+            self._active_input_tokens = 0
+            self._active_output_tokens = 0
+            self._active_streamed_chars = 0
             start_refresh = True
             worker.start()
         if start_refresh:
@@ -753,15 +901,38 @@ class InteractiveTerminal:
                 with self._run_lock:
                     self._active_query = query
                     self._active_query_started_at = time.time()
-                    self._active_activity = "thinking..."
+                    self._active_activity = "Running..."
                     self._active_activity_updated_at = time.time()
-                preview = query.replace("\n", " ").strip()
-                if len(preview) > 80:
-                    preview = preview[:77] + "..."
-                self.console.print(f"  [dim]Running: {preview}[/dim]")
+                    self._active_input_tokens = 0
+                    self._active_output_tokens = 0
+                    self._active_streamed_chars = 0
 
-                def _progress_update(msg: str) -> None:
-                    self._set_active_activity(msg)
+                def _progress_update(event="activity", **payload) -> None:
+                    # New callback shape: (event, **payload); keep legacy text-only support.
+                    if isinstance(event, dict):
+                        merged = dict(event)
+                        merged.update(payload)
+                        payload = merged
+                        event = str(payload.pop("event", "activity"))
+                    elif not isinstance(event, str):
+                        event = str(event or "")
+
+                    if payload:
+                        if "input_tokens" in payload or "output_tokens" in payload:
+                            self._set_active_usage(
+                                payload.get("input_tokens"),
+                                payload.get("output_tokens"),
+                            )
+                        if "streamed_chars" in payload:
+                            self._set_active_streamed_chars(payload.get("streamed_chars"))
+                        text = payload.get("text") or payload.get("activity")
+                        if text:
+                            self._set_active_activity(str(text))
+                        return
+
+                    # Legacy: callback invoked with a plain status string.
+                    if event and event not in {"activity", "usage"}:
+                        self._set_active_activity(event)
 
                 try:
                     self.console.print()
@@ -779,27 +950,23 @@ class InteractiveTerminal:
                     result = None
 
                 if result is not None:
+                    self._record_sdk_usage(result)
                     self._last_response = result.summary
                     self._update_suggestions(query, result.plan, result)
 
                 with self._run_lock:
                     if self._queued_queries:
                         current = self._queued_queries.popleft()
-                        remaining = len(self._queued_queries)
                     else:
                         self._worker_thread = None
                         self._active_query = None
                         self._active_query_started_at = 0.0
                         self._active_activity = ""
                         self._active_activity_updated_at = 0.0
+                        self._active_input_tokens = 0
+                        self._active_output_tokens = 0
+                        self._active_streamed_chars = 0
                         break
-
-                preview = current[0].replace("\n", " ").strip()
-                if len(preview) > 80:
-                    preview = preview[:77] + "..."
-                self.console.print(
-                    f"  [dim]Running queued message ({remaining} remaining after this): {preview}[/dim]"
-                )
         finally:
             with self._run_lock:
                 self._worker_thread = None
@@ -807,6 +974,9 @@ class InteractiveTerminal:
                 self._active_query_started_at = 0.0
                 self._active_activity = ""
                 self._active_activity_updated_at = 0.0
+                self._active_input_tokens = 0
+                self._active_output_tokens = 0
+                self._active_streamed_chars = 0
 
     def _current_placeholder(self):
         """Return the current ghost suggestion as dim placeholder text."""
@@ -884,6 +1054,9 @@ class InteractiveTerminal:
                 status = self._active_activity or "thinking..."
                 status_updated_at = self._active_activity_updated_at
                 started_at = self._active_query_started_at
+                in_tokens = self._active_input_tokens
+                out_tokens = self._active_output_tokens
+                streamed_chars = self._active_streamed_chars
             elapsed_s = max(0, int(time.time() - started_at)) if started_at else 0
             if elapsed_s < 60:
                 elapsed = f"{elapsed_s}s"
@@ -893,11 +1066,19 @@ class InteractiveTerminal:
             if stale_status or status in {"thinking...", "starting..."}:
                 word_idx = int(time.time() / self._toolbar_word_interval_s) % max(1, len(self._toolbar_words))
                 status = f"{self._toolbar_words[word_idx]}..."
+            fallback_out = self._estimate_output_tokens_from_chars(streamed_chars)
+            shown_out = out_tokens if out_tokens > 0 else fallback_out
+            usage_label = ""
+            if in_tokens > 0 or shown_out > 0:
+                in_label = f"↑ {in_tokens}" if in_tokens > 0 else "↑ …"
+                usage_label = f" · {in_label} · ↓ {shown_out} tokens"
             queued_label = f" · queued {queued}" if queued else ""
             spinner = self._toolbar_spinner_markup()
             return HTML(
                 f"{spinner}"
-                f'<style fg="#8be9fd" bg="default"> running {elapsed}{queued_label}</style>'
+                f'<style fg="#8be9fd" bg="default"> running {elapsed}</style>'
+                f'<style fg="#7f8790" bg="default">{usage_label}</style>'
+                f'<style fg="#8be9fd" bg="default">{queued_label}</style>'
                 f'<style fg="#50fa7b" bg="default"> {status}</style>'
                 '<style fg="#555555" bg="default"> · /interrupt · Ctrl+C interrupt</style>'
             )
@@ -1375,11 +1556,67 @@ class InteractiveTerminal:
 
     def _show_usage(self):
         """Show token usage and cost for this session."""
-        llm = self.session.get_llm()
-        if not hasattr(llm, 'usage') or not llm.usage.calls:
-            self.console.print("  [dim]No LLM calls made yet.[/dim]")
+        with self._run_lock:
+            sdk_calls = int(self._session_sdk_calls)
+            sdk_in = int(self._session_sdk_input_tokens)
+            sdk_out = int(self._session_sdk_output_tokens)
+            sdk_cache_read = int(self._session_sdk_cache_read_tokens)
+            sdk_cache_create = int(self._session_sdk_cache_creation_tokens)
+            sdk_cost = float(self._session_sdk_cost_usd)
+            sdk_total_cost = float(self._session_sdk_total_cost_usd)
+            sdk_extra_cost = float(self._session_sdk_extra_server_tool_cost_usd)
+            sdk_models = sorted(self._session_sdk_models)
+            sdk_rows = list(self._session_sdk_turn_rows)
+
+        if sdk_calls > 0:
+            from rich.table import Table
+
+            table = Table(title="Session SDK Usage", show_lines=False)
+            table.add_column("Turn", style="cyan", no_wrap=True)
+            table.add_column("Input", justify="right", style="green")
+            table.add_column("Output", justify="right", style="green")
+            table.add_column("Cache Read", justify="right", style="dim")
+            table.add_column("Cache Create", justify="right", style="dim")
+            table.add_column("Cost (USD)", justify="right", style="yellow")
+            table.add_column("Models", style="dim")
+
+            for row in sdk_rows:
+                models = ", ".join(row.get("models", [])) or "-"
+                table.add_row(
+                    str(row.get("turn", "")),
+                    f"{int(row.get('input_tokens', 0)):,}",
+                    f"{int(row.get('output_tokens', 0)):,}",
+                    f"{int(row.get('cache_read_tokens', 0)):,}",
+                    f"{int(row.get('cache_creation_tokens', 0)):,}",
+                    f"${float(row.get('cost_usd', 0.0)):.4f}",
+                    models,
+                )
+
+            total_models = ", ".join(sdk_models) if sdk_models else "-"
+            table.add_row(
+                "TOTAL",
+                f"{sdk_in:,}",
+                f"{sdk_out:,}",
+                f"{sdk_cache_read:,}",
+                f"{sdk_cache_create:,}",
+                f"${sdk_cost:.4f}",
+                total_models,
+                style="bold",
+            )
+            self.console.print(table)
+            if sdk_extra_cost > 0.0:
+                self.console.print(
+                    f"  [dim]Extra server-tool charges (outside token rows): ${sdk_extra_cost:.4f} "
+                    f"(SDK total: ${sdk_total_cost:.4f})[/dim]"
+                )
             return
-        self.console.print(f"  {llm.usage.summary()}")
+
+        # Fallback for legacy non-SDK flows.
+        llm = self.session.get_llm()
+        if hasattr(llm, "usage") and llm.usage.calls:
+            self.console.print(f"  {llm.usage.summary()}")
+            return
+        self.console.print("  [dim]No LLM calls made yet.[/dim]")
 
     def _show_tasks(self, force_refresh: bool = False):
         """Show current background task watcher state from the SDK runner."""

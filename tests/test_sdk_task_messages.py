@@ -4,12 +4,14 @@ import asyncio
 from io import StringIO
 
 from claude_agent_sdk import ResultMessage, SystemMessage
+from claude_agent_sdk.types import StreamEvent
 from rich.console import Console
 
 from ct.agent.runner import (
     AgentRunner,
     _extract_task_event,
     _extract_task_output_paths_from_text,
+    _extract_usage_totals,
     _default_local_task_output_path,
     _is_warp_terminal_env,
     _parse_task_probe_json,
@@ -185,6 +187,71 @@ def test_parse_task_probe_json_strict_mapping():
     assert payload["a"] == "running"
     assert payload["b"] == "completed"
     assert payload["c"] == "unknown"
+
+
+def test_extract_usage_totals_parses_cache_and_camel_case():
+    payload = _extract_usage_totals(
+        {
+            "inputTokens": 12,
+            "outputTokens": 7,
+            "cacheCreationInputTokens": 3,
+            "cacheReadInputTokens": 4,
+        }
+    )
+    assert payload is not None
+    assert payload["input_tokens"] == 12
+    assert payload["output_tokens"] == 7
+    assert payload["cache_creation_input_tokens"] == 3
+    assert payload["cache_read_input_tokens"] == 4
+
+
+def test_process_messages_emits_usage_progress_event():
+    seen = []
+
+    def _on_progress(event, **payload):
+        seen.append((event, dict(payload)))
+
+    messages = [
+        SystemMessage(
+            subtype="task_progress",
+            data={
+                "task_id": "task-xyz",
+                "description": "Still running",
+                "usage": {"input_tokens": 15, "output_tokens": 9},
+            },
+        ),
+        _success_result(),
+    ]
+
+    result = asyncio.run(process_messages(_aiter(messages), on_activity=_on_progress))
+    usage_events = [p for e, p in seen if e == "usage"]
+    assert usage_events
+    assert usage_events[-1]["input_tokens"] == 15
+    assert usage_events[-1]["output_tokens"] == 9
+    assert result["token_usage"]["input_tokens"] == 15
+    assert result["token_usage"]["output_tokens"] == 9
+
+
+def test_process_messages_handles_stream_event_text_delta():
+    seen = []
+
+    def _on_progress(event, **payload):
+        seen.append((event, dict(payload)))
+
+    messages = [
+        StreamEvent(
+            uuid="s-1",
+            session_id="session-1",
+            event={"delta": {"type": "text_delta", "text": "hello world"}},
+        ),
+        _success_result(),
+    ]
+
+    result = asyncio.run(process_messages(_aiter(messages), on_activity=_on_progress))
+    stream_events = [p for e, p in seen if e == "stream"]
+    assert stream_events
+    assert stream_events[-1]["streamed_chars"] == len("hello world")
+    assert result["streamed_len"] == len("hello world")
 
 
 def test_is_warp_terminal_env_detection():

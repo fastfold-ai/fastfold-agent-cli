@@ -13,6 +13,7 @@ from contextlib import suppress
 import json
 import logging
 import os
+import random
 import re
 import select
 import signal
@@ -81,6 +82,197 @@ def _extract_task_event(msg) -> dict[str, Any] | None:
     event["output_file"] = _sdk_msg_field(msg, "output_file", "") or ""
     event["usage"] = _sdk_msg_field(msg, "usage", None)
     return event
+
+
+def _safe_int_token(value: Any) -> int:
+    """Best-effort integer parsing for token counters."""
+    try:
+        if value is None:
+            return 0
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return max(0, value)
+        if isinstance(value, float):
+            return max(0, int(value))
+        text = str(value).strip()
+        if not text:
+            return 0
+        return max(0, int(float(text)))
+    except Exception:
+        return 0
+
+
+def _safe_float(value: Any) -> float:
+    """Best-effort float parsing."""
+    try:
+        if value is None:
+            return 0.0
+        if isinstance(value, bool):
+            return float(int(value))
+        if isinstance(value, (int, float)):
+            return float(value)
+        text = str(value).strip()
+        if not text:
+            return 0.0
+        return float(text)
+    except Exception:
+        return 0.0
+
+
+def _as_dict(value: Any) -> dict[str, Any] | None:
+    """Normalize unknown SDK payload objects into dicts when possible."""
+    if isinstance(value, dict):
+        return value
+    if value is None:
+        return None
+    with suppress(Exception):
+        dumped = value.model_dump()
+        if isinstance(dumped, dict):
+            return dumped
+    with suppress(Exception):
+        dumped = value.dict()
+        if isinstance(dumped, dict):
+            return dumped
+    with suppress(Exception):
+        attrs = vars(value)
+        if isinstance(attrs, dict):
+            return dict(attrs)
+    return None
+
+
+def _extract_usage_totals(raw_usage: Any) -> dict[str, int] | None:
+    """Normalize SDK usage payloads into input/output token totals."""
+    usage_obj = _as_dict(raw_usage)
+    if usage_obj is None:
+        return None
+
+    def _pick(*keys: str) -> int:
+        for key in keys:
+            if key in usage_obj:
+                return _safe_int_token(usage_obj.get(key))
+        return 0
+
+    input_tokens = _pick(
+        "input_tokens",
+        "inputTokens",
+        "prompt_tokens",
+        "promptTokens",
+        "total_input_tokens",
+        "totalInputTokens",
+    )
+    output_tokens = _pick(
+        "output_tokens",
+        "outputTokens",
+        "completion_tokens",
+        "completionTokens",
+        "total_output_tokens",
+        "totalOutputTokens",
+    )
+    cache_creation_tokens = _pick(
+        "cache_creation_input_tokens",
+        "cacheCreationInputTokens",
+    )
+    cache_read_tokens = _pick(
+        "cache_read_input_tokens",
+        "cacheReadInputTokens",
+    )
+    if (
+        input_tokens == 0
+        and output_tokens == 0
+        and cache_creation_tokens == 0
+        and cache_read_tokens == 0
+    ):
+        return None
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "cache_creation_input_tokens": cache_creation_tokens,
+        "cache_read_input_tokens": cache_read_tokens,
+    }
+
+
+def _extract_model_usage_totals(raw_model_usage: Any) -> dict[str, Any] | None:
+    """Sum model_usage map from ResultMessage into aggregate token/cost totals."""
+    payload = _as_dict(raw_model_usage)
+    if not payload:
+        return None
+
+    in_total = 0
+    out_total = 0
+    cache_create_total = 0
+    cache_read_total = 0
+    cost_total = 0.0
+    models: set[str] = set()
+
+    for model_name, model_stats in payload.items():
+        stats = _as_dict(model_stats)
+        if not stats:
+            continue
+        name = str(model_name or "").strip()
+        if name:
+            models.add(name)
+        in_total += _safe_int_token(stats.get("inputTokens", stats.get("input_tokens")))
+        out_total += _safe_int_token(stats.get("outputTokens", stats.get("output_tokens")))
+        cache_create_total += _safe_int_token(
+            stats.get("cacheCreationInputTokens", stats.get("cache_creation_input_tokens"))
+        )
+        cache_read_total += _safe_int_token(
+            stats.get("cacheReadInputTokens", stats.get("cache_read_input_tokens"))
+        )
+        cost_total += _safe_float(stats.get("costUSD", stats.get("cost_usd")))
+
+    if (
+        in_total == 0
+        and out_total == 0
+        and cache_create_total == 0
+        and cache_read_total == 0
+        and cost_total <= 0.0
+    ):
+        return None
+
+    return {
+        "input_tokens": in_total,
+        "output_tokens": out_total,
+        "cache_creation_input_tokens": cache_create_total,
+        "cache_read_input_tokens": cache_read_total,
+        "cost_usd": cost_total,
+        "models": sorted(models),
+    }
+
+
+def _looks_like_unverified_execution_claim(summary: str, tool_calls: list[dict]) -> bool:
+    """Detect likely fabricated execution claims when no tool was actually called."""
+    if tool_calls:
+        return False
+    text = str(summary or "").strip().lower()
+    if not text:
+        return False
+
+    # Strong signal: model invented concrete identifiers.
+    if re.search(r"\b(?:fold|job|workflow|wf)_[a-z0-9]{6,}\b", text):
+        return True
+
+    has_submit_claim = any(
+        phrase in text for phrase in (
+            "successfully submitted",
+            "i submitted",
+            "i successfully submitted",
+            "created the job",
+            "created a job",
+            "job id:",
+            "workflow id:",
+        )
+    )
+    if has_submit_claim:
+        return True
+
+    if ("is running" in text or "running with" in text) and any(
+        key in text for key in ("job", "workflow", "fold")
+    ):
+        return True
+
+    return False
 
 
 def _extract_task_output_paths_from_text(full_text: list[str]) -> dict[str, str]:
@@ -274,7 +466,7 @@ async def process_messages(
         ToolResultBlock = None
 
     try:
-        from claude_agent_sdk import StreamEvent
+        from claude_agent_sdk.types import StreamEvent
     except ImportError:
         StreamEvent = None
 
@@ -286,21 +478,81 @@ async def process_messages(
     _last_progress_emit: dict[str, float] = {}
     result_msg = None
     streamed_len = 0  # characters already displayed via StreamEvent
+    token_usage = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+    }
+
+    def _emit_progress(event: str, **payload) -> None:
+        if not on_activity:
+            return
+        try:
+            on_activity(event, **payload)
+            return
+        except TypeError:
+            # Backward compatibility for legacy callbacks that accept a single string.
+            pass
+        except Exception:
+            return
+
+        if event != "activity":
+            return
+        text = str(payload.get("text") or "").strip()
+        if not text:
+            return
+        with suppress(Exception):
+            on_activity(text)
+
+    def _update_usage(raw_usage: Any) -> None:
+        totals = _extract_usage_totals(raw_usage)
+        if not totals:
+            return
+        changed = False
+        for key in (
+            "input_tokens",
+            "output_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+        ):
+            current = int(token_usage.get(key, 0))
+            incoming = max(0, int(totals.get(key, 0)))
+            if incoming > current:
+                token_usage[key] = incoming
+                changed = True
+        if changed:
+            _emit_progress(
+                "usage",
+                input_tokens=int(token_usage["input_tokens"]),
+                output_tokens=int(token_usage["output_tokens"]),
+                cache_creation_input_tokens=int(token_usage["cache_creation_input_tokens"]),
+                cache_read_input_tokens=int(token_usage["cache_read_input_tokens"]),
+            )
 
     async for message in messages_iter:
 
         # --- StreamEvent (partial streaming) ---
         if StreamEvent is not None and isinstance(message, StreamEvent):
-            event = getattr(message, "event", None) or {}
-            if isinstance(event, dict):
-                delta = event.get("delta", {})
-                if isinstance(delta, dict) and delta.get("type") == "text_delta":
+            event = _as_dict(getattr(message, "event", None))
+            if event:
+                _update_usage(event.get("usage"))
+                delta = _as_dict(event.get("delta"))
+                if delta:
+                    _update_usage(delta.get("usage"))
+                if delta and delta.get("type") == "text_delta":
                     text = delta.get("text", "")
                     if text:
                         # Track streamed length but don't print raw text —
                         # the full TextBlock will be rendered as markdown
                         streamed_len += len(text)
+                        _emit_progress("stream", streamed_chars=int(streamed_len))
+                msg_obj = _as_dict(event.get("message"))
+                if msg_obj:
+                    _update_usage(msg_obj.get("usage"))
             continue
+
+        _update_usage(_sdk_msg_field(message, "usage", None))
 
         # --- Task/System messages ---
         task_event = _extract_task_event(message)
@@ -330,9 +582,9 @@ async def process_messages(
                 })
             if not headless and trace_renderer:
                 trace_renderer.render_task_started(task_id, description, task_type)
-            if on_activity and description:
+            if description:
                 snippet = description.replace("\n", " ")[:40]
-                on_activity(f"⌛ {snippet}")
+                _emit_progress("activity", text=f"⌛ {snippet}")
             continue
 
         if task_event and task_event["type"] == "task_progress":
@@ -340,6 +592,7 @@ async def process_messages(
             description = task_event["description"]
             usage = task_event.get("usage")
             last_tool_name = task_event.get("last_tool_name")
+            _update_usage(usage)
             now = time.time()
             if task_id and task_id in background_tasks:
                 background_tasks[task_id]["description"] = description or background_tasks[task_id].get("description", "")
@@ -401,8 +654,7 @@ async def process_messages(
                     runner._notify_terminal_task_completion(task_id, status, summary, output_file)
                 except Exception:
                     logger.debug("Failed terminal notification emit", exc_info=True)
-            if on_activity:
-                on_activity(f"✓ background {status}")
+            _emit_progress("activity", text=f"✓ background {status}")
             continue
 
         # --- AssistantMessage ---
@@ -430,9 +682,9 @@ async def process_messages(
                         streamed_len = 0  # reset for next turn
                         trace_renderer.render_reasoning(text)
                     # Activity callback — show snippet of reasoning
-                    if on_activity and text.strip():
+                    if text.strip():
                         snippet = text.strip().replace("\n", " ")[:40]
-                        on_activity(snippet)
+                        _emit_progress("activity", text=snippet)
 
                 elif isinstance(block, ToolUseBlock):
                     # Restart spinner while waiting for tool result
@@ -475,9 +727,8 @@ async def process_messages(
                     if not headless and trace_renderer:
                         trace_renderer.render_tool_start(block.name, block.input)
                     # Activity callback — show tool name
-                    if on_activity:
-                        clean = block.name.replace("mcp__ct-tools__", "")
-                        on_activity(f"\u25b8 {clean}")
+                    clean = block.name.replace("mcp__ct-tools__", "")
+                    _emit_progress("activity", text=f"\u25b8 {clean}")
 
                 elif ToolResultBlock is not None and isinstance(block, ToolResultBlock):
                     tool_use_id = getattr(block, "tool_use_id", "") or ""
@@ -557,6 +808,7 @@ async def process_messages(
         "tool_calls": tool_calls,
         "result_msg": result_msg,
         "streamed_len": streamed_len,
+        "token_usage": token_usage,
         "pending_background_tasks": list(background_tasks.values()),
         "completed_background_tasks": completed_background_tasks,
     }
@@ -931,13 +1183,13 @@ class AgentRunner:
             thinking_status.__enter__()
             thinking_status.start_async_refresh()
             self._active_spinner = thinking_status
-        from ct.agent.mcp_server import create_ct_mcp_server
-        from ct.agent.system_prompt import build_system_prompt
         from ct.ui.traces import TraceRenderer
 
         t0 = time.time()
         config = self.session.config
         ctx = context or {}
+        from ct.agent.mcp_server import create_ct_mcp_server
+        from ct.agent.system_prompt import build_system_prompt
 
         # ----- Build MCP server -----
         exclude_cats = set()
@@ -1100,6 +1352,7 @@ class AgentRunner:
         full_text = result["full_text"]
         tool_calls = result["tool_calls"]
         result_msg = result["result_msg"]
+        token_usage = dict(result.get("token_usage") or {})
         pending_background_tasks = result.get("pending_background_tasks", [])
         completed_background_tasks = result.get("completed_background_tasks", [])
         output_path_map = _extract_task_output_paths_from_text(full_text)
@@ -1113,6 +1366,14 @@ class AgentRunner:
         summary = "\n".join(full_text).strip()
         if not summary:
             summary = "(Agent produced no text output)"
+        guardrail_unverified_execution = False
+        if _looks_like_unverified_execution_claim(summary, tool_calls):
+            guardrail_unverified_execution = True
+            summary = (
+                "I did not execute any tool calls in this turn, so I cannot confirm a submission, "
+                "status, or generated job/workflow ID. Ask me to run the submission now and I will "
+                "execute it and return the real ID from tool output."
+            )
 
         answer = None
         if sandbox:
@@ -1134,8 +1395,38 @@ class AgentRunner:
         plan = Plan(query=query, steps=steps)
 
         cost_usd = 0.0
+        model_usage_models: list[str] = []
+        model_usage_cost_usd = 0.0
+        total_cost_usd = 0.0
         if result_msg:
-            cost_usd = getattr(result_msg, "total_cost_usd", 0.0) or 0.0
+            total_cost_usd = getattr(result_msg, "total_cost_usd", 0.0) or 0.0
+            cost_usd = total_cost_usd
+            usage_totals = _extract_usage_totals(getattr(result_msg, "usage", None))
+            if usage_totals:
+                for key, value in usage_totals.items():
+                    token_usage[key] = max(int(token_usage.get(key, 0)), int(value))
+            model_usage_totals = _extract_model_usage_totals(getattr(result_msg, "model_usage", None))
+            if model_usage_totals:
+                for key in (
+                    "input_tokens",
+                    "output_tokens",
+                    "cache_creation_input_tokens",
+                    "cache_read_input_tokens",
+                ):
+                    token_usage[key] = max(
+                        int(token_usage.get(key, 0)),
+                        int(model_usage_totals.get(key, 0)),
+                    )
+                model_usage_models = list(model_usage_totals.get("models") or [])
+                model_usage_cost_usd = _safe_float(model_usage_totals.get("cost_usd"))
+                if cost_usd <= 0.0:
+                    cost_usd = model_usage_cost_usd
+        cost_split_known = model_usage_cost_usd > 0.0
+        server_tool_cost_usd = (
+            max(0.0, total_cost_usd - model_usage_cost_usd)
+            if cost_split_known
+            else 0.0
+        )
 
         exec_result = ExecutionResult(
             plan=plan,
@@ -1150,9 +1441,20 @@ class AgentRunner:
             iterations=1,
             metadata={
                 "sdk_cost_usd": cost_usd,
+                "sdk_total_cost_usd": total_cost_usd,
+                "sdk_model_usage_cost_usd": model_usage_cost_usd,
+                "sdk_server_tool_cost_usd": server_tool_cost_usd,
+                "sdk_cost_split_known": cost_split_known,
                 "sdk_turns": getattr(result_msg, "num_turns", 0) if result_msg else 0,
                 "sdk_duration_ms": getattr(result_msg, "duration_ms", 0) if result_msg else 0,
+                "sdk_model": model,
+                "sdk_models": model_usage_models or ([model] if model else []),
+                "sdk_input_tokens": int(token_usage.get("input_tokens", 0)),
+                "sdk_output_tokens": int(token_usage.get("output_tokens", 0)),
+                "sdk_cache_creation_input_tokens": int(token_usage.get("cache_creation_input_tokens", 0)),
+                "sdk_cache_read_input_tokens": int(token_usage.get("cache_read_input_tokens", 0)),
                 "tool_call_count": len(tool_calls),
+                "guardrail_unverified_execution": guardrail_unverified_execution,
                 "pending_background_task_count": len(pending_background_tasks),
                 "completed_background_task_count": len(completed_background_tasks),
             },
@@ -1899,19 +2201,34 @@ class AgentRunner:
     # Console output helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _random_usage_word() -> str:
+        """Pick a past-tense footer verb from a dedicated dictionary."""
+        try:
+            from ct.ui.status import FOOTER_PAST_TENSE_WORDS
+
+            words = [
+                str(word).strip()
+                for bucket in FOOTER_PAST_TENSE_WORDS.values()
+                for word in bucket
+                if str(word).strip()
+            ]
+            if words:
+                return random.choice(words)
+        except Exception:
+            pass
+        return "Brewed"
+
     def _print_usage(self, result_msg, duration: float):
         """Print cost and usage summary."""
-        turns = getattr(result_msg, "num_turns", 0)
-        parts = []
-        if turns:
-            parts.append(f"{turns} turns")
+        verb = self._random_usage_word()
         if duration >= 60:
             mins = int(duration // 60)
             secs = int(duration % 60)
-            parts.append(f"{mins}m {secs}s")
+            duration_text = f"{mins}m {secs}s"
         else:
-            parts.append(f"{duration:.1f}s")
-        self.session.console.print(f"\n  [dim]{' | '.join(parts)}[/dim]")
+            duration_text = f"{int(max(0.0, round(duration)))}s"
+        self.session.console.print(f"\n  [#7f8790]✻ {verb} for {duration_text}[/]")
 
     # ------------------------------------------------------------------
     # Error handling
