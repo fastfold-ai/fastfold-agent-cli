@@ -36,13 +36,13 @@ uv tool install "fastfold-agent-cli[all]" --python 3.10
 
 **Windows users — prefer WSL2 + Ubuntu (`[all]`):** **`tiledbsoma`** does not publish usable native Windows wheels, so **`[all]`** on cmd/PowerShell usually fails. Install **Windows Subsystem for Linux** following Microsoft’s guide: **[Install WSL](https://learn.microsoft.com/en-us/windows/wsl/install)** (recommended default distro **Ubuntu**), open an **Ubuntu** terminal, install **`uv`** + Python there, then run **`uv tool install "fastfold-agent-cli[all]" --python 3.10`** inside WSL.
 
-**Staying on native Windows cmd/PowerShell:** use **`[win_build]`** instead of **`[all]`** (same stack minus **`scanpy` / `cellxgene-census` / `tiledbsoma`**), or explicitly:
+**Staying on native Windows cmd/PowerShell:** use **`[win_build]`** instead of **`[all]`** (same stack minus **`scanpy` / `cellxgene-census` / `tiledbsoma`**), or explicitly. You also need **Claude Code** on **`PATH`** (the Agent SDK spawns the `claude` CLI). Install with **`npm install -g @anthropic-ai/claude-code`** and confirm **`claude --version`**, or set **`FASTFOLD_CLAUDE_CODE_CLI`** to your **`claude.exe`** path.
 
 ```bash
 uv tool install "fastfold-agent-cli[chemistry,biology,ml,analysis]" --python 3.10
 ```
 
-Convenience extra (**CLI ≥ `0.0.36`** on PyPI; **0.0.36+** fixes interactive `fastfold` on native Windows):
+Convenience extra (**CLI ≥ `0.0.37`** on PyPI; **0.0.37+** on Windows prefers **`claude` on PATH** over the wheel’s bundled CLI):
 
 ```bash
 uv tool install "fastfold-agent-cli[win_build]" --python 3.10
@@ -168,7 +168,8 @@ fastfold report show         # open in browser
 | Data not found | `fastfold data pull <dataset>` |
 | **`tiledbsoma` / WinError installing `[all]` on Windows** | Prefer **[WSL2 + Ubuntu](https://learn.microsoft.com/en-us/windows/wsl/install)** and **`[all]`** in Linux. Native Windows: **`[win_build]`** or **`[chemistry,biology,ml,analysis]`** — see **Quick install**. |
 | Missing dependency (pip fallback) | `pip install "fastfold-agent-cli[all]"` |
-| **`ModuleNotFoundError: No module named 'termios'`** (interactive `fastfold` on Windows) | Upgrade to **`fastfold-agent-cli` 0.0.36+** (e.g. `uv tool install "fastfold-agent-cli[win_build]" --python 3.10 --upgrade`). |
+| **`ModuleNotFoundError: No module named 'termios'`** (interactive `fastfold` on Windows) | Upgrade **`fastfold-agent-cli` ≥ 0.0.36** (e.g. `uv tool install "fastfold-agent-cli[win_build]" --python 3.10 --upgrade`). |
+| **`CLINotFoundError`** / **`WinError 206`** when spawning Claude Code (**Windows**) | Install **`npm install -g @anthropic-ai/claude-code`**, reopen the terminal, run **`claude --version`**. Or set **`FASTFOLD_CLAUDE_CODE_CLI`** (or **`CLAUDE_CODE_CLI_PATH`**) to your **`claude.exe`**. CLI **≥ 0.0.37** prefers **`claude`** on **`PATH`** over the SDK’s bundled binary. |
 | Session lost | `fastfold --continue` |
 
 ## Contributing

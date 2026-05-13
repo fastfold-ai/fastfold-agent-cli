@@ -16,6 +16,7 @@ import os
 import random
 import re
 import select
+import shutil
 import signal
 import sys
 import threading
@@ -27,6 +28,44 @@ from typing import Any
 from ct.agent.types import ExecutionResult, Plan, Step
 
 logger = logging.getLogger("ct.runner")
+
+
+def _claude_sdk_cli_path() -> str | None:
+    """Return an explicit Claude Code CLI path when the SDK default is unsafe.
+
+    ``claude_agent_sdk`` prefers ``_bundled/claude.exe`` under site-packages.
+    Deep ``uv tool`` installs on Windows can trigger **WinError 206** (path /
+    subprocess limits), which surfaces as ``CLINotFoundError``. Prefer a global
+    ``claude`` on PATH in that environment.
+
+    Override with ``FASTFOLD_CLAUDE_CODE_CLI`` or ``CLAUDE_CODE_CLI_PATH``.
+    """
+
+    explicit = os.environ.get("FASTFOLD_CLAUDE_CODE_CLI") or os.environ.get(
+        "CLAUDE_CODE_CLI_PATH"
+    )
+    if explicit:
+        raw = explicit.strip().strip('"').strip("'")
+        p = Path(raw)
+        with suppress(OSError):
+            if p.is_file():
+                return str(p.resolve())
+        found = shutil.which(raw)
+        if found:
+            return found
+
+    if sys.platform != "win32":
+        return None
+
+    found = shutil.which("claude")
+    if found:
+        return found
+
+    npm_global = Path(os.environ.get("APPDATA", "")) / "npm" / "claude.cmd"
+    if npm_global.is_file():
+        return str(npm_global)
+
+    return None
 
 
 # ------------------------------------------------------------------
@@ -1283,6 +1322,10 @@ class AgentRunner:
             hooks={},  # Disable inherited hooks (e.g. from Claude Code)
         )
 
+        cli_exe = _claude_sdk_cli_path()
+        if cli_exe:
+            options_kwargs["cli_path"] = cli_exe
+
         if plan_preview and not self._headless:
             options_kwargs["can_use_tool"] = self._plan_approval_hook()
 
@@ -1710,13 +1753,17 @@ class AgentRunner:
                 state["last_update_at"] = time.time()
                 self._bg_watch_state[session_id] = state
 
-            options = ClaudeAgentOptions(
-                resume=session_id,
-                continue_conversation=True,
-                model=model,
-                env=env,
-                hooks={},
-            )
+            opts: dict[str, Any] = {
+                "resume": session_id,
+                "continue_conversation": True,
+                "model": model,
+                "env": env,
+                "hooks": {},
+            }
+            cli_exe_w = _claude_sdk_cli_path()
+            if cli_exe_w:
+                opts["cli_path"] = cli_exe_w
+            options = ClaudeAgentOptions(**opts)
 
             disconnect_reason = "unknown"
             try:
@@ -1891,15 +1938,19 @@ class AgentRunner:
             + "If task output says missing/not found/no longer in system, use \"completed\"."
         )
 
-        options = ClaudeAgentOptions(
-            resume=session_id,
-            continue_conversation=False,
-            model=model,
-            env=env,
-            hooks={},
-            max_turns=2,
-            permission_mode="bypassPermissions",
-        )
+        opts_probe: dict[str, Any] = {
+            "resume": session_id,
+            "continue_conversation": False,
+            "model": model,
+            "env": env,
+            "hooks": {},
+            "max_turns": 2,
+            "permission_mode": "bypassPermissions",
+        }
+        cli_exe_p = _claude_sdk_cli_path()
+        if cli_exe_p:
+            opts_probe["cli_path"] = cli_exe_p
+        options = ClaudeAgentOptions(**opts_probe)
 
         response_text_parts: list[str] = []
         probe_status: dict[str, str] = {}
