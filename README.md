@@ -6,9 +6,39 @@ Ask questions in natural language. Fastfold CLI plans the analysis, selects the 
 
 Built on top of [Claude Agent SDK](https://github.com/anthropics/anthropic-sdk-python) and [CellType CLI](https://github.com/celltype/cli).
 
+### Prerequisites
+
+- **Python 3.10+** (recommended: let `uv` install managed interpreters).
+- **`uv`** — install from the Astral docs: [Installing uv](https://docs.astral.sh/uv/getting-started/installation/). Quick options:
+  - **macOS / Linux** (standalone installer):
+
+    ```bash
+    curl -LsSf https://astral.sh/uv/install.sh | sh
+    ```
+
+  - **Windows** (PowerShell):
+
+    ```powershell
+    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+    ```
+
+    Alternatively: `winget install --id=astral-sh.uv -e` (see Astral docs for other methods).
+
+    After installing **`uv`** or **`git`**, close and reopen your terminal or PowerShell so updated `PATH` entries are picked up.
+
+- **`git`** — strongly recommended everywhere; **on Windows it is effectively required** if you install optional extras such as **`[all]`**, because packages like **`tiledbsoma`** may build from source and their build scripts invoke `git`. If the installer reports `WinError 2` / “file not found” when calling `git`, install Git and reload the terminal.
+
+  **Windows (winget):**
+
+  ```powershell
+  winget install --id Git.Git -e
+  ```
+
+  Then **close and reopen PowerShell** (or your IDE terminal) and confirm `git --version`.
+
 ### Quick install
 
-Requires **Python 3.10+**.
+Requires **Python 3.10+** and prerequisites above.
 
 ```bash
 uv tool install "fastfold-agent-cli[all]" --python 3.10
@@ -132,7 +162,8 @@ fastfold report show         # open in browser
 | `fastfold` fails at startup | `fastfold doctor` |
 | No API key | `fastfold setup` or `export ANTHROPIC_API_KEY=...` |
 | Data not found | `fastfold data pull <dataset>` |
-| Missing dependency | `pip install "fastfold-agent-cli[all]"` |
+| Missing dependency / Windows build errors | Prefer `uv`. Install **Git** and reload the terminal. Optional extras (`[all]` / `tiledbsoma`) are often brittle on native Windows — use fewer extras or WSL/Linux. See **Prerequisites**. |
+| Missing dependency (pip fallback) | `pip install "fastfold-agent-cli[all]"` |
 | Session lost | `fastfold --continue` |
 
 ## Contributing
