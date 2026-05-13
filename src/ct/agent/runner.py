@@ -1280,8 +1280,8 @@ class AgentRunner:
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
             )
-            logger.warning(
-                "Windows-safe mode enabled: moved %d-char system prompt into user prompt to avoid CLI arg limits.",
+            logger.debug(
+                "Windows-safe mode active: moved %d-char system prompt into user payload.",
                 len(system_prompt),
             )
 
