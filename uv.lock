@@ -1201,7 +1201,7 @@ wheels = [
 
 [[package]]
 name = "fastfold-agent-cli"
-version = "0.0.33"
+version = "0.0.36"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
@@ -1278,6 +1278,16 @@ singlecell = [
     { name = "scanpy", version = "1.12", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "tiledbsoma" },
 ]
+win-build = [
+    { name = "biopython" },
+    { name = "fair-esm" },
+    { name = "rdkit" },
+    { name = "scikit-learn", version = "1.7.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "scikit-learn", version = "1.8.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "seaborn" },
+    { name = "torch" },
+    { name = "transformers" },
+]
 
 [package.dev-dependencies]
 full = [
@@ -1309,6 +1319,7 @@ requires-dist = [
     { name = "anthropic", specifier = ">=0.74.0" },
     { name = "biopython", marker = "extra == 'all'", specifier = ">=1.81" },
     { name = "biopython", marker = "extra == 'biology'", specifier = ">=1.81" },
+    { name = "biopython", marker = "extra == 'win-build'", specifier = ">=1.81" },
     { name = "celltypist", marker = "extra == 'all'", specifier = ">=1.6" },
     { name = "celltypist", marker = "extra == 'singlecell'", specifier = ">=1.6" },
     { name = "cellxgene-census", marker = "extra == 'all'", specifier = ">=1.0" },
@@ -1317,6 +1328,7 @@ requires-dist = [
     { name = "duckdb", marker = "extra == 'api'", specifier = ">=1.0" },
     { name = "fair-esm", marker = "extra == 'all'", specifier = ">=2.0" },
     { name = "fair-esm", marker = "extra == 'ml'", specifier = ">=2.0" },
+    { name = "fair-esm", marker = "extra == 'win-build'", specifier = ">=2.0" },
     { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.100" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "markdown", specifier = ">=3.5" },
@@ -1331,25 +1343,30 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "rdkit", marker = "extra == 'all'", specifier = ">=2023.3" },
     { name = "rdkit", marker = "extra == 'chemistry'", specifier = ">=2023.3" },
+    { name = "rdkit", marker = "extra == 'win-build'", specifier = ">=2023.3" },
     { name = "rich", specifier = ">=13.0" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.5" },
     { name = "scanpy", marker = "extra == 'all'", specifier = ">=1.9" },
     { name = "scanpy", marker = "extra == 'singlecell'", specifier = ">=1.9" },
     { name = "scikit-learn", marker = "extra == 'all'", specifier = ">=1.3" },
     { name = "scikit-learn", marker = "extra == 'analysis'", specifier = ">=1.3" },
+    { name = "scikit-learn", marker = "extra == 'win-build'", specifier = ">=1.3" },
     { name = "scipy", specifier = ">=1.10" },
     { name = "seaborn", marker = "extra == 'all'", specifier = ">=0.13" },
     { name = "seaborn", marker = "extra == 'analysis'", specifier = ">=0.13" },
+    { name = "seaborn", marker = "extra == 'win-build'", specifier = ">=0.13" },
     { name = "tiledbsoma", marker = "extra == 'all'", specifier = ">=1.0" },
     { name = "tiledbsoma", marker = "extra == 'singlecell'", specifier = ">=1.0" },
     { name = "torch", marker = "extra == 'all'", specifier = ">=2.0" },
     { name = "torch", marker = "extra == 'ml'", specifier = ">=2.0" },
+    { name = "torch", marker = "extra == 'win-build'", specifier = ">=2.0" },
     { name = "transformers", marker = "extra == 'all'", specifier = ">=4.40" },
     { name = "transformers", marker = "extra == 'ml'", specifier = ">=4.40" },
+    { name = "transformers", marker = "extra == 'win-build'", specifier = ">=4.40" },
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", extras = ["standard"], marker = "extra == 'api'", specifier = ">=0.20" },
 ]
-provides-extras = ["notebook", "chemistry", "biology", "singlecell", "ml", "analysis", "api", "all", "dev"]
+provides-extras = ["notebook", "chemistry", "biology", "singlecell", "ml", "analysis", "api", "win-build", "all", "dev"]
 
 [package.metadata.requires-dev]
 full = [

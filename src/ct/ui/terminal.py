@@ -1421,7 +1421,20 @@ class InteractiveTerminal:
 
     def _getch(self):
         """Read a single character from standard input without requiring Enter."""
-        import sys, tty, termios
+        import os
+        import sys
+
+        if os.name == "nt":
+            import msvcrt
+
+            chb = msvcrt.getch()
+            if chb in (b"\x03", b"\x04"):
+                raise KeyboardInterrupt
+            return chb.decode("latin-1", errors="replace")
+
+        import termios
+        import tty
+
         fd = sys.stdin.fileno()
         old_settings = termios.tcgetattr(fd)
         try:

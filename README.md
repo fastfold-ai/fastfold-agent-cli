@@ -42,7 +42,7 @@ uv tool install "fastfold-agent-cli[all]" --python 3.10
 uv tool install "fastfold-agent-cli[chemistry,biology,ml,analysis]" --python 3.10
 ```
 
-Convenience extra (**CLI ≥ `0.0.35`** on PyPI):
+Convenience extra (**CLI ≥ `0.0.36`** on PyPI; **0.0.36+** fixes interactive `fastfold` on native Windows):
 
 ```bash
 uv tool install "fastfold-agent-cli[win_build]" --python 3.10
@@ -168,6 +168,7 @@ fastfold report show         # open in browser
 | Data not found | `fastfold data pull <dataset>` |
 | **`tiledbsoma` / WinError installing `[all]` on Windows** | Prefer **[WSL2 + Ubuntu](https://learn.microsoft.com/en-us/windows/wsl/install)** and **`[all]`** in Linux. Native Windows: **`[win_build]`** or **`[chemistry,biology,ml,analysis]`** — see **Quick install**. |
 | Missing dependency (pip fallback) | `pip install "fastfold-agent-cli[all]"` |
+| **`ModuleNotFoundError: No module named 'termios'`** (interactive `fastfold` on Windows) | Upgrade to **`fastfold-agent-cli` 0.0.36+** (e.g. `uv tool install "fastfold-agent-cli[win_build]" --python 3.10 --upgrade`). |
 | Session lost | `fastfold --continue` |
 
 ## Contributing

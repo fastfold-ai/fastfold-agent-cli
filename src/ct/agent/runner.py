@@ -23,7 +23,6 @@ import time
 import traceback
 from pathlib import Path
 from typing import Any
-import termios
 
 from ct.agent.types import ExecutionResult, Plan, Step
 
@@ -1065,6 +1064,8 @@ class AgentRunner:
         """Ensure Ctrl+C emits SIGINT while foreground query is running."""
         if os.name != "posix":
             return None
+        import termios
+
         try:
             fd = sys.stdin.fileno()
             attrs = termios.tcgetattr(fd)
@@ -1122,6 +1123,8 @@ class AgentRunner:
         """Restore tty mode changed by _ensure_sigint_tty_mode."""
         if not tty_state:
             return
+        import termios
+
         fd, attrs = tty_state
         with suppress(Exception):
             termios.tcsetattr(fd, termios.TCSANOW, attrs)
