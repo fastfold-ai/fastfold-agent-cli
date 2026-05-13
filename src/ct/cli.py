@@ -385,6 +385,20 @@ def setup_cmd(
             f"or visit {FASTFOLD_CLOUD_API_KEYS_URL}"
         )
 
+    if sys.platform == "win32":
+        from ct.agent.claude_code_cli import ensure_windows_bundled_claude_sdk_cache
+
+        cached = ensure_windows_bundled_claude_sdk_cache()
+        if cached:
+            console.print(
+                "  [green]Prepared local Claude launcher cache for Windows path limits.[/green]"
+            )
+        else:
+            console.print(
+                "  [yellow]Could not pre-create local Claude launcher cache.[/yellow] "
+                "Run `fastfold doctor` for remediation hints."
+            )
+
     # Quick health check
     console.print()
     console.print("  [cyan]Running health check...[/cyan]")

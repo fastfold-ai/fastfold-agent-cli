@@ -7,6 +7,7 @@ Used by `fastfold doctor` and interactive `/doctor` to surface actionable setup 
 from dataclasses import dataclass
 import logging
 import os
+import sys
 from pathlib import Path
 
 from rich.table import Table
@@ -75,6 +76,9 @@ def run_checks(config: Config | None = None, session=None) -> list[DoctorCheck]:
         checks.append(
             DoctorCheck(name="llm", status="ok", detail=detail)
         )
+
+    if sys.platform == "win32":
+        checks.append(_check_windows_sdk_cli())
 
     # 3) Output directory availability
     out_dir = Path(cfg.get("sandbox.output_dir", str(Path.cwd() / "outputs")))
@@ -361,9 +365,49 @@ def to_table(checks: list[DoctorCheck]) -> Table:
     return table
 
 
+def _check_windows_sdk_cli() -> DoctorCheck:
+    """Verify Claude Agent SDK can locate a spawnable Claude Code launcher on Windows."""
+
+    from ct.agent.claude_code_cli import (
+        bundled_sdk_claude_exe_win32,
+        bundled_windows_path_maybe_too_long,
+        windows_claude_code_cli_resolve_detail,
+    )
+
+    path, label = windows_claude_code_cli_resolve_detail()
+    risk_long = bundled_windows_path_maybe_too_long()
+    bundled = bundled_sdk_claude_exe_win32()
+
+    if path is not None and Path(path).is_file():
+        detail = f"{label}: {path}"
+        if risk_long is True and "FastFoldAgent" in label:
+            detail += (
+                "; bundled Claude Code exe cached locally (FastFoldAgent) avoids "
+                "WinError 206 vs deep uv path"
+            )
+        elif risk_long is True:
+            detail += "; resolver bypasses long bundled exe path under site-packages"
+        return DoctorCheck(name="windows_sdk_claude", status="ok", detail=detail)
+
+    extra = ""
+    if bundled:
+        extra = f" Bundled exe: {bundled}."
+    return DoctorCheck(
+        name="windows_sdk_claude",
+        status="error",
+        detail=(
+            f"{label}. Install Claude Code globally, set FASTFOLD_CLAUDE_CODE_CLI, "
+            "or allow writes to FastFoldAgent under Local AppData (bundled "
+            "launcher cache)."
+            + extra
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Runtime health check helpers
 # ---------------------------------------------------------------------------
+
 
 # Key datasets and the file patterns used by loaders
 _KEY_DATASETS = {
