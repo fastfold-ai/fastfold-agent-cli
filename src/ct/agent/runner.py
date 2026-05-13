@@ -36,6 +36,35 @@ def _claude_sdk_cli_path() -> str | None:
     return resolve_claude_sdk_cli_path()
 
 
+def _windows_should_inline_system_prompt(system_prompt: str) -> bool:
+    """Return True when Windows should avoid passing full system prompt via CLI args."""
+
+    if sys.platform != "win32":
+        return False
+    mode = str(os.environ.get("FASTFOLD_WINDOWS_INLINE_SYSTEM_PROMPT", "auto")).strip().lower()
+    if mode in {"1", "true", "yes", "on", "always"}:
+        return True
+    if mode in {"0", "false", "no", "off"}:
+        return False
+    threshold = int(os.environ.get("FASTFOLD_WINDOWS_INLINE_SYSTEM_PROMPT_THRESHOLD", "12000"))
+    return len(system_prompt) >= threshold
+
+
+def _inline_system_prompt_into_user_prompt(system_prompt: str, user_prompt: str) -> tuple[str, str]:
+    """Move long system prompt into user message body for Windows arg-length safety."""
+
+    minimal_system_prompt = (
+        "You are Fastfold Agent CLI. Follow the SYSTEM INSTRUCTIONS block in the user message."
+    )
+    bridged_user_prompt = (
+        "SYSTEM INSTRUCTIONS (treat this as highest-priority operating instructions):\n"
+        f"{system_prompt}\n\n"
+        "END SYSTEM INSTRUCTIONS.\n\n"
+        f"{user_prompt}"
+    )
+    return minimal_system_prompt, bridged_user_prompt
+
+
 # ------------------------------------------------------------------
 # Testable message processing (extracted from _run_async)
 # ------------------------------------------------------------------
@@ -1230,6 +1259,32 @@ class AgentRunner:
             history=history,
         )
 
+        # ----- Build user prompt -----
+        user_prompt = query
+        context_parts = []
+        if ctx.get("compound_smiles"):
+            context_parts.append(f"Compound SMILES: {ctx['compound_smiles']}")
+        if ctx.get("target"):
+            context_parts.append(f"Target: {ctx['target']}")
+        if ctx.get("indication"):
+            context_parts.append(f"Indication: {ctx['indication']}")
+        # Inject mention context if present
+        if ctx.get("mention_context"):
+            context_parts.append(ctx["mention_context"])
+        if context_parts:
+            user_prompt = query + "\n\nContext:\n" + "\n".join(context_parts)
+
+        effective_system_prompt = system_prompt
+        if _windows_should_inline_system_prompt(system_prompt):
+            effective_system_prompt, user_prompt = _inline_system_prompt_into_user_prompt(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+            )
+            logger.warning(
+                "Windows-safe mode enabled: moved %d-char system prompt into user prompt to avoid CLI arg limits.",
+                len(system_prompt),
+            )
+
         # ----- Configure Agent SDK -----
         model = config.get("llm.model") or "claude-sonnet-4-5-20250929"
         max_turns = int(config.get("agent.max_sdk_turns", 30))
@@ -1280,7 +1335,7 @@ class AgentRunner:
 
         # Enable streaming for real-time output
         options_kwargs = dict(
-            system_prompt=system_prompt,
+            system_prompt=effective_system_prompt,
             model=model,
             max_turns=max_turns,
             mcp_servers={"ct-tools": server},
@@ -1307,21 +1362,6 @@ class AgentRunner:
             # SDK version doesn't support include_partial_messages
             logger.info("SDK does not support include_partial_messages, using non-streaming")
             options = ClaudeAgentOptions(**options_kwargs)
-
-        # ----- Build user prompt -----
-        user_prompt = query
-        context_parts = []
-        if ctx.get("compound_smiles"):
-            context_parts.append(f"Compound SMILES: {ctx['compound_smiles']}")
-        if ctx.get("target"):
-            context_parts.append(f"Target: {ctx['target']}")
-        if ctx.get("indication"):
-            context_parts.append(f"Indication: {ctx['indication']}")
-        # Inject mention context if present
-        if ctx.get("mention_context"):
-            context_parts.append(ctx["mention_context"])
-        if context_parts:
-            user_prompt = query + "\n\nContext:\n" + "\n".join(context_parts)
 
         # ----- Create trace renderer -----
         trace_renderer = TraceRenderer(self.session.console)

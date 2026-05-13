@@ -169,7 +169,7 @@ fastfold report show         # open in browser
 | **`tiledbsoma` / WinError installing `[all]` on Windows** | Prefer **[WSL2 + Ubuntu](https://learn.microsoft.com/en-us/windows/wsl/install)** and **`[all]`** in Linux. Native Windows: **`[win_build]`** or **`[chemistry,biology,ml,analysis]`** — see **Quick install**. |
 | Missing dependency (pip fallback) | `pip install "fastfold-agent-cli[all]"` |
 | **`ModuleNotFoundError: No module named 'termios'`** (interactive `fastfold` on Windows) | Upgrade **`fastfold-agent-cli` ≥ 0.0.36** (e.g. `uv tool install "fastfold-agent-cli[win_build]" --python 3.10 --upgrade`). |
-| **`CLINotFoundError`** / **`WinError 206`** when spawning Claude (**Windows**) | **`≥ 0.0.41`**: run **`fastfold autofix`** (or interactive **`/autofix`**) and re-run **`fastfold doctor`**. Doctor now checks real launcher spawnability instead of only file presence. If still blocked, set shorter **`UV_TOOL_DIR`** ([uv tools directory](https://docs.astral.sh/uv/reference/storage/#tools)) + reinstall, or set **`FASTFOLD_CLAUDE_CODE_CLI`** to a known good global Claude Code launcher path. |
+| **`CLINotFoundError`** / **`WinError 206`** when spawning Claude (**Windows**) | **`≥ 0.0.42`**: run **`fastfold autofix`** (or interactive **`/autofix`**) and re-run **`fastfold doctor`**. This release also avoids oversized Windows CLI command lines by moving large system instructions into the stdin payload path. If still blocked, set shorter **`UV_TOOL_DIR`** ([uv tools directory](https://docs.astral.sh/uv/reference/storage/#tools)) + reinstall, or set **`FASTFOLD_CLAUDE_CODE_CLI`** to a known good global Claude Code launcher path. |
 | Session lost | `fastfold --continue` |
 
 ## Contributing
