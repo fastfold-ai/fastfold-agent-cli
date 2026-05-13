@@ -38,19 +38,22 @@ def test_windows_fallback_copies_bundled_to_localappdata(monkeypatch, tmp_path: 
     bundled.write_bytes(b"MZZZ")
     local_root = tmp_path / "Local"
     monkeypatch.setenv("LOCALAPPDATA", str(local_root))
+    monkeypatch.setenv("FASTFOLD_CLAUDE_CACHE_DIR", str(local_root / "FastFoldAgent"))
 
     with patch.object(ccli.shutil, "which", return_value=None):
         with patch.object(ccli, "bundled_sdk_claude_exe_win32", return_value=bundled):
             out = ccli.resolve_claude_sdk_cli_path()
 
-    assert out == str((local_root / "FastFoldAgent" / "claude_sdk_bundled.exe").resolve())
+    assert out == str((local_root / "FastFoldAgent" / "c.exe").resolve())
     dest = Path(out)
     assert dest.is_file()
     assert dest.read_bytes() == b"MZZZ"
 
 
 def test_windows_fallback_recopies_when_bundled_changes(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(sys, "platform", "win32")
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    monkeypatch.setenv("FASTFOLD_CLAUDE_CACHE_DIR", str(tmp_path / "Local" / "FastFoldAgent"))
     bundled = tmp_path / "bundled.exe"
     bundled.write_bytes(b"MZZZ")
 

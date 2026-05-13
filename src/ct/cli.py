@@ -386,18 +386,13 @@ def setup_cmd(
         )
 
     if sys.platform == "win32":
-        from ct.agent.claude_code_cli import ensure_windows_bundled_claude_sdk_cache
+        from ct.agent.claude_code_cli import run_windows_autofix
 
-        cached = ensure_windows_bundled_claude_sdk_cache()
-        if cached:
-            console.print(
-                "  [green]Prepared local Claude launcher cache for Windows path limits.[/green]"
-            )
+        fix = run_windows_autofix()
+        if fix.get("ok"):
+            console.print(f"  [green]{fix.get('summary')}[/green]")
         else:
-            console.print(
-                "  [yellow]Could not pre-create local Claude launcher cache.[/yellow] "
-                "Run `fastfold doctor` for remediation hints."
-            )
+            console.print(f"  [yellow]{fix.get('summary')}[/yellow]")
 
     # Quick health check
     console.print()
@@ -495,6 +490,26 @@ def doctor_cmd():
         raise typer.Exit(code=1)
 
     console.print("\n[green]No blocking issues found.[/green]")
+
+
+@app.command("autofix")
+def autofix_cmd():
+    """Apply automatic local fixes for common install/runtime issues."""
+    if sys.platform != "win32":
+        console.print("[green]No autofix needed on this platform.[/green]")
+        return
+
+    from ct.agent.claude_code_cli import run_windows_autofix
+
+    console.print("[cyan]Running Windows autofix...[/cyan]")
+    result = run_windows_autofix()
+    if result.get("ok"):
+        console.print(f"[green]{result.get('summary')}[/green]")
+        if result.get("path"):
+            console.print(f"[dim]Using launcher:[/dim] {result.get('path')}")
+    else:
+        console.print(f"[red]{result.get('summary')}[/red]")
+        raise typer.Exit(code=2)
 
 
 # ─── Data subcommand ──────────────────────────────────────────

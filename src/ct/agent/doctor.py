@@ -369,6 +369,7 @@ def _check_windows_sdk_cli() -> DoctorCheck:
     """Verify Claude Agent SDK can locate a spawnable Claude Code launcher on Windows."""
 
     from ct.agent.claude_code_cli import (
+        _validate_windows_claude_spawn,
         bundled_sdk_claude_exe_win32,
         bundled_windows_path_maybe_too_long,
         windows_claude_code_cli_resolve_detail,
@@ -379,6 +380,14 @@ def _check_windows_sdk_cli() -> DoctorCheck:
     bundled = bundled_sdk_claude_exe_win32()
 
     if path is not None and Path(path).is_file():
+        ok, spawn_detail = _validate_windows_claude_spawn(path, probe_long_args=True)
+        if not ok:
+            return DoctorCheck(
+                name="windows_sdk_claude",
+                status="error",
+                detail=f"{label}: {path} (spawn probe failed: {spawn_detail})",
+            )
+
         detail = f"{label}: {path}"
         if risk_long is True and "FastFoldAgent" in label:
             detail += (

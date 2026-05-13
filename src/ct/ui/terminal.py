@@ -51,6 +51,7 @@ SLASH_COMMANDS = {
     "/config": "Show active runtime configuration",
     "/keys": "Show API key setup status by service",
     "/doctor": "Run readiness diagnostics and fix hints",
+    "/autofix": "Apply automatic local fixes for common runtime issues",
     "/usage": "Show session token/cost usage",
     "/tasks": "Show background task watcher status (/tasks refresh for live probe)",
     "/interrupt": "Interrupt the active generation (add ! to force)",
@@ -1248,6 +1249,23 @@ class InteractiveTerminal:
                     self.console.print("  [red]Blocking issues found.[/red]")
                 else:
                     self.console.print("  [green]No blocking issues found.[/green]")
+                self._advance_suggestion()
+                continue
+            if cmd in ("autofix", "/autofix"):
+                if os.name != "nt":
+                    self.console.print("  [green]No autofix needed on this platform.[/green]")
+                    self._advance_suggestion()
+                    continue
+                from ct.agent.claude_code_cli import run_windows_autofix
+
+                self.console.print("  [cyan]Running Windows autofix...[/cyan]")
+                fix_result = run_windows_autofix()
+                if fix_result.get("ok"):
+                    self.console.print(f"  [green]{fix_result.get('summary')}[/green]")
+                    if fix_result.get("path"):
+                        self.console.print(f"  [dim]Using launcher:[/dim] {fix_result.get('path')}")
+                else:
+                    self.console.print(f"  [red]{fix_result.get('summary')}[/red]")
                 self._advance_suggestion()
                 continue
             if cmd in ("clear", "/clear"):
