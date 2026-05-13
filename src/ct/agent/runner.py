@@ -19,6 +19,7 @@ import select
 import shutil
 import signal
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -30,13 +31,64 @@ from ct.agent.types import ExecutionResult, Plan, Step
 logger = logging.getLogger("ct.runner")
 
 
+def _claude_sdk_bundled_exe_path_win32() -> Path | None:
+    """Return ``claude_agent_sdk/_bundled/claude.exe`` if present."""
+
+    try:
+        import claude_agent_sdk as cas
+    except ImportError:
+        return None
+
+    exe = Path(cas.__file__).resolve().parent / "_bundled" / "claude.exe"
+    return exe if exe.is_file() else None
+
+
+def _windows_short_cache_bundled_claude_exe() -> str | None:
+    """Use a shorter path than ``site-packages/.../_bundled`` for ``CreateProcess``.
+
+    When ``uv`` installs under **Roaming**, the bundled exe path often exceeds Windows
+    process-creation limits (**WinError 206** → ``CLINotFoundError``). Cache a copy under
+    **%LOCALAPPDATA%**, which stays short compared to Roaming uv tool prefixes.
+    """
+
+    src = _claude_sdk_bundled_exe_path_win32()
+    if src is None:
+        return None
+
+    root = Path(os.environ.get("LOCALAPPDATA") or tempfile.gettempdir())
+    dest = root / "FastFoldAgent" / "claude_sdk_bundled.exe"
+    tmp = root / "FastFoldAgent" / "_claude_sdk_bundled.exe.tmp"
+
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        need_copy = not dest.is_file()
+        if not need_copy:
+            ss, sd = src.stat(), dest.stat()
+            need_copy = ss.st_size != sd.st_size or int(ss.st_mtime) != int(
+                sd.st_mtime
+            )
+
+        if need_copy:
+            with suppress(OSError):
+                tmp.unlink(missing_ok=True)
+            shutil.copyfile(src, tmp)
+            os.replace(tmp, dest)
+            shutil.copystat(src, dest)
+        return str(dest.resolve())
+    except OSError as e:
+        with suppress(OSError):
+            tmp.unlink(missing_ok=True)
+        logger.debug("Could not cache bundled Claude Code to short path: %s", e)
+        return None
+
+
 def _claude_sdk_cli_path() -> str | None:
     """Return an explicit Claude Code CLI path when the SDK default is unsafe.
 
     ``claude_agent_sdk`` prefers ``_bundled/claude.exe`` under site-packages.
     Deep ``uv tool`` installs on Windows can trigger **WinError 206** (path /
     subprocess limits), which surfaces as ``CLINotFoundError``. Prefer a global
-    ``claude`` on PATH in that environment.
+    ``claude`` on PATH, else a short-path copy of the bundled binary.
 
     Override with ``FASTFOLD_CLAUDE_CODE_CLI`` or ``CLAUDE_CODE_CLI_PATH``.
     """
@@ -65,7 +117,7 @@ def _claude_sdk_cli_path() -> str | None:
     if npm_global.is_file():
         return str(npm_global)
 
-    return None
+    return _windows_short_cache_bundled_claude_exe()
 
 
 # ------------------------------------------------------------------
