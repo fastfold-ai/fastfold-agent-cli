@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fastfold-agent-cli"
-version = "0.0.33"
+version = "0.0.35"
 description = "Fastfold CLI — An autonomous agent for drug discovery research"
 readme = "README.md"
 license = "MIT"
@@ -41,6 +41,17 @@ singlecell = [
 ml = ["torch>=2.0", "transformers>=4.40", "fair-esm>=2.0"]
 analysis = ["seaborn>=0.13", "scikit-learn>=1.3"]
 api = ["fastapi>=0.100", "uvicorn[standard]>=0.20", "duckdb>=1.0"]
+# Same extras as ``all`` minus Census/Single Cell (``scanpy``, ``cellxgene-census``, ``tiledbsoma``)—
+# omit those on native Windows (no usable ``tiledbsoma`` wheels). Prefer WSL2 + Ubuntu + ``[all]`` instead.
+win_build = [
+    "rdkit>=2023.03",
+    "biopython>=1.81",
+    "torch>=2.0",
+    "transformers>=4.40",
+    "fair-esm>=2.0",
+    "seaborn>=0.13",
+    "scikit-learn>=1.3",
+]
 all = [
     "rdkit>=2023.03",
     "biopython>=1.81",

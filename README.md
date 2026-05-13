@@ -24,17 +24,7 @@ Built on top of [Claude Agent SDK](https://github.com/anthropics/anthropic-sdk-p
 
     Alternatively: `winget install --id=astral-sh.uv -e` (see Astral docs for other methods).
 
-    After installing **`uv`** or **`git`**, close and reopen your terminal or PowerShell so updated `PATH` entries are picked up.
-
-- **`git`** — strongly recommended everywhere; **on Windows it is effectively required** if you install optional extras such as **`[all]`**, because packages like **`tiledbsoma`** may build from source and their build scripts invoke `git`. If the installer reports `WinError 2` / “file not found” when calling `git`, install Git and reload the terminal.
-
-  **Windows (winget):**
-
-  ```powershell
-  winget install --id Git.Git -e
-  ```
-
-  Then **close and reopen PowerShell** (or your IDE terminal) and confirm `git --version`.
+    After installing **`uv`**, close and reopen your terminal or PowerShell so **`PATH`** picks up the `uv` executable.
 
 ### Quick install
 
@@ -42,6 +32,20 @@ Requires **Python 3.10+** and prerequisites above.
 
 ```bash
 uv tool install "fastfold-agent-cli[all]" --python 3.10
+```
+
+**Windows users — prefer WSL2 + Ubuntu (`[all]`):** **`tiledbsoma`** does not publish usable native Windows wheels, so **`[all]`** on cmd/PowerShell usually fails. Install **Windows Subsystem for Linux** following Microsoft’s guide: **[Install WSL](https://learn.microsoft.com/en-us/windows/wsl/install)** (recommended default distro **Ubuntu**), open an **Ubuntu** terminal, install **`uv`** + Python there, then run **`uv tool install "fastfold-agent-cli[all]" --python 3.10`** inside WSL.
+
+**Staying on native Windows cmd/PowerShell:** use **`[win_build]`** instead of **`[all]`** (same stack minus **`scanpy` / `cellxgene-census` / `tiledbsoma`**), or explicitly:
+
+```bash
+uv tool install "fastfold-agent-cli[chemistry,biology,ml,analysis]" --python 3.10
+```
+
+Convenience extra (**CLI ≥ `0.0.35`** on PyPI):
+
+```bash
+uv tool install "fastfold-agent-cli[win_build]" --python 3.10
 ```
 
 ### Authentication
@@ -162,7 +166,7 @@ fastfold report show         # open in browser
 | `fastfold` fails at startup | `fastfold doctor` |
 | No API key | `fastfold setup` or `export ANTHROPIC_API_KEY=...` |
 | Data not found | `fastfold data pull <dataset>` |
-| Missing dependency / Windows build errors | Prefer `uv`. Install **Git** and reload the terminal. Optional extras (`[all]` / `tiledbsoma`) are often brittle on native Windows — use fewer extras or WSL/Linux. See **Prerequisites**. |
+| **`tiledbsoma` / WinError installing `[all]` on Windows** | Prefer **[WSL2 + Ubuntu](https://learn.microsoft.com/en-us/windows/wsl/install)** and **`[all]`** in Linux. Native Windows: **`[win_build]`** or **`[chemistry,biology,ml,analysis]`** — see **Quick install**. |
 | Missing dependency (pip fallback) | `pip install "fastfold-agent-cli[all]"` |
 | Session lost | `fastfold --continue` |
 
