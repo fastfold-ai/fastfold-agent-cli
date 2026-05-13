@@ -933,11 +933,15 @@ def _generate_and_execute_code(
                     f"[cyan]Reviewing output (turn {reflect_turn + 1})...[/cyan]",
                     spinner="dots",
                 ):
-                    reflect_response = llm.chat(
-                        system=system_prompt,
-                        messages=[{"role": "user", "content": reflect_msg}],
-                        temperature=0.2,
-                    )
+                    try:
+                        reflect_response = llm.chat(
+                            system=system_prompt,
+                            messages=[{"role": "user", "content": reflect_msg}],
+                            temperature=0.2,
+                        )
+                    except Exception:
+                        # Reflection is best-effort; if unavailable, keep current successful result.
+                        break
                 reflect_text = reflect_response.content.strip()
                 if reflect_text.upper().startswith("LGTM"):
                     break  # LLM says output is correct

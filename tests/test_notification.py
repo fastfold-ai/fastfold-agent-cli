@@ -46,7 +46,7 @@ class TestSendEmail:
                     dry_run=True,
                 )
 
-            log_file = tmp_path / ".ct" / "sent_emails.log"
+            log_file = tmp_path / ".fastfold-cli" / "sent_emails.log"
             assert log_file.exists()
             content = log_file.read_text()
             assert "DRY_RUN" in content

@@ -78,7 +78,7 @@ class TestDownloadsDir:
 
     def test_default_path(self, mock_config):
         d = _downloads_dir()
-        assert d == Path.home() / ".ct" / "downloads"
+        assert d == Path.home() / ".fastfold-cli" / "downloads"
 
 
 class TestMaxDownloadMb:

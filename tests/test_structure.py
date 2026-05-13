@@ -86,16 +86,16 @@ MOCK_PROVIDERS = {
 
 
 class TestAlphaFoldFetch:
-    @patch("httpx.get")
+    @patch("ct.tools.structure.request")
     def test_downloads_structure(self, mock_get, tmp_path):
         from ct.tools.structure import alphafold_fetch
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
         mock_resp.text = "HEADER    SOME PDB DATA\nATOM   1  CA  ALA A   1       0.0  0.0  0.0\n"
-        mock_get.return_value = mock_resp
+        mock_get.return_value = (mock_resp, None)
 
-        cache_dir = tmp_path / ".ct" / "cache" / "alphafold"
+        cache_dir = tmp_path / ".fastfold-cli" / "cache" / "alphafold"
         with patch("ct.tools.structure.Path.home", return_value=tmp_path):
             result = alphafold_fetch("P04637")
 
@@ -103,12 +103,12 @@ class TestAlphaFoldFetch:
         assert "P04637" in result["summary"]
         assert result["cached"] is False
 
-    @patch("httpx.get")
+    @patch("ct.tools.structure.request")
     def test_returns_cached(self, mock_get, tmp_path):
         from ct.tools.structure import alphafold_fetch
 
         # Pre-create cached file
-        cache_dir = tmp_path / ".ct" / "cache" / "alphafold"
+        cache_dir = tmp_path / ".fastfold-cli" / "cache" / "alphafold"
         cache_dir.mkdir(parents=True)
         cached_file = cache_dir / "AF-P04637-F1-model_v4.pdb"
         cached_file.write_text("HEADER CACHED PDB\n")
@@ -119,13 +119,13 @@ class TestAlphaFoldFetch:
         assert result["cached"] is True
         mock_get.assert_not_called()
 
-    @patch("httpx.get")
+    @patch("ct.tools.structure.request")
     def test_not_found(self, mock_get, tmp_path):
         from ct.tools.structure import alphafold_fetch
 
         mock_resp = MagicMock()
         mock_resp.status_code = 404
-        mock_get.return_value = mock_resp
+        mock_get.return_value = (mock_resp, None)
 
         with patch("ct.tools.structure.Path.home", return_value=tmp_path):
             result = alphafold_fetch("INVALID_ID")

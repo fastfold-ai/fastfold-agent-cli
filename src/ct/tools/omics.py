@@ -2976,8 +2976,6 @@ def multiomics_integrate(
     if sc is None:
         return {"error": "scanpy required. Install with: pip install scanpy", "summary": "Install scanpy: pip install scanpy"}
 
-    from mudata import MuData
-
     path_list = [p.strip() for p in paths.split(",") if p.strip()]
     name_list = [n.strip() for n in modality_names.split(",") if n.strip()]
 
@@ -3002,6 +3000,13 @@ def multiomics_integrate(
             return {"error": f"Failed to load {fpath}: {str(exc)[:200]}", "summary": f"Load error: {str(exc)[:100]}"}
 
     # Create MuData
+    try:
+        from mudata import MuData
+    except Exception:
+        return {
+            "error": "mudata required. Install with: pip install mudata",
+            "summary": "Install mudata to build MuData containers: pip install mudata",
+        }
     try:
         mdata = MuData(modalities)
     except Exception as exc:

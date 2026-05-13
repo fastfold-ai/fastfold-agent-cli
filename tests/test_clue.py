@@ -7,11 +7,24 @@ from parquet files. It does NOT require an API key for local data.
 import pytest
 from unittest.mock import patch, MagicMock
 import numpy as np
+import pandas as pd
 
 
 class TestClueConnectivityQuery:
-    def test_signature_query_success(self):
+    @patch("ct.tools.clue._load_profiles")
+    def test_signature_query_success(self, mock_load_profiles):
         from ct.tools.clue import connectivity_query
+
+        mock_profiles = pd.DataFrame(
+            {
+                "TP53": [1.5, -0.5],
+                "CDKN1A": [1.0, -0.2],
+                "MYC": [-1.2, 0.4],
+                "CCND1": [-0.8, 0.3],
+            },
+            index=["vorinostat", "lenalidomide"],
+        )
+        mock_load_profiles.return_value = mock_profiles
 
         result = connectivity_query(
             gene_list={"up": ["TP53", "CDKN1A"], "down": ["MYC", "CCND1"]}
@@ -44,8 +57,17 @@ class TestClueConnectivityQuery:
 
 
 class TestClueCompoundSignature:
-    def test_known_compound(self):
+    @patch("ct.tools.clue._load_profiles")
+    @patch("ct.tools.clue._load_pert_metadata")
+    def test_known_compound(self, mock_load_metadata, mock_load_profiles):
         from ct.tools.clue import compound_signature
+
+        mock_profiles = pd.DataFrame(
+            {"TP53": [1.5], "CDKN1A": [1.0], "MYC": [-1.2], "CCND1": [-0.8]},
+            index=["vorinostat"],
+        )
+        mock_load_profiles.return_value = mock_profiles
+        mock_load_metadata.return_value = pd.DataFrame()
 
         result = compound_signature(compound="vorinostat")
         assert "summary" in result
@@ -63,7 +85,13 @@ class TestClueCompoundSignature:
         """Local data implementation works without API key."""
         from ct.tools.clue import compound_signature
 
-        with patch("ct.tools.clue._get_clue_key", return_value=None):
+        mock_profiles = pd.DataFrame(
+            {"TP53": [1.5], "CDKN1A": [1.0], "MYC": [-1.2], "CCND1": [-0.8]},
+            index=["vorinostat"],
+        )
+        with patch("ct.tools.clue._get_clue_key", return_value=None), patch(
+            "ct.tools.clue._load_profiles", return_value=mock_profiles
+        ), patch("ct.tools.clue._load_pert_metadata", return_value=pd.DataFrame()):
             result = compound_signature(compound="vorinostat")
             # Should succeed with local data even without API key
             assert "summary" in result

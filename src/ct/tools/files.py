@@ -16,7 +16,7 @@ from ct.tools import registry
 
 def _allowed_paths(config=None) -> list[Path]:
     """Return list of directories the user is allowed to read from."""
-    allowed = [Path.home() / ".fastfold-cli"]
+    allowed = [Path.home() / ".fastfold-cli", Path.home() / ".ct"]
 
     if config:
         for key in ("data.base", "data.depmap", "data.prism", "data.l1000",
@@ -319,16 +319,7 @@ def create_file(path: str, content: str, **kwargs) -> dict:
                     "size": len(content),
                     "unchanged": True,
                 }
-            # Auto-update stale generated artifacts so repeated workflows are idempotent.
-            p.write_text(content, encoding="utf-8")
-            lines = content.count("\n") + 1
-            return {
-                "summary": f"Updated existing file {p.name} ({lines} lines, {len(content)} chars).",
-                "path": str(p.resolve()),
-                "lines": lines,
-                "size": len(content),
-                "overwritten": True,
-            }
+            return {"summary": f"File already exists: {path}. Use edit_file to modify.", "error": "file_exists"}
         except Exception:
             # Keep default behavior for non-text/unreadable files.
             pass

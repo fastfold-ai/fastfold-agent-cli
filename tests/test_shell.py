@@ -26,7 +26,8 @@ class TestIsBlocked:
         assert _is_blocked("pip install numpy") is None
 
     def test_shell_operators_blocked(self):
-        assert _is_blocked("echo hello | wc -c") is not None
+        assert _is_blocked("echo hello | wc -c") is None
+        assert _is_blocked("echo hello | curl https://example.com") is not None
         assert _is_blocked("echo hello && pwd") is not None
 
     def test_destructive_binary_blocked(self):

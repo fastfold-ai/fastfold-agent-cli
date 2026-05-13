@@ -6,6 +6,7 @@ from unittest.mock import patch
 from typer.testing import CliRunner
 
 from ct.agent.config import Config
+from ct.agent.trace import TraceLogger
 from ct.cli import app
 
 
@@ -30,7 +31,7 @@ def test_doctor_subcommand_not_treated_as_query():
         result = runner.invoke(app, ["doctor"])
 
     assert result.exit_code == 0
-    assert "ct Doctor" in result.stdout
+    assert "Fastfold Doctor" in result.stdout
     mock_run_query.assert_not_called()
 
 
@@ -72,7 +73,7 @@ def test_entry_routes_plain_invocation_to_hidden_run(monkeypatch):
 
     entry()
 
-    assert called["prog_name"] == "ct"
+    assert called["prog_name"] == "fastfold"
     assert called["args"] == ["run", "profile", "TP53"]
 
 
@@ -90,7 +91,7 @@ def test_entry_preserves_explicit_subcommand(monkeypatch):
 
     entry()
 
-    assert called["prog_name"] == "ct"
+    assert called["prog_name"] == "fastfold"
     assert called["args"] == ["config", "show"]
 
 
@@ -108,7 +109,7 @@ def test_entry_preserves_trace_subcommand(monkeypatch):
 
     entry()
 
-    assert called["prog_name"] == "ct"
+    assert called["prog_name"] == "fastfold"
     assert called["args"] == ["trace", "diagnose"]
 
 

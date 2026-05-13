@@ -2,6 +2,7 @@
 
 import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
+from pathlib import Path
 from prompt_toolkit.document import Document
 from prompt_toolkit.completion import CompleteEvent
 from ct.ui.terminal import (
@@ -94,14 +95,17 @@ class TestTerminalMethods:
                  entities=["TP53"], tools_used=["target.coessentiality"],
                  timestamp=0),
         ]
-        with patch("pathlib.Path.home", return_value=tmp_path):
+        with patch("pathlib.Path.home", return_value=tmp_path), patch(
+            "ct.ui.terminal.Path.cwd", return_value=tmp_path
+        ):
             terminal._export_session()
-            exports = list((tmp_path / ".ct" / "exports").glob("*.md"))
+            exports = list((tmp_path / "exports").glob("*.md"))
             assert len(exports) == 1
             content = exports[0].read_text()
             assert "test query" in content
             assert "test answer" in content
             assert "TP53" in content
+            exports[0].unlink(missing_ok=True)
 
     def test_run_shell_basic(self, terminal):
         terminal._run_shell("echo hello")

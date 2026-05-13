@@ -385,8 +385,11 @@ class Config:
             data = {}
 
         # Migrate legacy global output dir default to workspace-local output dir.
-        legacy_output_dir = str(Path.home() / ".fastfold-cli" / "outputs")
-        if data.get("sandbox.output_dir") == legacy_output_dir:
+        legacy_output_dirs = {
+            str(Path.home() / ".fastfold-cli" / "outputs"),
+            str(Path.home() / ".ct" / "outputs"),
+        }
+        if data.get("sandbox.output_dir") in legacy_output_dirs:
             data["sandbox.output_dir"] = str(Path.cwd() / "outputs")
 
         # Check environment variables

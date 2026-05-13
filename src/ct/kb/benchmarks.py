@@ -8,11 +8,27 @@ from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
 
 try:
     from ct.agent.quality import evaluate_synthesis_quality
 except ImportError:
     evaluate_synthesis_quality = None
+
+
+def _fallback_quality_eval(synthesis: str) -> SimpleNamespace:
+    """Minimal deterministic fallback when quality module is unavailable."""
+    issues: list[str] = []
+    has_evidence = "## key evidence" in synthesis.lower()
+    has_citation = "[step:" in synthesis.lower()
+    has_next_steps = "## suggested next steps" in synthesis.lower()
+    if not has_evidence:
+        issues.append("Missing Key Evidence section")
+    if not has_citation:
+        issues.append("Missing step citations in evidence")
+    if not has_next_steps:
+        issues.append("Missing Suggested Next Steps section")
+    return SimpleNamespace(ok=len(issues) == 0, issues=issues)
 
 
 @dataclass
@@ -53,13 +69,16 @@ class BenchmarkSuite:
     def run(self) -> dict[str, Any]:
         results: list[BenchmarkResult] = []
         for case in self.cases:
-            quality = evaluate_synthesis_quality(
-                case.synthesis,
-                completed_step_ids=set(case.completed_step_ids),
-                require_key_evidence=True,
-                min_next_steps=2,
-                max_next_steps=3,
-            )
+            if evaluate_synthesis_quality is None:
+                quality = _fallback_quality_eval(case.synthesis)
+            else:
+                quality = evaluate_synthesis_quality(
+                    case.synthesis,
+                    completed_step_ids=set(case.completed_step_ids),
+                    require_key_evidence=True,
+                    min_next_steps=2,
+                    max_next_steps=3,
+                )
             passed = quality.ok
             results.append(
                 BenchmarkResult(

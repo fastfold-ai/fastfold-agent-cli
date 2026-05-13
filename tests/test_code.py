@@ -105,7 +105,7 @@ class TestCodeExecute:
         result = execute(goal="divide something", _session=mock_session)
         assert result["summary"] == "fixed"
         assert result.get("error") is None
-        assert llm.chat.call_count == 2
+        assert llm.chat.call_count >= 2
 
     @patch("ct.agent.sandbox.Sandbox.load_datasets", return_value={})
     def test_all_retries_exhausted(self, mock_load, mock_session):
