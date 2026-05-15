@@ -1637,6 +1637,49 @@ class InteractiveTerminal:
             return f"{mins}m {secs}s"
         return f"{int(round(duration))}s"
 
+    @staticmethod
+    def _coerce_int(value) -> int:
+        try:
+            if value is None:
+                return 0
+            if isinstance(value, bool):
+                return int(value)
+            if isinstance(value, (int, float)):
+                return max(0, int(value))
+            return max(0, int(float(str(value).strip() or "0")))
+        except Exception:
+            return 0
+
+    def _render_turn_usage_footer(
+        self,
+        *,
+        term_width: int,
+        duration_s: float | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        verb: str = "Generated",
+    ) -> None:
+        """Render one-line turn footer with duration and per-turn token arrows."""
+        left = f"✻ {verb}"
+        if duration_s is not None:
+            left = f"{left} for {self._format_duration_label(duration_s)}"
+
+        in_tokens = self._coerce_int(input_tokens)
+        out_tokens = self._coerce_int(output_tokens)
+        right = f"↑ {in_tokens:,} ↓ {out_tokens:,}"
+
+        width = max(40, int(term_width or self.console.width or 100))
+        inner_width = max(10, width - 2)
+        if len(left) + len(right) + 1 <= inner_width:
+            spaces = max(1, inner_width - len(left) - len(right))
+            self.console.print(
+                f"  [#7f8790]{left}{' ' * spaces}[/][dim #7f8790]{right}[/]"
+            )
+        else:
+            self.console.print(
+                f"  [#7f8790]{left} · [/][dim #7f8790]{right}[/]"
+            )
+
     def _render_resumed_history(self, term_width: int, turns: list) -> None:
         """Render saved turns so resumed sessions reopen with full context."""
         if not turns:
@@ -1653,6 +1696,8 @@ class InteractiveTerminal:
                 self.console.print(f"❯ {query}", markup=False)
             rendered_from_trace = False
             duration_s = None
+            input_tokens = None
+            output_tokens = None
             if idx < len(trace_blocks):
                 end = trace_blocks[idx].get("end", {})
                 if isinstance(end, dict):
@@ -1662,11 +1707,25 @@ class InteractiveTerminal:
                 events = trace_blocks[idx].get("events", [])
                 if isinstance(events, list) and events:
                     rendered_from_trace = self._replay_trace_events(events)
+            rows_snapshot = list(getattr(self, "_session_sdk_turn_rows", []))
+            run_lock = getattr(self, "_run_lock", None)
+            if run_lock is not None and hasattr(run_lock, "__enter__"):
+                with run_lock:
+                    rows_snapshot = list(getattr(self, "_session_sdk_turn_rows", []))
+            if idx < len(rows_snapshot):
+                row = rows_snapshot[idx]
+                if isinstance(row, dict):
+                    input_tokens = self._coerce_int(row.get("input_tokens"))
+                    output_tokens = self._coerce_int(row.get("output_tokens"))
             if answer and not rendered_from_trace:
                 self.console.print(RichMarkdown(answer))
-            if duration_s is not None:
-                self.console.print(
-                    f"  [#7f8790]✻ Generated for {self._format_duration_label(duration_s)}[/]"
+            if duration_s is not None or input_tokens is not None or output_tokens is not None:
+                self._render_turn_usage_footer(
+                    term_width=term_width,
+                    duration_s=duration_s,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    verb="Generated",
                 )
 
     def _switch_model(self):

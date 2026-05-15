@@ -429,6 +429,10 @@ class TestTerminalMethods:
         turn = MagicMock()
         turn.query = "run fold"
         turn.answer = "done"
+        terminal._run_lock = MagicMock()
+        terminal._run_lock.__enter__ = MagicMock(return_value=None)
+        terminal._run_lock.__exit__ = MagicMock(return_value=False)
+        terminal._session_sdk_turn_rows = [{"input_tokens": 49652, "output_tokens": 524}]
         with patch.object(
             terminal,
             "_load_trace_blocks",
@@ -437,6 +441,7 @@ class TestTerminalMethods:
             terminal._render_resumed_history(40, [turn])
         printed = " ".join(str(c) for c in terminal.console.print.call_args_list)
         assert "Generated for 24s" in printed
+        assert "↑ 49,652 ↓ 524" in printed
 
     def test_restore_usage_from_trajectory(self, terminal):
         terminal.agent = MagicMock()

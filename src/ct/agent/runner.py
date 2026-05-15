@@ -1722,7 +1722,12 @@ class AgentRunner:
                 logger.warning("Failed to flush trace: %s", e)
 
         if not self._headless and result_msg:
-            self._print_usage(result_msg, duration)
+            self._print_usage(
+                result_msg,
+                duration,
+                input_tokens=int(token_usage.get("input_tokens", 0)),
+                output_tokens=int(token_usage.get("output_tokens", 0)),
+            )
             if pending_background_tasks:
                 self.session.console.print(
                     "\n  [yellow]Background task(s) still running.[/yellow]"
@@ -2166,7 +2171,12 @@ class AgentRunner:
                     logger.warning("Failed to flush trace: %s", e)
 
             if not self._headless:
-                self._print_usage(None, duration)
+                self._print_usage(
+                    None,
+                    duration,
+                    input_tokens=int(token_usage.get("input_tokens", 0)),
+                    output_tokens=int(token_usage.get("output_tokens", 0)),
+                )
 
             return exec_result
         except Exception as e:
@@ -2837,8 +2847,21 @@ class AgentRunner:
             pass
         return "Brewed"
 
-    def _print_usage(self, result_msg, duration: float):
-        """Print cost and usage summary."""
+    @staticmethod
+    def _coerce_int(value) -> int:
+        try:
+            if value is None:
+                return 0
+            if isinstance(value, bool):
+                return int(value)
+            if isinstance(value, (int, float)):
+                return max(0, int(value))
+            return max(0, int(float(str(value).strip() or "0")))
+        except Exception:
+            return 0
+
+    def _print_usage(self, result_msg, duration: float, input_tokens: int = 0, output_tokens: int = 0):
+        """Print per-turn usage summary footer."""
         verb = self._random_usage_word()
         if duration >= 60:
             mins = int(duration // 60)
@@ -2846,7 +2869,27 @@ class AgentRunner:
             duration_text = f"{mins}m {secs}s"
         else:
             duration_text = f"{int(max(0.0, round(duration)))}s"
-        self.session.console.print(f"\n  [#7f8790]✻ {verb} for {duration_text}[/]")
+
+        in_tokens = self._coerce_int(input_tokens)
+        out_tokens = self._coerce_int(output_tokens)
+        if result_msg is not None and (in_tokens <= 0 and out_tokens <= 0):
+            usage = getattr(result_msg, "usage", None)
+            in_tokens = self._coerce_int(getattr(usage, "input_tokens", 0))
+            out_tokens = self._coerce_int(getattr(usage, "output_tokens", 0))
+
+        left = f"✻ {verb} for {duration_text}"
+        right = f"↑ {in_tokens:,} ↓ {out_tokens:,}"
+        term_width = max(40, int(getattr(self.session.console, "width", 100) or 100))
+        inner_width = max(10, term_width - 2)
+        if len(left) + len(right) + 1 <= inner_width:
+            spaces = max(1, inner_width - len(left) - len(right))
+            self.session.console.print(
+                f"\n  [#7f8790]{left}{' ' * spaces}[/][dim #7f8790]{right}[/]"
+            )
+        else:
+            self.session.console.print(
+                f"\n  [#7f8790]{left} · [/][dim #7f8790]{right}[/]"
+            )
 
     # ------------------------------------------------------------------
     # Error handling
