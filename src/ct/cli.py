@@ -12,6 +12,7 @@ Usage:
 import os
 import json
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,7 @@ import typer
 from typing import Optional
 from pathlib import Path
 from datetime import datetime, timezone
+from typer.models import OptionInfo
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -57,6 +59,10 @@ app = typer.Typer(
 )
 console = Console()
 FASTFOLD_CLOUD_API_KEYS_URL = "https://cloud.fastfold.ai/api-keys"
+SETUP_PROVIDER_ORDER = ("anthropic", "openai")
+UV_INSTALL_FLAVORS = frozenset({"all", "win_build"})
+PYPI_PROJECT_JSON_URL = "https://pypi.org/pypi/fastfold-agent-cli/json"
+_SEMVER_TRIPLET_PATTERN = re.compile(r"^\s*v?(\d+)\.(\d+)\.(\d+)")
 
 
 def _installed_claude_skill_names() -> list[str]:
@@ -206,6 +212,123 @@ def _random_news_item_markup() -> str:
     return "[bold #25C19F]BoltzGen universal protein design now available[/] [#7A7A7A]· Try: Show me Boltzgen protein design examples[/]"
 
 
+def _normalize_upgrade_flavor(value: object) -> Optional[str]:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in UV_INSTALL_FLAVORS else None
+
+
+def _default_upgrade_flavor() -> str:
+    return "win_build" if os.name == "nt" else "all"
+
+
+def resolve_upgrade_flavor(cfg=None, persist: bool = True) -> str:
+    """Resolve uv install flavor from config, with OS fallback."""
+    if cfg is None:
+        from ct.agent.config import Config
+        cfg = Config.load()
+
+    configured = _normalize_upgrade_flavor(cfg.get("install.uv_flavor"))
+    if configured:
+        return configured
+
+    fallback = _default_upgrade_flavor()
+    if persist:
+        try:
+            cfg.set("install.uv_flavor", fallback)
+            cfg.save()
+        except Exception:
+            # Upgrade flow should still continue even if config write fails.
+            pass
+    return fallback
+
+
+def build_upgrade_command(flavor: str) -> list[str]:
+    normalized = _normalize_upgrade_flavor(flavor) or _default_upgrade_flavor()
+    package_ref = f"fastfold-agent-cli[{normalized}]"
+    return ["uv", "tool", "install", package_ref, "--python", "3.10", "--upgrade"]
+
+
+def _parse_semver_triplet(version: str) -> Optional[tuple[int, int, int]]:
+    match = _SEMVER_TRIPLET_PATTERN.match(str(version or "").strip())
+    if not match:
+        return None
+    return tuple(int(part) for part in match.groups())
+
+
+def is_newer_version(latest: str, current: str) -> bool:
+    latest_triplet = _parse_semver_triplet(latest)
+    current_triplet = _parse_semver_triplet(current)
+    if not latest_triplet or not current_triplet:
+        return False
+    return latest_triplet > current_triplet
+
+
+def fetch_pypi_latest_version(timeout_s: float = 2.5) -> Optional[str]:
+    req = urllib.request.Request(
+        url=PYPI_PROJECT_JSON_URL,
+        headers={"Accept": "application/json"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
+        return None
+
+    try:
+        payload = json.loads(text) if text else {}
+    except Exception:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+    info = payload.get("info")
+    if not isinstance(info, dict):
+        return None
+    version = str(info.get("version") or "").strip()
+    return version or None
+
+
+def get_upgrade_available_version(current_version: str = __version__) -> Optional[str]:
+    latest = fetch_pypi_latest_version()
+    if not latest:
+        return None
+    return latest if is_newer_version(latest, current_version) else None
+
+
+def execute_upgrade(console_obj: Optional[Console] = None, cfg=None) -> bool:
+    """Run uv tool upgrade with persisted (or fallback) install flavor."""
+    ui = console_obj or console
+    flavor = resolve_upgrade_flavor(cfg=cfg, persist=True)
+    cmd = build_upgrade_command(flavor)
+    ui.print("\n[bold cyan]Upgrading fastfold-agent-cli[/bold cyan]")
+    ui.print(f"[dim]Flavor:[/dim] {flavor}")
+    ui.print(f"[dim]$ {' '.join(cmd)}[/dim]")
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError:
+        ui.print("[red]`uv` command not found. Install uv first: https://docs.astral.sh/uv/[/red]")
+        return False
+    except Exception as exc:
+        ui.print(f"[red]Upgrade failed to start:[/red] {exc}")
+        return False
+
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    if stdout:
+        ui.print(stdout)
+    if stderr:
+        ui.print(stderr, style="yellow" if proc.returncode == 0 else "red")
+
+    if proc.returncode != 0:
+        ui.print(f"[red]Upgrade failed[/red] (exit={proc.returncode}).")
+        return False
+
+    ui.print("[green]Upgrade complete.[/green] Restart `fastfold` to use the new version.")
+    return True
+
+
 # ─── Config subcommand ────────────────────────────────────────
 
 config_app = typer.Typer(help="Manage fastfold configuration")
@@ -230,6 +353,17 @@ def config_set(key: str, value: str):
         )
     else:
         console.print(f"  [green]Set[/green] {key} = {value}")
+
+
+@config_app.command("unset")
+def config_unset(key: str):
+    """Unset a configuration value (revert to default/env fallback)."""
+    from ct.agent.config import Config
+
+    cfg = Config.load()
+    cfg.unset(key)
+    cfg.save()
+    console.print(f"  [green]Unset[/green] {key}")
 
 
 @config_app.command("get")
@@ -279,22 +413,57 @@ def keys_cmd():
     console.print(cfg.keys_table())
 
 
+@app.command("upgrade")
+def upgrade_cmd():
+    """Upgrade fastfold-agent-cli with uv tool install --upgrade."""
+    from ct.agent.config import Config
+
+    cfg = Config.load()
+    ok = execute_upgrade(console_obj=console, cfg=cfg)
+    if not ok:
+        raise typer.Exit(code=1)
+
+
 @app.command("setup")
 def setup_cmd(
     api_key: Optional[str] = typer.Option(
         None, "--api-key", help="Anthropic API key (non-interactive mode)"
     ),
+    openai_api_key: Optional[str] = typer.Option(
+        None, "--openai-api-key", help="OpenAI API key (non-interactive mode)"
+    ),
     fastfold_api_key: Optional[str] = typer.Option(
         None, "--fastfold-api-key", help="Fastfold AI Cloud API key (non-interactive mode)"
+    ),
+    provider: Optional[str] = typer.Option(
+        None, "--provider", help="LLM provider: anthropic or openai"
     ),
 ):
     """Interactive setup wizard — configure fastfold for first use."""
     from ct.agent.config import Config
 
+    # setup_cmd is also called directly from Python paths (first-run flows),
+    # where Typer option defaults remain OptionInfo objects.
+    if isinstance(api_key, OptionInfo):
+        api_key = None
+    if isinstance(openai_api_key, OptionInfo):
+        openai_api_key = None
+    if isinstance(fastfold_api_key, OptionInfo):
+        fastfold_api_key = None
+    if isinstance(provider, OptionInfo):
+        provider = None
+
     cfg = Config.load()
 
+    default_provider = str(provider or cfg.get("llm.provider", "anthropic") or "anthropic").strip().lower()
+    if default_provider not in {"anthropic", "openai"}:
+        default_provider = "anthropic"
+
     # Azure AI Foundry: skip interactive key prompt when Foundry is configured
-    if os.environ.get("ANTHROPIC_FOUNDRY_API_KEY") or os.environ.get("ANTHROPIC_FOUNDRY_RESOURCE"):
+    if (
+        default_provider == "anthropic"
+        and (os.environ.get("ANTHROPIC_FOUNDRY_API_KEY") or os.environ.get("ANTHROPIC_FOUNDRY_RESOURCE"))
+    ):
         console.print("\n  [green]Azure AI Foundry detected. No API key needed.[/green]")
         cfg.set("llm.provider", "anthropic")
         cfg.save()
@@ -303,79 +472,63 @@ def setup_cmd(
     console.print()
     console.print(
         Panel(
-            "[bold]Welcome to Fastfold Agent CLI[/bold]\n\n"
-            "This wizard will configure fastfold for first use.\n"
-            "You'll configure Anthropic and Fastfold AI Cloud API keys.",
-            title="[cyan]fastfold setup[/cyan]",
-            border_style="cyan",
+            "[bold]This wizard will help you configure Fastfold Agent CLI.[/bold]\n"
+            "Press Ctrl+C at any time to cancel.",
+            title="[cyan]Fastfold Setup Wizard[/cyan]",
+            border_style="#00bcd4",
         )
     )
     console.print()
 
-    # Determine the key — non-interactive flag, existing config, env var, or prompt
-    existing_key = cfg.llm_api_key()
-
-    if api_key:
-        # Non-interactive mode
-        chosen_key = api_key
-    elif existing_key:
-        masked = existing_key[:7] + "..." + existing_key[-4:] if len(existing_key) > 11 else "***"
-        console.print(f"  API key already configured: [green]{masked}[/green]")
-        try:
-            keep = input("  Keep existing key? [Y/n] ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            console.print("\n  [dim]Setup cancelled.[/dim]")
-            raise typer.Exit()
-        if keep in ("", "y", "yes"):
-            chosen_key = existing_key
-            console.print("  [green]Keeping existing key.[/green]")
-        else:
-            chosen_key = _prompt_api_key()
+    if provider:
+        selected_providers = _parse_provider_list(provider)
     else:
-        # Check env var
-        env_key = os.environ.get("ANTHROPIC_API_KEY")
-        if env_key:
-            masked = env_key[:7] + "..." + env_key[-4:] if len(env_key) > 11 else "***"
-            console.print(f"  Found ANTHROPIC_API_KEY in environment: [green]{masked}[/green]")
+        selected_providers = _prompt_setup_providers(default_provider)
+
+    resolved_keys: dict[str, str] = {}
+    for prov in selected_providers:
+        chosen_key = _resolve_provider_key(
+            cfg,
+            provider=prov,
+            cli_key=(openai_api_key if prov == "openai" else api_key),
+        )
+        if prov == "anthropic" and (not chosen_key or not chosen_key.startswith("sk-ant-")):
+            console.print(
+                "\n  [yellow]Warning:[/yellow] Key doesn't start with 'sk-ant-'. "
+                "Anthropic API keys typically begin with 'sk-ant-api03-'."
+            )
             try:
-                save_it = input("  Save to fastfold config? [Y/n] ").strip().lower()
+                proceed = input("  Continue anyway? [y/N] ").strip().lower()
             except (EOFError, KeyboardInterrupt):
                 console.print("\n  [dim]Setup cancelled.[/dim]")
                 raise typer.Exit()
-            if save_it in ("", "y", "yes"):
-                chosen_key = env_key
-            else:
-                chosen_key = _prompt_api_key()
-        else:
-            chosen_key = _prompt_api_key()
-
-    # Validate key format
-    if not chosen_key or not chosen_key.startswith("sk-ant-"):
-        console.print(
-            "\n  [yellow]Warning:[/yellow] Key doesn't start with 'sk-ant-'. "
-            "Anthropic API keys typically begin with 'sk-ant-api03-'."
-        )
-        try:
-            proceed = input("  Continue anyway? [y/N] ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            console.print("\n  [dim]Setup cancelled.[/dim]")
-            raise typer.Exit()
-        if proceed not in ("y", "yes"):
-            console.print("  [dim]Setup cancelled.[/dim]")
-            raise typer.Exit()
+            if proceed not in ("y", "yes"):
+                console.print("  [dim]Setup cancelled.[/dim]")
+                raise typer.Exit()
+        resolved_keys[prov] = chosen_key
 
     # Determine Fastfold AI Cloud API key (optional, but recommended for cloud-integrated skills)
     cloud_key = _prompt_fastfold_cloud_api_key(cfg, fastfold_api_key)
 
     # Save
-    cfg.set("llm.api_key", chosen_key)
-    cfg.set("llm.provider", "anthropic")
+    for prov, key in resolved_keys.items():
+        if prov == "openai":
+            cfg.set("llm.openai_api_key", key)
+        elif prov == "anthropic":
+            cfg.set("llm.anthropic_api_key", key)
+    active_provider = default_provider if default_provider in selected_providers else selected_providers[0]
+    cfg.set("llm.provider", active_provider)
     if cloud_key:
         cfg.set("api.fastfold_cloud_key", cloud_key)
         # Make available immediately to subprocess tools/skills in this run.
         os.environ["FASTFOLD_API_KEY"] = cloud_key
     cfg.save()
-    console.print("\n  [green]API key saved to ~/.fastfold-cli/config.json[/green]")
+    provider_labels = ", ".join(
+        "OpenAI" if p == "openai" else "Anthropic" for p in selected_providers
+    )
+    console.print(
+        f"\n  [green]{provider_labels} API key(s) saved to ~/.fastfold-cli/config.json[/green]"
+    )
     if cloud_key:
         console.print("  [green]Fastfold AI Cloud API key saved.[/green]")
     else:
@@ -426,24 +579,259 @@ def setup_cmd(
 
 def _prompt_api_key() -> str:
     """Prompt user for API key with masked input."""
-    import getpass
-
     console.print(
         "  Get your key at: [link=https://console.anthropic.com/settings/keys]https://console.anthropic.com/settings/keys[/link]"
     )
     console.print()
     try:
-        key = getpass.getpass("  Enter your Anthropic API key: ")
+        key = _prompt_masked_secret("  Enter your Anthropic API key: ")
     except (EOFError, KeyboardInterrupt):
         console.print("\n  [dim]Setup cancelled.[/dim]")
         raise typer.Exit()
     return key.strip()
 
 
-def _prompt_fastfold_cloud_api_key(cfg, cli_value: Optional[str] = None) -> Optional[str]:
-    """Prompt for Fastfold AI Cloud API key, allowing users to keep/skip."""
+def _prompt_openai_api_key() -> str:
+    """Prompt user for OpenAI API key with masked input."""
+    console.print(
+        "  Get your key at: [link=https://platform.openai.com/api-keys]https://platform.openai.com/api-keys[/link]"
+    )
+    console.print()
+    try:
+        key = _prompt_masked_secret("  Enter your OpenAI API key: ")
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n  [dim]Setup cancelled.[/dim]")
+        raise typer.Exit()
+    return key.strip()
+
+
+def _prompt_masked_secret(message: str) -> str:
+    """Prompt for secrets with visible masked characters while typing."""
+    # Prefer questionary in interactive terminals (shows mask while typing).
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        try:
+            import questionary
+            from prompt_toolkit.styles import Style
+
+            secret_style = Style.from_dict(
+                {
+                    "qmark": "fg:#00bcd4 bold",
+                    "question": "bold",
+                    "answer": "fg:#4caf50 bold",
+                    "pointer": "fg:#4caf50",
+                    "instruction": "fg:#858585",
+                    "text": "fg:#858585",
+                }
+            )
+            value = questionary.password(
+                message.strip(),
+                instruction="(input is masked)",
+                qmark="❯",
+                style=secret_style,
+            ).ask()
+            if value is None:
+                raise KeyboardInterrupt
+            return str(value)
+        except (EOFError, KeyboardInterrupt):
+            raise
+        except Exception:
+            pass
+
+    # Fallback for non-interactive terminals.
     import getpass
 
+    return getpass.getpass(message)
+
+
+def _parse_provider_list(raw: str) -> list[str]:
+    """Parse provider list from CLI option, preserving canonical order."""
+    requested = {
+        part.strip().lower()
+        for part in str(raw or "").split(",")
+        if part.strip()
+    }
+    selected = [p for p in SETUP_PROVIDER_ORDER if p in requested]
+    if not selected:
+        valid = ", ".join(SETUP_PROVIDER_ORDER)
+        console.print(f"[red]Invalid --provider value '{raw}'. Valid providers: {valid}[/red]")
+        raise typer.Exit(code=2)
+    return selected
+
+
+def _prompt_setup_providers(default_provider: str) -> list[str]:
+    """Interactive provider selector (arrow keys + space toggles)."""
+    options = list(SETUP_PROVIDER_ORDER)
+    labels = {"anthropic": "Anthropic", "openai": "OpenAI"}
+    default = default_provider if default_provider in options else options[0]
+
+    # Preferred UX in real terminals: questionary inline checklist.
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        try:
+            import questionary
+            from prompt_toolkit.styles import Style
+
+            selector_style = Style.from_dict(
+                {
+                    "qmark": "fg:#00bcd4 bold",
+                    "question": "bold",
+                    "answer": "fg:#4caf50 bold",
+                    "pointer": "fg:#4caf50",
+                    "highlighted": "noreverse bold",
+                    "selected": "fg:#4caf50 bold",
+                    "separator": "fg:#6c6c6c",
+                    "disabled": "fg:#858585",
+                    "instruction": "fg:#858585",
+                    "text": "fg:#858585",
+                }
+            )
+
+            choices = [
+                questionary.Choice(
+                    title=f"{labels.get(prov, prov.title())}"
+                    + (" (default)" if prov == default else ""),
+                    value=prov,
+                    checked=(prov == default),
+                )
+                for prov in options
+            ]
+            selected = questionary.checkbox(
+                "Select provider(s) to configure",
+                choices=choices,
+                instruction="(↑/↓ move, space toggle, enter confirm)",
+                validate=lambda answer: True if answer else "Select at least one provider.",
+                style=selector_style,
+                qmark="❯",
+                pointer="▸",
+            ).ask()
+            if selected is None:
+                console.print("  [dim]Setup cancelled.[/dim]")
+                raise typer.Exit()
+            normalized = {str(v).strip().lower() for v in selected}
+            return [p for p in options if p in normalized]
+        except typer.Exit:
+            raise
+        except Exception:
+            # Fall back to text input when terminal capabilities are limited.
+            pass
+
+    # Fallback selector for non-interactive or limited environments.
+    alias_map = {
+        "a": "anthropic",
+        "anthropic": "anthropic",
+        "o": "openai",
+        "openai": "openai",
+        "all": "all",
+        "both": "all",
+    }
+
+    while True:
+        console.print("  [cyan]Select provider(s) to configure[/cyan]")
+        console.print(
+            "  [dim]Options:[/dim] anthropic (a), openai (o), both/all"
+        )
+        console.print(
+            f"  [dim]Press Enter to keep default:[/dim] {labels[default]}"
+        )
+        try:
+            raw = input("  Providers: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n  [dim]Setup cancelled.[/dim]")
+            raise typer.Exit()
+
+        if not raw:
+            return [default]
+
+        tokens = [t for t in raw.replace(",", " ").split() if t]
+        selected: set[str] = set()
+        bad: list[str] = []
+        for token in tokens:
+            mapped = alias_map.get(token)
+            if mapped == "all":
+                selected.update(options)
+            elif mapped in options:
+                selected.add(mapped)
+            else:
+                bad.append(token)
+
+        if bad:
+            console.print(f"  [yellow]Invalid selection:[/yellow] {' '.join(bad)}")
+            continue
+        if not selected:
+            console.print("  [yellow]Select at least one provider.[/yellow]")
+            continue
+        return [p for p in options if p in selected]
+
+
+def _resolve_provider_key(cfg, provider: str, cli_key: Optional[str] = None) -> str:
+    """Resolve provider key from cli arg, existing config, env var, or prompt."""
+    provider = str(provider).strip().lower()
+    if provider == "openai":
+        existing_key = cfg.llm_api_key("openai")
+        env_var_name = "OPENAI_API_KEY"
+        prompt_fn = _prompt_openai_api_key
+        label = "OpenAI"
+        config_key = "llm.openai_api_key"
+    else:
+        existing_key = cfg.llm_api_key("anthropic")
+        env_var_name = "ANTHROPIC_API_KEY"
+        prompt_fn = _prompt_api_key
+        label = "Anthropic"
+        config_key = "llm.anthropic_api_key"
+
+    console.print(f"\n  [cyan]{label} setup[/cyan]")
+    if cli_key:
+        candidate = cli_key.strip()
+        issue = cfg.validate_llm_api_key(config_key, candidate)
+        if issue:
+            console.print(f"  [red]{issue}[/red]")
+            raise typer.Exit(code=2)
+        return candidate
+    if existing_key:
+        existing_issue = cfg.validate_llm_api_key(config_key, existing_key)
+        if existing_issue:
+            console.print(
+                f"  [yellow]Existing {label} key is invalid and will be replaced:[/yellow] {existing_issue}"
+            )
+        else:
+            masked = existing_key[:7] + "..." + existing_key[-4:] if len(existing_key) > 11 else "***"
+            console.print(f"  API key already configured: [green]{masked}[/green]")
+            try:
+                keep = input("  Keep existing key? [Y/n] ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                console.print("\n  [dim]Setup cancelled.[/dim]")
+                raise typer.Exit()
+            if keep in ("", "y", "yes"):
+                console.print("  [green]Keeping existing key.[/green]")
+                return existing_key
+
+    env_key = os.environ.get(env_var_name)
+    if env_key:
+        env_issue = cfg.validate_llm_api_key(config_key, env_key)
+        if env_issue:
+            console.print(
+                f"  [yellow]Ignoring invalid {env_var_name} value:[/yellow] {env_issue}"
+            )
+        else:
+            masked = env_key[:7] + "..." + env_key[-4:] if len(env_key) > 11 else "***"
+            console.print(f"  Found {env_var_name} in environment: [green]{masked}[/green]")
+            try:
+                save_it = input("  Save to fastfold config? [Y/n] ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                console.print("\n  [dim]Setup cancelled.[/dim]")
+                raise typer.Exit()
+            if save_it in ("", "y", "yes"):
+                return env_key
+
+    while True:
+        candidate = prompt_fn()
+        issue = cfg.validate_llm_api_key(config_key, candidate)
+        if not issue:
+            return candidate
+        console.print(f"  [yellow]{issue}[/yellow]")
+
+
+def _prompt_fastfold_cloud_api_key(cfg, cli_value: Optional[str] = None) -> Optional[str]:
+    """Prompt for Fastfold AI Cloud API key, allowing users to keep/skip."""
     existing = cfg.get("api.fastfold_cloud_key") or os.environ.get("FASTFOLD_API_KEY")
     if isinstance(cli_value, str) and cli_value:
         return cli_value.strip() or None
@@ -466,7 +854,7 @@ def _prompt_fastfold_cloud_api_key(cfg, cli_value: Optional[str] = None) -> Opti
 
     console.print("  Press Enter to skip this step.")
     try:
-        key = getpass.getpass("  Enter your Fastfold AI Cloud API key: ").strip()
+        key = _prompt_masked_secret("  Enter your Fastfold AI Cloud API key: ").strip()
     except (EOFError, KeyboardInterrupt):
         console.print("\n  [dim]Setup cancelled.[/dim]")
         raise typer.Exit()
@@ -1476,7 +1864,7 @@ def case_study_run(
     llm_issue = cfg.llm_preflight_issue()
     if llm_issue:
         console.print("\n  [yellow]First-time setup required.[/yellow]\n")
-        setup_cmd(api_key=None)
+        setup_cmd(api_key=None, openai_api_key=None, fastfold_api_key=None, provider=None)
         cfg = Config.load()
         if model:
             cfg.set("llm.model", model)
@@ -1592,7 +1980,7 @@ def run_query(
     llm_issue = cfg.llm_preflight_issue()
     if llm_issue:
         console.print("\n  [yellow]First-time setup required.[/yellow]\n")
-        setup_cmd(api_key=None)
+        setup_cmd(api_key=None, openai_api_key=None, fastfold_api_key=None, provider=None)
         cfg = Config.load()
         if model:
             cfg.set("llm.model", model)
@@ -1786,6 +2174,7 @@ def print_banner():
     if tier_display:
         status_parts.append(tier_display)
     status_line = " · ".join(status_parts)
+    upgrade_version = get_upgrade_available_version(__version__)
 
     logo_text = Text.from_markup(BANNER.strip("\n"))
     meta_lines = [
@@ -1793,6 +2182,11 @@ def print_banner():
     ]
     if status_line:
         meta_lines.append(f"[dim]{status_line}[/dim]")
+    if upgrade_version:
+        meta_lines.append(
+            f"[bold yellow]Upgrade available:[/] [dim]v{__version__} -> v{upgrade_version}[/dim] "
+            "[dim]Run [/dim][bold #D4148E]/upgrade[/]"
+        )
     meta_lines.append(f"[dim]{n_tools} tools · {n_skills} skills[/dim]")
     meta_lines.append(_random_command_tip_markup())
     meta_lines.append(_random_news_item_markup())
@@ -1836,7 +2230,7 @@ def run_interactive(
     llm_issue = cfg.llm_preflight_issue()
     if llm_issue:
         console.print("\n  [yellow]First-time setup required.[/yellow]\n")
-        setup_cmd(api_key=None, fastfold_api_key=None)
+        setup_cmd(api_key=None, openai_api_key=None, fastfold_api_key=None, provider=None)
         # Reload config after setup
         cfg = Config.load()
         llm_issue = cfg.llm_preflight_issue()
@@ -1867,6 +2261,7 @@ def entry():
         "doctor",
         "setup",
         "release-check",
+        "upgrade",
         "report",
         "case-study",
         "bench",

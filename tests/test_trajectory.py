@@ -3,8 +3,8 @@
 import json
 import pytest
 from pathlib import Path
-from ct.agent.trajectory import Trajectory, Turn
-from ct.agent.types import Step, Plan
+from ct.agent.trajectory import Trajectory, Turn  # type: ignore[import-untyped]
+from ct.agent.types import Step, Plan  # type: ignore[import-untyped]
 
 
 class TestTrajectory:
@@ -84,12 +84,27 @@ class TestTrajectory:
         entities = traj.entities()
         assert entities == []
 
+    def test_extracts_uuid_entities_from_turns(self):
+        traj = Trajectory()
+        job_id = "0390dc98-ad2c-409a-bd11-f0ed280beef9"
+        traj.add_turn("Run fold", f"Completed. job_id: {job_id}")
+        assert traj.turns[0].entities == [job_id]
+        assert traj.entities() == [job_id]
+
+    def test_entities_fallback_extracts_uuid_for_legacy_turns(self):
+        traj = Trajectory()
+        job_id = "0390dc98-ad2c-409a-bd11-f0ed280beef9"
+        # Simulate legacy turn where entities were not persisted.
+        traj.turns.append(Turn(query="Analyze structure", answer=f"use job {job_id}", entities=[]))
+        assert traj.entities() == [job_id]
+
 
 class TestPersistence:
     """Test saving and loading trajectories to/from JSONL."""
 
     def test_save_and_load(self, tmp_path):
         traj = Trajectory(session_id="test-123", title="Test session")
+        traj.model = "gpt-5.5"
         traj.add_turn("What about TP53?", "TP53 is important.")
         traj.add_turn("And BRCA1?", "BRCA1 is also important.")
 
@@ -99,6 +114,7 @@ class TestPersistence:
         loaded = Trajectory.load(path)
         assert loaded.session_id == "test-123"
         assert loaded.title == "Test session"
+        assert loaded.model == "gpt-5.5"
         assert len(loaded.turns) == 2
         assert loaded.turns[0].query == "What about TP53?"
         assert loaded.turns[1].answer == "BRCA1 is also important."
@@ -163,6 +179,30 @@ class TestPersistence:
         monkeypatch.setattr(Trajectory, "sessions_dir", staticmethod(lambda: tmp_path))
         assert Trajectory.list_sessions() == []
 
+    def test_load_by_session_id_and_prefix(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Trajectory, "sessions_dir", staticmethod(lambda: tmp_path))
+        traj = Trajectory(session_id="abc12345", title="Prefix test")
+        traj.add_turn("Q", "A")
+        traj.save()
+
+        exact = Trajectory.load("abc12345")
+        assert exact.session_id == "abc12345"
+
+        prefix = Trajectory.load("abc12")
+        assert prefix.session_id == "abc12345"
+
+    def test_load_prefix_ambiguous_raises(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Trajectory, "sessions_dir", staticmethod(lambda: tmp_path))
+        t1 = Trajectory(session_id="abc11111")
+        t1.add_turn("Q1", "A1")
+        t1.save()
+        t2 = Trajectory(session_id="abc22222")
+        t2.add_turn("Q2", "A2")
+        t2.save()
+
+        with pytest.raises(FileNotFoundError):
+            Trajectory.load("abc")
+
     def test_roundtrip_preserves_entities_and_tools(self, tmp_path):
         traj = Trajectory(session_id="rt")
         steps = [
@@ -178,3 +218,40 @@ class TestPersistence:
 
         assert loaded.turns[0].entities == []
         assert "literature.pubmed_search" in loaded.turns[0].tools_used
+
+    def test_roundtrip_preserves_usage_data(self, tmp_path):
+        traj = Trajectory(session_id="usage")
+        traj.set_usage_data(
+            {
+                "sdk_calls": 2,
+                "sdk_input_tokens": 120,
+                "sdk_output_tokens": 45,
+                "sdk_models": ["gpt-5.5"],
+                "sdk_turn_rows": [{"turn": 1, "input_tokens": 60, "output_tokens": 20}],
+            }
+        )
+        path = tmp_path / "usage.jsonl"
+        traj.save(path)
+
+        loaded = Trajectory.load(path)
+        usage = loaded.get_usage_data()
+        assert usage["sdk_calls"] == 2
+        assert usage["sdk_input_tokens"] == 120
+        assert usage["sdk_output_tokens"] == 45
+        assert usage["sdk_models"] == ["gpt-5.5"]
+
+    def test_delete_session_removes_jsonl_and_trace(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Trajectory, "sessions_dir", staticmethod(lambda: tmp_path))
+        traj = Trajectory(session_id="del12345")
+        traj.add_turn("Q", "A")
+        traj.save()
+        trace_path = tmp_path / "del12345.trace.jsonl"
+        trace_path.write_text('{"type":"query_start"}\n')
+
+        result = Trajectory.delete_session("del12")
+
+        assert result["session_id"] == "del12345"
+        assert result["session_deleted"] is True
+        assert result["trace_deleted"] is True
+        assert not (tmp_path / "del12345.jsonl").exists()
+        assert not trace_path.exists()

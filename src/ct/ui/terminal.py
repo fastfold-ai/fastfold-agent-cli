@@ -19,6 +19,7 @@ import urllib.request
 
 from rich.console import Console
 from rich.panel import Panel
+from rich.markdown import Markdown as RichMarkdown
 from ct.ui.markdown import LeftMarkdown
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
@@ -50,6 +51,7 @@ SLASH_COMMANDS = {
     "/settings": "Configure UI and agent preferences",
     "/config": "Show active runtime configuration",
     "/keys": "Show API key setup status by service",
+    "/upgrade": "Upgrade fastfold-agent-cli via uv",
     "/doctor": "Run readiness diagnostics and fix hints",
     "/autofix": "Apply automatic local fixes for common runtime issues",
     "/usage": "Show session token/cost usage",
@@ -61,7 +63,7 @@ SLASH_COMMANDS = {
     "/notebook": "Export current session as Jupyter notebook (.ipynb)",
     "/compact": "Compress session context for longer runs",
     "/agents": "Run a query with N parallel research agents",
-    "/sessions": "List recent saved sessions",
+    "/sessions": "List saved sessions (or delete: /sessions delete <id>)",
     "/resume": "Resume a previous session by id/index",
     "/case-study": "Run/list curated case studies (/case-study list)",
     "/plan": "Toggle plan mode — preview & approve before executing",
@@ -72,13 +74,19 @@ SLASH_COMMANDS = {
 # Models available for switching, grouped by provider
 AVAILABLE_MODELS = {
     "anthropic": [
-        ("claude-sonnet-4-5-20250929", "Sonnet 4.5", "$3/$15 per M tokens — fast, great for most queries"),
-        ("claude-haiku-4-5-20251001", "Haiku 4.5", "$0.80/$4 per M tokens — fastest, cheapest"),
-        ("claude-opus-4-6", "Opus 4.6", "$15/$75 per M tokens — most capable, use for complex reasoning"),
+        ("claude-sonnet-4-5-20250929", "Sonnet 4.5", "Fast, strong default for most queries"),
+        ("claude-haiku-4-5-20251001", "Haiku 4.5", "Fastest Anthropic option for lightweight tasks"),
+        ("claude-opus-4-6", "Opus 4.6", "Most capable Anthropic option for complex reasoning"),
     ],
     "openai": [
-        ("gpt-4o", "GPT-4o", "$2.50/$10 per M tokens"),
-        ("gpt-4o-mini", "GPT-4o Mini", "$0.15/$0.60 per M tokens"),
+        ("gpt-5.5", "GPT-5.5", "Frontier model for coding and professional work"),
+        ("gpt-5.5-pro", "GPT-5.5 Pro", "Smarter, more precise GPT-5.5 variant"),
+        ("gpt-5.4", "GPT-5.4", "More affordable model for coding and professional work"),
+        ("gpt-5.4-pro", "GPT-5.4 Pro", "Smarter, more precise GPT-5.4 variant"),
+        ("gpt-5.4-mini", "GPT-5.4 Mini", "Strong mini model for coding, computer use, and subagents"),
+        ("gpt-5.4-nano", "GPT-5.4 Nano", "Cheapest GPT-5.4-class model for high-volume simple tasks"),
+        ("gpt-5-mini", "GPT-5 Mini", "Near-frontier model for cost-sensitive low-latency workloads"),
+        ("gpt-5-nano", "GPT-5 Nano", "Cheapest GPT-5-class model for simple high-volume tasks"),
     ],
 }
 
@@ -588,6 +596,12 @@ class InteractiveTerminal:
             key_bindings=_build_key_bindings(self),
             multiline=False,  # Ctrl+J / Alt+Enter for newlines
         )
+        # Separate session for secret entry prompts (API keys, etc.).
+        # Avoids re-entrancy issues with the main interactive app session.
+        self._secret_prompt_session = PromptSession(
+            style=PT_STYLE,
+            multiline=False,
+        )
         # Auto-highlight (not apply) the first completion for slash commands
         # so the dropdown shows which item will be accepted on Enter.
         def _auto_highlight_first(buf):
@@ -850,6 +864,66 @@ class InteractiveTerminal:
                     "timestamp": time.time(),
                 }
             )
+        self._persist_usage_to_trajectory()
+
+    def _usage_snapshot(self) -> dict:
+        """Create a serializable snapshot of current session usage counters."""
+        with self._run_lock:
+            return {
+                "sdk_calls": int(self._session_sdk_calls),
+                "sdk_input_tokens": int(self._session_sdk_input_tokens),
+                "sdk_output_tokens": int(self._session_sdk_output_tokens),
+                "sdk_cache_read_tokens": int(self._session_sdk_cache_read_tokens),
+                "sdk_cache_creation_tokens": int(self._session_sdk_cache_creation_tokens),
+                "sdk_cost_usd": float(self._session_sdk_cost_usd),
+                "sdk_total_cost_usd": float(self._session_sdk_total_cost_usd),
+                "sdk_extra_server_tool_cost_usd": float(self._session_sdk_extra_server_tool_cost_usd),
+                "sdk_models": sorted(self._session_sdk_models),
+                "sdk_turn_rows": list(self._session_sdk_turn_rows),
+            }
+
+    def _persist_usage_to_trajectory(self) -> None:
+        """Persist usage snapshot alongside trajectory metadata for resume."""
+        trajectory = getattr(getattr(self, "agent", None), "trajectory", None)
+        if trajectory is None:
+            return
+        snapshot = self._usage_snapshot()
+        if hasattr(trajectory, "set_usage_data"):
+            trajectory.set_usage_data(snapshot)
+            trajectory.save()
+
+    def _restore_usage_from_trajectory(self) -> None:
+        """Restore usage counters from persisted session metadata."""
+        trajectory = getattr(getattr(self, "agent", None), "trajectory", None)
+        if trajectory is None or not hasattr(trajectory, "get_usage_data"):
+            return
+        raw = trajectory.get_usage_data()
+        if not isinstance(raw, dict) or not raw:
+            return
+
+        rows_raw = raw.get("sdk_turn_rows")
+        rows: list[dict] = rows_raw if isinstance(rows_raw, list) else []
+        models_raw = raw.get("sdk_models")
+        if isinstance(models_raw, str):
+            models = {models_raw} if models_raw else set()
+        elif isinstance(models_raw, (list, tuple, set)):
+            models = {str(m).strip() for m in models_raw if str(m).strip()}
+        else:
+            models = set()
+
+        with self._run_lock:
+            self._session_sdk_calls = self._coerce_token_count(raw.get("sdk_calls"))
+            self._session_sdk_input_tokens = self._coerce_token_count(raw.get("sdk_input_tokens"))
+            self._session_sdk_output_tokens = self._coerce_token_count(raw.get("sdk_output_tokens"))
+            self._session_sdk_cache_read_tokens = self._coerce_token_count(raw.get("sdk_cache_read_tokens"))
+            self._session_sdk_cache_creation_tokens = self._coerce_token_count(raw.get("sdk_cache_creation_tokens"))
+            self._session_sdk_cost_usd = self._coerce_cost(raw.get("sdk_cost_usd"))
+            self._session_sdk_total_cost_usd = self._coerce_cost(raw.get("sdk_total_cost_usd"))
+            self._session_sdk_extra_server_tool_cost_usd = self._coerce_cost(
+                raw.get("sdk_extra_server_tool_cost_usd")
+            )
+            self._session_sdk_models = models
+            self._session_sdk_turn_rows = [r for r in rows if isinstance(r, dict)]
 
     def _toolbar_spinner_markup(self) -> str:
         """Render spinner frame with subtle cycling color."""
@@ -1013,6 +1087,14 @@ class InteractiveTerminal:
             "claude-sonnet-4-5-20250929": "Sonnet 4.5",
             "claude-haiku-4-5-20251001": "Haiku 4.5",
             "claude-opus-4-6": "Opus 4.6",
+            "gpt-5.5": "GPT-5.5",
+            "gpt-5.5-pro": "GPT-5.5 Pro",
+            "gpt-5.4": "GPT-5.4",
+            "gpt-5.4-pro": "GPT-5.4 Pro",
+            "gpt-5.4-mini": "GPT-5.4 Mini",
+            "gpt-5.4-nano": "GPT-5.4 Nano",
+            "gpt-5-mini": "GPT-5 Mini",
+            "gpt-5-nano": "GPT-5 Nano",
             "gpt-4o": "GPT-4o",
             "gpt-4o-mini": "GPT-4o Mini",
         }
@@ -1104,12 +1186,15 @@ class InteractiveTerminal:
                     self.agent = AgentLoop.resume_latest(self.session)
                 else:
                     self.agent = AgentLoop.resume(self.session, resume_id)
+                self._restore_usage_from_trajectory()
                 n = len(self.agent.trajectory.turns)
                 title = self.agent.trajectory.title or "untitled"
                 self.console.print(f"  [green]Resumed session[/green] [bold]{self.agent.trajectory.session_id}[/bold] — {title} ({n} turns)")
+                self._render_resumed_history(term_width, turns=self.agent.trajectory.turns)
                 self.console.print()
             except FileNotFoundError as e:
                 self.console.print(f"  [yellow]{e}[/yellow]")
+                self.console.print("  [dim]Use /sessions to list available session IDs.[/dim]")
                 self.agent = AgentLoop(self.session)
         else:
             self.agent = AgentLoop(self.session)
@@ -1130,14 +1215,14 @@ class InteractiveTerminal:
             except EOFError:
                 if self._has_active_query():
                     self._request_interrupt(force=True)
-                self.console.print("\nGoodbye.")
+                self._print_exit_with_resume_hint()
                 break
 
             # Handle double Ctrl+C exit signal from key binding
             if query == "__EXIT__":
                 if self._has_active_query():
                     self._request_interrupt(force=True)
-                self.console.print("Goodbye.")
+                self._print_exit_with_resume_hint()
                 break
 
             if not query:
@@ -1164,7 +1249,7 @@ class InteractiveTerminal:
             if cmd in ("exit", "quit", "q", "/exit", "/quit"):
                 if busy:
                     self._request_interrupt(force=True)
-                self.console.print("Goodbye.")
+                self._print_exit_with_resume_hint()
                 break
             if cmd.startswith("/interrupt") or cmd == "interrupt":
                 force = cmd.endswith("!") or "--force" in cmd or " force" in cmd
@@ -1182,6 +1267,7 @@ class InteractiveTerminal:
                 or cmd.startswith("/compact")
                 or cmd.startswith("/export")
                 or cmd.startswith("/notebook")
+                or cmd.startswith("/upgrade")
             ):
                 self.console.print("  [dim]Command unavailable while a generation is running.[/dim]")
                 self.console.print("  [dim]Use /interrupt, or wait for queued messages to run.[/dim]")
@@ -1241,6 +1327,10 @@ class InteractiveTerminal:
                 self.console.print(Config.load().keys_table())
                 self._advance_suggestion()
                 continue
+            if cmd in ("upgrade", "/upgrade"):
+                self._run_upgrade()
+                self._advance_suggestion()
+                continue
             if cmd in ("doctor", "/doctor"):
                 from ct.agent.doctor import has_errors, run_checks, to_table
                 checks = run_checks(self.session.config, session=self.session)
@@ -1295,8 +1385,14 @@ class InteractiveTerminal:
                 instructions = parts[1] if len(parts) > 1 else None
                 self._compact_context(instructions)
                 continue
-            if cmd in ("sessions", "/sessions"):
-                self._list_sessions()
+            if cmd.startswith("/sessions") or cmd == "sessions":
+                parts = query.split(maxsplit=2)
+                action = parts[1].strip().lower() if len(parts) > 1 else ""
+                if action in {"delete", "del", "rm", "remove"}:
+                    target = parts[2].strip() if len(parts) > 2 else None
+                    self._delete_session(target)
+                else:
+                    self._list_sessions()
                 continue
             if cmd.startswith("/resume"):
                 parts = query.split(maxsplit=1)
@@ -1348,6 +1444,9 @@ class InteractiveTerminal:
         """Run a query, handling clarification requests interactively."""
         from ct.agent.loop import ClarificationNeeded
 
+        if not self._ensure_llm_ready_for_query():
+            return None
+
         run_context = dict(context)
 
         # Extract @mentions and inject into context
@@ -1396,22 +1495,266 @@ class InteractiveTerminal:
             progress_callback=progress_callback,
         )
 
+    def _print_exit_with_resume_hint(self) -> None:
+        """Print exit message with a copyable resume command."""
+        self.console.print("\nGoodbye!\n")
+        session_id = None
+        has_messages = False
+        if hasattr(self, "agent") and getattr(self.agent, "trajectory", None):
+            trajectory = self.agent.trajectory
+            session_id = getattr(trajectory, "session_id", None)
+            has_messages = bool(getattr(trajectory, "turns", None))
+        if session_id and has_messages:
+            self.console.print("Resume this session with:")
+            self.console.print(f"[cyan]fastfold --resume {session_id}[/cyan]")
+
+    def _ensure_llm_ready_for_query(self) -> bool:
+        """Ensure required provider API key is present; prompt interactively if missing."""
+        issue = self.session.config.llm_preflight_issue()
+        if not issue:
+            return True
+
+        provider = str(self.session.config.get("llm.provider", "anthropic") or "anthropic").strip().lower()
+        if provider not in {"anthropic", "openai"}:
+            self.console.print(f"  [red]{issue}[/red]")
+            return False
+
+        self.console.print(f"  [yellow]{issue}[/yellow]")
+        if provider == "openai":
+            self.console.print(
+                "  [dim]Set OPENAI_API_KEY or enter it now to continue.[/dim]"
+            )
+            prompt = "  Enter OpenAI API key (or press Enter to cancel): "
+            cfg_key = "llm.openai_api_key"
+        else:
+            self.console.print(
+                "  [dim]Set ANTHROPIC_API_KEY or enter it now to continue.[/dim]"
+            )
+            prompt = "  Enter Anthropic API key (or press Enter to cancel): "
+            cfg_key = "llm.anthropic_api_key"
+
+        try:
+            api_key = self._secret_prompt_session.prompt(
+                [("class:prompt", prompt)],
+                is_password=True,
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            self.console.print("  [dim]Cancelled.[/dim]")
+            return False
+
+        if not api_key:
+            self.console.print("  [dim]Cancelled.[/dim]")
+            return False
+
+        try:
+            self.session.config.set(cfg_key, api_key)
+        except ValueError as exc:
+            self.console.print(f"  [red]{exc}[/red]")
+            return False
+        self.session.config.save()
+        return self.session.config.llm_preflight_issue() is None
+
+    def _replay_trace_events(self, events: list[dict]) -> bool:
+        """Replay persisted trace events using the same renderer as live runs.
+
+        Returns True when at least one assistant text block was rendered.
+        """
+        if not events:
+            return False
+
+        from ct.ui.traces import TraceRenderer
+
+        trace_renderer = TraceRenderer(self.console)
+        tool_inputs: dict[str, dict] = {}
+        tool_names: dict[str, str] = {}
+        rendered_text = False
+
+        for event in events:
+            etype = str(event.get("type") or "")
+            if etype == "text":
+                content = str(event.get("content") or "")
+                if content.strip():
+                    trace_renderer.render_reasoning(content)
+                    rendered_text = True
+                continue
+
+            if etype == "tool_start":
+                tool = str(event.get("tool") or "unknown_tool")
+                tool_use_id = str(event.get("tool_use_id") or "")
+                tool_input = event.get("input") if isinstance(event.get("input"), dict) else {}
+                if tool_use_id:
+                    tool_inputs[tool_use_id] = tool_input
+                    tool_names[tool_use_id] = tool
+                trace_renderer.render_tool_start(tool, tool_input)
+                continue
+
+            if etype == "tool_result":
+                tool_use_id = str(event.get("tool_use_id") or "")
+                tool = str(event.get("tool") or "")
+                if not tool and tool_use_id:
+                    tool = str(tool_names.get(tool_use_id) or "")
+                if not tool:
+                    tool = "unknown_tool"
+                tool_input = tool_inputs.get(tool_use_id, {})
+                result_text = str(event.get("result_text") or "")
+                is_error = bool(event.get("is_error"))
+                duration_s = float(event.get("duration_s") or 0.0)
+                if is_error:
+                    trace_renderer.render_tool_error(tool, result_text)
+                else:
+                    trace_renderer.render_tool_complete(tool, tool_input, result_text, duration_s)
+                continue
+
+            if etype == "task_started":
+                trace_renderer.render_task_started(
+                    str(event.get("task_id") or ""),
+                    str(event.get("description") or ""),
+                    str(event.get("task_type") or "") or None,
+                )
+                continue
+
+            if etype == "task_progress":
+                usage = event.get("usage") if isinstance(event.get("usage"), dict) else None
+                trace_renderer.render_task_progress(
+                    str(event.get("task_id") or ""),
+                    str(event.get("description") or ""),
+                    usage,
+                    str(event.get("last_tool_name") or "") or None,
+                )
+                continue
+
+            if etype == "task_notification":
+                trace_renderer.render_task_notification(
+                    str(event.get("task_id") or ""),
+                    str(event.get("status") or ""),
+                    str(event.get("summary") or ""),
+                    str(event.get("output_file") or ""),
+                )
+
+        return rendered_text
+
+    @staticmethod
+    def _format_duration_label(duration_s: float) -> str:
+        """Format generation duration like live footer (e.g., 24s, 1m 05s)."""
+        duration = max(0.0, float(duration_s))
+        if duration >= 60:
+            mins = int(duration // 60)
+            secs = int(duration % 60)
+            return f"{mins}m {secs}s"
+        return f"{int(round(duration))}s"
+
+    @staticmethod
+    def _coerce_int(value) -> int:
+        try:
+            if value is None:
+                return 0
+            if isinstance(value, bool):
+                return int(value)
+            if isinstance(value, (int, float)):
+                return max(0, int(value))
+            return max(0, int(float(str(value).strip() or "0")))
+        except Exception:
+            return 0
+
+    def _render_turn_usage_footer(
+        self,
+        *,
+        term_width: int,
+        duration_s: float | None = None,
+        input_tokens: int | None = None,
+        output_tokens: int | None = None,
+        verb: str = "Generated",
+    ) -> None:
+        """Render one-line turn footer with duration and per-turn token arrows."""
+        left = f"✻ {verb}"
+        if duration_s is not None:
+            left = f"{left} for {self._format_duration_label(duration_s)}"
+
+        in_tokens = self._coerce_int(input_tokens)
+        out_tokens = self._coerce_int(output_tokens)
+        right = f"↑ {in_tokens:,} ↓ {out_tokens:,}"
+
+        width = max(40, int(term_width or self.console.width or 100))
+        inner_width = max(10, width - 2)
+        if len(left) + len(right) + 1 <= inner_width:
+            spaces = max(1, inner_width - len(left) - len(right))
+            self.console.print(
+                f"  [#7f8790]{left}{' ' * spaces}[/][dim #7f8790]{right}[/]"
+            )
+        else:
+            self.console.print(
+                f"  [#7f8790]{left} · [/][dim #7f8790]{right}[/]"
+            )
+
+    def _render_resumed_history(self, term_width: int, turns: list) -> None:
+        """Render saved turns so resumed sessions reopen with full context."""
+        if not turns:
+            return
+
+        trace_blocks = self._load_trace_blocks()
+        self.console.print()
+        self.console.print("  [cyan]Session History[/cyan]")
+        for idx, turn in enumerate(turns):
+            query = str(getattr(turn, "query", "") or "").strip()
+            answer = str(getattr(turn, "answer", "") or "").strip()
+            self.console.print(f"[#333333]{'─' * term_width}[/]")
+            if query:
+                self.console.print(f"❯ {query}", markup=False)
+            rendered_from_trace = False
+            duration_s = None
+            input_tokens = None
+            output_tokens = None
+            if idx < len(trace_blocks):
+                end = trace_blocks[idx].get("end", {})
+                if isinstance(end, dict):
+                    raw_duration = end.get("duration_s")
+                    if isinstance(raw_duration, (int, float)):
+                        duration_s = float(raw_duration)
+                events = trace_blocks[idx].get("events", [])
+                if isinstance(events, list) and events:
+                    rendered_from_trace = self._replay_trace_events(events)
+            rows_snapshot = list(getattr(self, "_session_sdk_turn_rows", []))
+            run_lock = getattr(self, "_run_lock", None)
+            if run_lock is not None and hasattr(run_lock, "__enter__"):
+                with run_lock:
+                    rows_snapshot = list(getattr(self, "_session_sdk_turn_rows", []))
+            if idx < len(rows_snapshot):
+                row = rows_snapshot[idx]
+                if isinstance(row, dict):
+                    input_tokens = self._coerce_int(row.get("input_tokens"))
+                    output_tokens = self._coerce_int(row.get("output_tokens"))
+            if answer and not rendered_from_trace:
+                self.console.print(RichMarkdown(answer))
+            if duration_s is not None or input_tokens is not None or output_tokens is not None:
+                self._render_turn_usage_footer(
+                    term_width=term_width,
+                    duration_s=duration_s,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    verb="Generated",
+                )
+
     def _switch_model(self):
         """Interactive model switcher."""
         provider = self.session.config.get("llm.provider", "anthropic")
-        models = AVAILABLE_MODELS.get(provider, [])
+        models_with_provider: list[tuple[str, str, str, str]] = []
+        for prov, models in AVAILABLE_MODELS.items():
+            for model_id, display, desc in models:
+                models_with_provider.append((prov, model_id, display, desc))
         current = self.session.current_model
 
         self.console.print(f"\n  [cyan]Current model:[/cyan] {self._model_display_name()} ({current})")
         self.console.print(f"  [cyan]Provider:[/cyan] {provider}\n")
 
-        if not models:
-            self.console.print(f"  [yellow]No model options configured for provider '{provider}'[/yellow]")
+        if not models_with_provider:
+            self.console.print("  [yellow]No model options configured[/yellow]")
             return
 
-        for i, (model_id, display, desc) in enumerate(models, 1):
+        for i, (prov, model_id, display, desc) in enumerate(models_with_provider, 1):
             marker = " [green]*[/green]" if model_id == current else "  "
-            self.console.print(f"  {marker} [{i}] {display} — [dim]{desc}[/dim]")
+            self.console.print(
+                f"  {marker} [{i}] {display} [dim]({prov})[/dim] — [dim]{desc}[/dim]"
+            )
 
         self.console.print()
 
@@ -1422,20 +1765,22 @@ class InteractiveTerminal:
         except (EOFError, KeyboardInterrupt):
             return
 
-        if not choice.isdigit() or int(choice) < 1 or int(choice) > len(models):
+        if not choice.isdigit() or int(choice) < 1 or int(choice) > len(models_with_provider):
             self.console.print("  [dim]Cancelled.[/dim]")
             return
 
         idx = int(choice) - 1
-        model_id, display, _ = models[idx]
+        selected_provider, model_id, display, _ = models_with_provider[idx]
 
-        if model_id == current:
+        if model_id == current and str(provider).strip().lower() == selected_provider:
             self.console.print(f"  [dim]Already using {display}.[/dim]")
             return
 
-        self.session.set_model(model_id)
+        self.session.set_model(model_id, provider=selected_provider)
         self.session.config.save()  # Persist to ~/.fastfold-cli/config.json
-        self.console.print(f"  [green]Switched to {display}[/green] ({model_id})")
+        self.console.print(
+            f"  [green]Switched to {display}[/green] ({model_id}) [dim]provider={selected_provider}[/dim]"
+        )
 
     def _getch(self):
         """Read a single character from standard input without requiring Enter."""
@@ -1593,9 +1938,6 @@ class InteractiveTerminal:
             sdk_out = int(self._session_sdk_output_tokens)
             sdk_cache_read = int(self._session_sdk_cache_read_tokens)
             sdk_cache_create = int(self._session_sdk_cache_creation_tokens)
-            sdk_cost = float(self._session_sdk_cost_usd)
-            sdk_total_cost = float(self._session_sdk_total_cost_usd)
-            sdk_extra_cost = float(self._session_sdk_extra_server_tool_cost_usd)
             sdk_models = sorted(self._session_sdk_models)
             sdk_rows = list(self._session_sdk_turn_rows)
 
@@ -1608,7 +1950,6 @@ class InteractiveTerminal:
             table.add_column("Output", justify="right", style="green")
             table.add_column("Cache Read", justify="right", style="dim")
             table.add_column("Cache Create", justify="right", style="dim")
-            table.add_column("Cost (USD)", justify="right", style="yellow")
             table.add_column("Models", style="dim")
 
             for row in sdk_rows:
@@ -1619,7 +1960,6 @@ class InteractiveTerminal:
                     f"{int(row.get('output_tokens', 0)):,}",
                     f"{int(row.get('cache_read_tokens', 0)):,}",
                     f"{int(row.get('cache_creation_tokens', 0)):,}",
-                    f"${float(row.get('cost_usd', 0.0)):.4f}",
                     models,
                 )
 
@@ -1630,16 +1970,10 @@ class InteractiveTerminal:
                 f"{sdk_out:,}",
                 f"{sdk_cache_read:,}",
                 f"{sdk_cache_create:,}",
-                f"${sdk_cost:.4f}",
                 total_models,
                 style="bold",
             )
             self.console.print(table)
-            if sdk_extra_cost > 0.0:
-                self.console.print(
-                    f"  [dim]Extra server-tool charges (outside token rows): ${sdk_extra_cost:.4f} "
-                    f"(SDK total: ${sdk_total_cost:.4f})[/dim]"
-                )
             return
 
         # Fallback for legacy non-SDK flows.
@@ -2147,24 +2481,106 @@ class InteractiveTerminal:
         except Exception as e:
             self.console.print(f"  [red]Error: {e}[/red]")
 
+    def _run_upgrade(self) -> None:
+        """Upgrade CLI installation using the shared uv install flow."""
+        try:
+            from ct.cli import execute_upgrade
+        except Exception as exc:
+            self.console.print(f"  [red]Could not load upgrade command:[/red] {exc}")
+            return
+
+        ok = execute_upgrade(console_obj=self.console, cfg=self.session.config)
+        if ok:
+            self.console.print("  [dim]Tip: restart fastfold to confirm the new version.[/dim]")
+
     def _list_sessions(self):
         """Show recent saved sessions."""
         from ct.agent.trajectory import Trajectory
+        from rich.table import Table
+
         sessions = Trajectory.list_sessions()
         if not sessions:
             self.console.print("  [dim]No saved sessions.[/dim]")
             return
 
-        self.console.print(f"\n  [cyan]Recent sessions:[/cyan]\n")
-        for i, s in enumerate(sessions[:10], 1):
-            title = s.get("title", "untitled")[:60]
-            sid = s.get("session_id", "?")
-            n = s.get("n_turns", 0)
-            ts = time.strftime("%Y-%m-%d %H:%M", time.localtime(s.get("created_at", 0)))
-            current = " [green]*[/green]" if hasattr(self, 'agent') and self.agent.trajectory.session_id == sid else "  "
-            self.console.print(f"  {current}[{i}] [bold]{sid}[/bold] — {title} ({n} turns, {ts})")
+        def _relative_time(ts: float | int | None) -> str:
+            if not isinstance(ts, (int, float)) or ts <= 0:
+                return "—"
+            age_s = max(0, int(time.time() - float(ts)))
+            if age_s < 5:
+                return "just now"
+            if age_s < 60:
+                return f"{age_s}s ago"
+            if age_s < 3600:
+                return f"{age_s // 60}m ago"
+            if age_s < 86400:
+                return f"{age_s // 3600}h ago"
+            return f"{age_s // 86400}d ago"
 
-        self.console.print(f"\n  [dim]Use /resume <id> or /resume <number> to restore.[/dim]")
+        table = Table(title="/sessions", show_lines=False)
+        table.add_column("", style="green", no_wrap=True)
+        table.add_column("ID", style="cyan", no_wrap=True)
+        table.add_column("Preview")
+        table.add_column("Messages", justify="right", style="magenta")
+        table.add_column("Model", style="yellow")
+        table.add_column("Last Used", style="dim", no_wrap=True)
+
+        current_session_id = (
+            self.agent.trajectory.session_id
+            if hasattr(self, "agent") and getattr(self.agent, "trajectory", None)
+            else None
+        )
+
+        for s in sessions[:20]:
+            sid = str(s.get("session_id", "?"))
+            title = str(s.get("title") or "untitled")
+            model = str(s.get("model") or "—")
+            n_turns = int(s.get("n_turns") or 0)
+            updated_at = s.get("updated_at", s.get("created_at"))
+            marker = "*" if current_session_id == sid else ""
+            table.add_row(
+                marker,
+                sid,
+                title[:70],
+                str(n_turns),
+                model,
+                _relative_time(updated_at),
+            )
+
+        self.console.print()
+        self.console.print(table)
+        self.console.print(
+            "\n  [dim]/resume <id-or-prefix> to continue · /resume <number> from table · /sessions delete <id|number|last> to remove[/dim]"
+        )
+
+    def _resolve_session_identifier(self, identifier: str, sessions: list[dict]) -> str | None:
+        """Resolve number/id/prefix/last into a concrete session id."""
+        token = str(identifier or "").strip()
+        if not token:
+            self.console.print("  [dim]No session selected.[/dim]")
+            return None
+
+        if token.isdigit():
+            idx = int(token) - 1
+            if 0 <= idx < len(sessions):
+                return str(sessions[idx]["session_id"])
+            self.console.print("  [dim]Invalid number.[/dim]")
+            return None
+
+        if token == "last":
+            return str(sessions[0]["session_id"])
+
+        matches = [s for s in sessions if str(s.get("session_id", "")).startswith(token)]
+        if not matches:
+            self.console.print(f"  [yellow]Session '{token}' not found.[/yellow]")
+            return None
+        if len(matches) > 1:
+            options = ", ".join(str(s.get("session_id", "")) for s in matches[:5])
+            self.console.print(
+                f"  [yellow]Session prefix '{token}' is ambiguous.[/yellow] Matches: {options}"
+            )
+            return None
+        return str(matches[0]["session_id"])
 
     def _resume_session(self, identifier: str = None):
         """Resume a previous session."""
@@ -2189,33 +2605,67 @@ class InteractiveTerminal:
                 return
             identifier = choice
 
-        # Resolve: number → session from list, or direct ID
-        if identifier.isdigit():
-            idx = int(identifier) - 1
-            if 0 <= idx < len(sessions):
-                session_id = sessions[idx]["session_id"]
-            else:
-                self.console.print("  [dim]Invalid number.[/dim]")
-                return
-        elif identifier == "last":
-            session_id = sessions[0]["session_id"]
-        else:
-            session_id = identifier
+        session_id = self._resolve_session_identifier(identifier, sessions)
+        if not session_id:
+            return
 
         try:
             self.agent = AgentLoop.resume(self.session, session_id)
+            self._restore_usage_from_trajectory()
             n = len(self.agent.trajectory.turns)
             title = self.agent.trajectory.title or "untitled"
             self.console.print(f"  [green]Resumed[/green] [bold]{session_id}[/bold] — {title} ({n} turns)")
-
-            # Show last turn as context
-            if self.agent.trajectory.turns:
-                last = self.agent.trajectory.turns[-1]
-                preview = last.answer[:150].replace("\n", " ")
-                self.console.print(f"  [dim]Last: {last.query}[/dim]")
-                self.console.print(f"  [dim]→ {preview}...[/dim]")
+            self._render_resumed_history(self.console.width, turns=self.agent.trajectory.turns)
         except FileNotFoundError:
             self.console.print(f"  [yellow]Session '{session_id}' not found.[/yellow]")
+
+    def _delete_session(self, identifier: str | None = None) -> None:
+        """Delete a saved session (and trace file) by id, prefix, number, or 'last'."""
+        from ct.agent.loop import AgentLoop
+        from ct.agent.trajectory import Trajectory
+
+        sessions = Trajectory.list_sessions()
+        if not sessions:
+            self.console.print("  [dim]No saved sessions.[/dim]")
+            return
+
+        if identifier is None:
+            self._list_sessions()
+            try:
+                choice = self._prompt_session.prompt(
+                    [("class:prompt", "  Delete session: ")],
+                ).strip()
+            except (EOFError, KeyboardInterrupt):
+                return
+            if not choice:
+                return
+            identifier = choice
+
+        session_id = self._resolve_session_identifier(identifier, sessions)
+        if not session_id:
+            return
+
+        try:
+            result = Trajectory.delete_session(session_id)
+        except FileNotFoundError:
+            self.console.print(f"  [yellow]Session '{session_id}' not found.[/yellow]")
+            return
+
+        trace_note = " and trace" if result.get("trace_deleted") else ""
+        self.console.print(
+            f"  [green]Deleted[/green] [bold]{session_id}[/bold]{trace_note}."
+        )
+
+        current_session_id = (
+            self.agent.trajectory.session_id
+            if hasattr(self, "agent") and getattr(self.agent, "trajectory", None)
+            else None
+        )
+        if current_session_id == session_id:
+            self.agent = AgentLoop(self.session)
+            self.console.print(
+                f"  [dim]Current session was deleted; switched to new session {self.agent.trajectory.session_id}.[/dim]"
+            )
 
     def _handle_agents_command(self, query: str, context: dict):
         """Handle /agents N [query] command."""

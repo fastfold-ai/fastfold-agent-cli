@@ -168,6 +168,7 @@ def build_system_prompt(
         parts.append(f"\n## Available Tools ({len(tool_names)} total)\n")
         parts.append(
             "You have access to all tools via MCP. Key tools:\n"
+            "- **shell.run**: Execute terminal commands (best for skill/CLI scripts like `fastfold-fold-*` and `python -m ct.skills...`).\n"
             "- **run_python**: Execute Python code in a sandbox (pd, np, plt, scipy, sklearn, pysam, gseapy, pydeseq2, BioPython). Variables persist between calls.\n"
             "- **run_r**: Execute R code directly. Prefer run_r over run_python for: natural splines (ns()), wilcox.test(), p.adjust(), fisher.test(), lm()/predict(), organism-specific KEGG ORA (use KEGGREST package: keggList, keggLink, keggGet for any organism code), and any analysis where R is the reference implementation. R and Python give DIFFERENT results for splines, multiple testing correction, and nonparametric tests — when the expected answer was computed in R, use R.\n"
             "- **literature.pubmed_search**, **literature.chembl_query**, **literature.openalex_search**: Literature/DB search\n"
@@ -178,7 +179,8 @@ def build_system_prompt(
             "- **chemistry.descriptors**, **chemistry.sar_analyze**, **chemistry.pubchem_lookup**: Chemistry tools\n"
             "- **target.coessentiality**, **genomics.gwas_lookup**, **protein.function_predict**: Target/genomics tools\n"
             "- **safety.classify**, **safety.admet_predict**: Safety/ADMET tools\n"
-            "\nFor data analysis questions, prefer **run_python** — it's the most powerful tool.\n"
+            "\nFor skill/workflow CLI commands, prefer **shell.run**.\n"
+            "For data analysis questions, prefer **run_python** — it's the most powerful tool.\n"
             "For drug discovery questions, combine domain tools with your knowledge.\n"
         )
 

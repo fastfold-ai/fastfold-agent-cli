@@ -51,15 +51,38 @@ uv tool install "fastfold-agent-cli[win_build]" --python 3.10
 ### Authentication
 
 ```bash
-# Interactive setup wizard (recommended — configures Anthropic + Fastfold AI Cloud keys)
+# Interactive setup wizard (recommended)
+# Choose provider(s) first (interactive toggle list), then enter keys
 fastfold setup
+
+# Or choose provider(s) explicitly (comma-separated)
+fastfold setup --provider anthropic
+fastfold setup --provider openai
+fastfold setup --provider anthropic,openai
 
 # Or set directly
 export ANTHROPIC_API_KEY="sk-ant-..."
+export OPENAI_API_KEY="sk-..."
 export FASTFOLD_API_KEY="sk-..."
 
 # Non-interactive (CI/scripting)
 fastfold setup --api-key sk-ant-... --fastfold-api-key sk-...
+fastfold setup --provider openai --openai-api-key sk-... --fastfold-api-key sk-...
+```
+
+Provider selection:
+
+```bash
+fastfold config set llm.provider anthropic
+fastfold config set llm.model claude-sonnet-4-5-20250929
+fastfold config set llm.anthropic_api_key sk-ant-...
+
+fastfold config set llm.provider openai
+fastfold config set llm.model gpt-4o
+fastfold config set llm.openai_api_key sk-...
+
+# Legacy fallback (Anthropic only, still supported)
+fastfold config set llm.api_key sk-ant-...
 ```
 
 ## Getting Started

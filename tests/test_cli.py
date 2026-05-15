@@ -3,14 +3,91 @@
 import subprocess
 from unittest.mock import patch
 
+import pytest
 from typer.testing import CliRunner
 
 from ct.agent.config import Config
 from ct.agent.trace import TraceLogger
-from ct.cli import app
+from ct.cli import (
+    app,
+    _parse_provider_list,
+    _prompt_setup_providers,
+    setup_cmd,
+    resolve_upgrade_flavor,
+    build_upgrade_command,
+    is_newer_version,
+    get_upgrade_available_version,
+)
 
 
 runner = CliRunner()
+
+
+def test_parse_provider_list_single():
+    assert _parse_provider_list("openai") == ["openai"]
+
+
+def test_parse_provider_list_multiple_preserves_order():
+    assert _parse_provider_list("openai,anthropic") == ["anthropic", "openai"]
+
+
+def test_parse_provider_list_invalid_raises():
+    with pytest.raises(Exception):
+        _parse_provider_list("bogus")
+
+
+def test_prompt_setup_providers_inline_accepts_aliases(monkeypatch):
+    monkeypatch.setattr("ct.cli.sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("ct.cli.sys.stdout.isatty", lambda: False)
+    monkeypatch.setattr("builtins.input", lambda _: "o a")
+    selected = _prompt_setup_providers("openai")
+    assert selected == ["anthropic", "openai"]
+
+
+def test_prompt_setup_providers_inline_enter_keeps_default(monkeypatch):
+    monkeypatch.setattr("ct.cli.sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("ct.cli.sys.stdout.isatty", lambda: False)
+    monkeypatch.setattr("builtins.input", lambda _: "")
+    selected = _prompt_setup_providers("openai")
+    assert selected == ["openai"]
+
+
+def test_prompt_setup_providers_interactive_arrow_space_mode(monkeypatch):
+    captured = {}
+
+    class _FakePrompt:
+        def ask(self):
+            return ["openai", "anthropic"]
+
+    def _fake_checkbox(*args, **kwargs):
+        captured["kwargs"] = kwargs
+        return _FakePrompt()
+
+    monkeypatch.setattr("ct.cli.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("ct.cli.sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("questionary.checkbox", _fake_checkbox)
+
+    selected = _prompt_setup_providers("openai")
+    assert selected == ["anthropic", "openai"]
+    assert captured["kwargs"]["qmark"] == "❯"
+    assert captured["kwargs"]["pointer"] == "▸"
+    assert "space toggle" in captured["kwargs"]["instruction"]
+    assert captured["kwargs"]["style"] is not None
+
+
+def test_setup_cmd_direct_call_handles_typer_option_defaults(monkeypatch):
+    cfg = Config(data={})
+    monkeypatch.setattr("ct.agent.config.Config.load", lambda: cfg)
+    monkeypatch.setattr("ct.cli._prompt_setup_providers", lambda default: ["anthropic"])
+    monkeypatch.setattr(
+        "ct.cli._resolve_provider_key",
+        lambda cfg, provider, cli_key=None: "sk-ant-api03-test",
+    )
+    monkeypatch.setattr("ct.cli._prompt_fastfold_cloud_api_key", lambda cfg, cli_key: None)
+
+    setup_cmd()
+    assert cfg.get("llm.provider") == "anthropic"
+    assert cfg.get("llm.anthropic_api_key") == "sk-ant-api03-test"
 
 
 def test_keys_subcommand_not_treated_as_query():
@@ -113,6 +190,99 @@ def test_entry_preserves_trace_subcommand(monkeypatch):
     assert called["args"] == ["trace", "diagnose"]
 
 
+def test_entry_preserves_upgrade_subcommand(monkeypatch):
+    called = {}
+
+    def fake_app(*, args, prog_name):
+        called["args"] = args
+        called["prog_name"] = prog_name
+
+    monkeypatch.setattr("ct.cli.app", fake_app)
+    monkeypatch.setattr("sys.argv", ["ct", "upgrade"])
+
+    from ct.cli import entry
+
+    entry()
+
+    assert called["prog_name"] == "fastfold"
+    assert called["args"] == ["upgrade"]
+
+
+def test_entry_routes_top_level_resume_flag_to_hidden_run(monkeypatch):
+    called = {}
+
+    def fake_app(*, args, prog_name):
+        called["args"] = args
+        called["prog_name"] = prog_name
+
+    monkeypatch.setattr("ct.cli.app", fake_app)
+    monkeypatch.setattr("sys.argv", ["ct", "--resume", "d0b0571d"])
+
+    from ct.cli import entry
+
+    entry()
+
+    assert called["prog_name"] == "fastfold"
+    assert called["args"] == ["run", "--resume", "d0b0571d"]
+
+
+def test_resolve_upgrade_flavor_uses_persisted_value():
+    cfg = Config(data={"install.uv_flavor": "win_build"})
+    with patch.object(cfg, "save") as mock_save:
+        flavor = resolve_upgrade_flavor(cfg=cfg, persist=True)
+    assert flavor == "win_build"
+    mock_save.assert_not_called()
+
+
+def test_resolve_upgrade_flavor_falls_back_to_os_and_persists(monkeypatch):
+    cfg = Config(data={})
+    monkeypatch.setattr("ct.cli.os.name", "posix", raising=False)
+    with patch.object(cfg, "save") as mock_save:
+        flavor = resolve_upgrade_flavor(cfg=cfg, persist=True)
+    assert flavor == "all"
+    assert cfg.get("install.uv_flavor") == "all"
+    mock_save.assert_called_once()
+
+
+def test_build_upgrade_command_for_win_build():
+    cmd = build_upgrade_command("win_build")
+    assert cmd == [
+        "uv",
+        "tool",
+        "install",
+        "fastfold-agent-cli[win_build]",
+        "--python",
+        "3.10",
+        "--upgrade",
+    ]
+
+
+def test_is_newer_version_semver():
+    assert is_newer_version("0.0.44", "0.0.43") is True
+    assert is_newer_version("0.0.43", "0.0.43") is False
+    assert is_newer_version("0.0.42", "0.0.43") is False
+
+
+def test_get_upgrade_available_version_returns_latest_when_newer():
+    with patch("ct.cli.fetch_pypi_latest_version", return_value="0.0.99"):
+        assert get_upgrade_available_version("0.0.43") == "0.0.99"
+
+
+def test_get_upgrade_available_version_returns_none_when_not_newer():
+    with patch("ct.cli.fetch_pypi_latest_version", return_value="0.0.43"):
+        assert get_upgrade_available_version("0.0.43") is None
+
+
+def test_upgrade_subcommand_invokes_execute_upgrade():
+    cfg = Config(data={})
+    with patch("ct.agent.config.Config.load", return_value=cfg), patch(
+        "ct.cli.execute_upgrade", return_value=True
+    ) as mock_exec:
+        result = runner.invoke(app, ["upgrade"])
+    assert result.exit_code == 0
+    mock_exec.assert_called_once()
+
+
 def test_config_set_agent_profile_applies_preset():
     cfg = Config(data={})
     with patch("ct.agent.config.Config.load", return_value=cfg), patch.object(
@@ -137,6 +307,30 @@ def test_config_set_agent_profile_rejects_invalid_value():
     assert result.exit_code == 2
     assert "Invalid agent.profile" in result.stdout
     mock_save.assert_not_called()
+
+
+def test_config_set_openai_key_rejects_invalid_format():
+    cfg = Config(data={})
+    with patch("ct.agent.config.Config.load", return_value=cfg), patch.object(
+        cfg, "save"
+    ) as mock_save:
+        result = runner.invoke(app, ["config", "set", "llm.openai_api_key", "bad-key"])
+
+    assert result.exit_code == 2
+    assert "Invalid OpenAI API key format" in result.stdout
+    mock_save.assert_not_called()
+
+
+def test_config_unset_removes_value():
+    cfg = Config(data={"llm.openai_api_key": "sk-proj-AbCdEf1234567890xyz"})
+    with patch("ct.agent.config.Config.load", return_value=cfg), patch.object(
+        cfg, "save"
+    ) as mock_save:
+        result = runner.invoke(app, ["config", "unset", "llm.openai_api_key"])
+
+    assert result.exit_code == 0
+    assert cfg.get("llm.openai_api_key") is None
+    mock_save.assert_called_once()
 
 
 def test_knowledge_status_command():

@@ -2,7 +2,14 @@
 
 import pytest
 from unittest.mock import MagicMock, patch
-from ct.models.llm import LLMClient, LLMResponse, UsageTracker, MODEL_PRICING
+from ct.models.llm import (
+    LLMClient,
+    LLMResponse,
+    MODEL_PRICING,
+    UsageTracker,
+    _openai_temperature_kwargs,
+    _openai_token_limit_kwargs,
+)  # type: ignore[import-untyped]
 
 
 class TestUsageTracker:
@@ -123,3 +130,40 @@ class TestModelPricing:
             assert model in MODEL_PRICING, f"Missing pricing for {model}"
             assert "input" in MODEL_PRICING[model]
             assert "output" in MODEL_PRICING[model]
+
+
+class TestOpenAIModelCompatibility:
+    def test_openai_token_limit_kwargs_for_gpt5(self):
+        assert _openai_token_limit_kwargs("gpt-5.5", 1000) == {"max_completion_tokens": 1000}
+
+    def test_openai_token_limit_kwargs_for_non_gpt5(self):
+        assert _openai_token_limit_kwargs("gpt-4o", 1000) == {"max_tokens": 1000}
+
+    def test_openai_temperature_kwargs_for_gpt5(self):
+        assert _openai_temperature_kwargs("gpt-5-mini", 0.2) == {}
+
+    def test_openai_temperature_kwargs_for_non_gpt5(self):
+        assert _openai_temperature_kwargs("gpt-4o", 0.2) == {"temperature": 0.2}
+
+    def test_call_openai_uses_gpt5_compatible_kwargs(self):
+        client = LLMClient(provider="openai", model="gpt-5.5", api_key="sk-test")
+        mock_openai = MagicMock()
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=MagicMock(content="ok"))]
+        mock_response.usage.prompt_tokens = 10
+        mock_response.usage.completion_tokens = 5
+        mock_openai.chat.completions.create.return_value = mock_response
+        client._client = mock_openai
+
+        client.chat(
+            system="sys",
+            messages=[{"role": "user", "content": "hi"}],
+            temperature=0.1,
+            max_tokens=321,
+        )
+
+        kwargs = mock_openai.chat.completions.create.call_args.kwargs
+        assert "max_completion_tokens" in kwargs
+        assert kwargs["max_completion_tokens"] == 321
+        assert "max_tokens" not in kwargs
+        assert "temperature" not in kwargs

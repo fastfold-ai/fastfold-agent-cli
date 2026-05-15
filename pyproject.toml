@@ -25,6 +25,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "markdown>=3.5",
     "nbformat>=5.7",
+    "questionary>=2.1.1",
 ]
 
 [project.optional-dependencies]

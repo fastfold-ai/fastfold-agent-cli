@@ -5,7 +5,9 @@ from unittest.mock import MagicMock, patch, PropertyMock
 from pathlib import Path
 from prompt_toolkit.document import Document
 from prompt_toolkit.completion import CompleteEvent
-from ct.ui.terminal import (
+from rich.markdown import Markdown
+from rich.table import Table
+from ct.ui.terminal import (  # type: ignore[import-untyped]
     _extract_llm_suggestions,
     extract_mentions,
     build_mention_context,
@@ -26,7 +28,7 @@ class TestSlashCommands:
 
     def test_core_commands_registered(self):
         expected = ["/help", "/tools", "/model", "/settings", "/usage", "/copy",
-                    "/export", "/compact", "/sessions", "/resume",
+                    "/export", "/compact", "/sessions", "/resume", "/upgrade",
                     "/clear", "/exit", "/config", "/keys", "/doctor"]
         for cmd in expected:
             assert cmd in SLASH_COMMANDS, f"{cmd} not in SLASH_COMMANDS"
@@ -59,7 +61,84 @@ class TestTerminalMethods:
     def test_model_display_name(self, terminal):
         assert terminal._model_display_name("claude-sonnet-4-5-20250929") == "Sonnet 4.5"
         assert terminal._model_display_name("claude-opus-4-6") == "Opus 4.6"
+        assert terminal._model_display_name("gpt-5.5") == "GPT-5.5"
+        assert terminal._model_display_name("gpt-5.4-mini") == "GPT-5.4 Mini"
         assert terminal._model_display_name("unknown-model") == "unknown-model"
+
+    def test_switch_model_can_change_provider(self, terminal):
+        terminal.session.config.get.side_effect = (
+            lambda key, default=None: "anthropic" if key == "llm.provider" else default
+        )
+        terminal._prompt_session = MagicMock()
+        # 4th option in AVAILABLE_MODELS order is gpt-5.5 (openai)
+        terminal._prompt_session.prompt.return_value = "4"
+
+        terminal._switch_model()
+
+        terminal.session.set_model.assert_called_once_with("gpt-5.5", provider="openai")
+        terminal.session.config.save.assert_called_once()
+
+    def test_switch_model_no_change_when_same_model_and_provider(self, terminal):
+        terminal.session.config.get.side_effect = (
+            lambda key, default=None: "anthropic" if key == "llm.provider" else default
+        )
+        terminal._prompt_session = MagicMock()
+        # 1st option is current model (claude-sonnet-4-5-20250929, anthropic)
+        terminal._prompt_session.prompt.return_value = "1"
+
+        terminal._switch_model()
+
+        terminal.session.set_model.assert_not_called()
+        terminal.session.config.save.assert_not_called()
+
+    def test_ensure_llm_ready_prompts_and_saves_openai_key(self, terminal):
+        terminal.session.config.llm_preflight_issue.side_effect = [
+            "OpenAI API key not configured",
+            None,
+        ]
+        terminal.session.config.get.side_effect = (
+            lambda key, default=None: "openai" if key == "llm.provider" else default
+        )
+        terminal._secret_prompt_session = MagicMock()
+        terminal._secret_prompt_session.prompt.return_value = "sk-openai-123"
+        assert terminal._ensure_llm_ready_for_query() is True
+        terminal.session.config.set.assert_called_once_with("llm.openai_api_key", "sk-openai-123")
+        terminal.session.config.save.assert_called_once()
+
+    def test_ensure_llm_ready_cancelled_returns_false(self, terminal):
+        terminal.session.config.llm_preflight_issue.return_value = "OpenAI API key not configured"
+        terminal.session.config.get.side_effect = (
+            lambda key, default=None: "openai" if key == "llm.provider" else default
+        )
+        terminal._secret_prompt_session = MagicMock()
+        terminal._secret_prompt_session.prompt.return_value = ""
+        assert terminal._ensure_llm_ready_for_query() is False
+
+    def test_ensure_llm_ready_prompts_and_saves_anthropic_key(self, terminal):
+        terminal.session.config.llm_preflight_issue.side_effect = [
+            "Anthropic API key not configured",
+            None,
+        ]
+        terminal.session.config.get.side_effect = (
+            lambda key, default=None: "anthropic" if key == "llm.provider" else default
+        )
+        terminal._secret_prompt_session = MagicMock()
+        terminal._secret_prompt_session.prompt.return_value = "sk-ant-api03-test"
+        assert terminal._ensure_llm_ready_for_query() is True
+        terminal.session.config.set.assert_called_once_with(
+            "llm.anthropic_api_key", "sk-ant-api03-test"
+        )
+        terminal.session.config.save.assert_called_once()
+
+    def test_ensure_llm_ready_invalid_key_returns_false(self, terminal):
+        terminal.session.config.llm_preflight_issue.return_value = "OpenAI API key not configured"
+        terminal.session.config.get.side_effect = (
+            lambda key, default=None: "openai" if key == "llm.provider" else default
+        )
+        terminal.session.config.set.side_effect = ValueError("Invalid OpenAI API key format")
+        terminal._secret_prompt_session = MagicMock()
+        terminal._secret_prompt_session.prompt.return_value = "bad-key"
+        assert terminal._ensure_llm_ready_for_query() is False
 
     def test_copy_no_response(self, terminal):
         terminal._copy_last_response()
@@ -87,7 +166,7 @@ class TestTerminalMethods:
 
     def test_export_with_trajectory(self, terminal, tmp_path):
         """Export should write a markdown file."""
-        from ct.agent.trajectory import Turn, Trajectory
+        from ct.agent.trajectory import Turn, Trajectory  # type: ignore[import-untyped]
         terminal.agent = MagicMock()
         terminal.agent.trajectory = Trajectory()
         terminal.agent.trajectory.turns = [
@@ -206,6 +285,191 @@ class TestTerminalMethods:
             terminal._handle_case_study_command("/case-study demo", {})
 
         terminal._update_suggestions.assert_called_once_with(case.compound, result.merged_plan, result)
+
+    def test_list_sessions_renders_threads_style_table(self, terminal):
+        terminal.agent = MagicMock()
+        terminal.agent.trajectory.session_id = "ab123456"
+        sessions = [
+            {
+                "session_id": "ab123456",
+                "title": "Current session title",
+                "n_turns": 4,
+                "model": "gpt-5.5",
+                "created_at": 1000,
+                "updated_at": 2000,
+            },
+            {
+                "session_id": "cd789012",
+                "title": "Other session title",
+                "n_turns": 2,
+                "model": "claude-sonnet-4-5-20250929",
+                "created_at": 900,
+                "updated_at": 1500,
+            },
+        ]
+        with patch("ct.agent.trajectory.Trajectory.list_sessions", return_value=sessions), patch(
+            "time.time", return_value=2002
+        ):
+            terminal._list_sessions()
+        table_calls = [
+            c for c in terminal.console.print.call_args_list if c.args and isinstance(c.args[0], Table)
+        ]
+        assert table_calls
+        table = table_calls[-1].args[0]
+        headers = [col.header for col in table.columns]
+        assert headers == ["", "ID", "Preview", "Messages", "Model", "Last Used"]
+
+    def test_resume_session_accepts_session_prefix(self, terminal):
+        sessions = [
+            {"session_id": "abc12345"},
+            {"session_id": "xyz98765"},
+        ]
+        with patch("ct.agent.trajectory.Trajectory.list_sessions", return_value=sessions), patch(
+            "ct.agent.loop.AgentLoop.resume"
+        ) as mock_resume:
+            terminal._resume_session("abc")
+        mock_resume.assert_called_once()
+        assert mock_resume.call_args.args[1] == "abc12345"
+
+    def test_delete_session_accepts_prefix(self, terminal):
+        sessions = [
+            {"session_id": "abc12345"},
+            {"session_id": "xyz98765"},
+        ]
+        terminal.agent = MagicMock()
+        terminal.agent.trajectory.session_id = "other999"
+        with patch("ct.agent.trajectory.Trajectory.list_sessions", return_value=sessions), patch(
+            "ct.agent.trajectory.Trajectory.delete_session",
+            return_value={"session_id": "abc12345", "session_deleted": True, "trace_deleted": True},
+        ) as mock_delete:
+            terminal._delete_session("abc")
+        mock_delete.assert_called_once_with("abc12345")
+
+    def test_delete_current_session_switches_to_new_loop(self, terminal):
+        sessions = [{"session_id": "abc12345"}]
+        terminal.agent = MagicMock()
+        terminal.agent.trajectory.session_id = "abc12345"
+        new_loop = MagicMock()
+        new_loop.trajectory.session_id = "new11111"
+        with patch("ct.agent.trajectory.Trajectory.list_sessions", return_value=sessions), patch(
+            "ct.agent.trajectory.Trajectory.delete_session",
+            return_value={"session_id": "abc12345", "session_deleted": True, "trace_deleted": False},
+        ), patch("ct.agent.loop.AgentLoop", return_value=new_loop):
+            terminal._delete_session("abc12345")
+        assert terminal.agent is new_loop
+
+    def test_print_exit_with_resume_hint(self, terminal):
+        terminal.agent = MagicMock()
+        terminal.agent.trajectory.session_id = "d0b0571d"
+        terminal.agent.trajectory.turns = [MagicMock()]
+        terminal._print_exit_with_resume_hint()
+        printed = " ".join(str(c) for c in terminal.console.print.call_args_list)
+        assert "Resume this session with:" in printed
+        assert "fastfold --resume d0b0571d" in printed
+
+    def test_print_exit_without_messages_hides_resume_hint(self, terminal):
+        terminal.agent = MagicMock()
+        terminal.agent.trajectory.session_id = "d0b0571d"
+        terminal.agent.trajectory.turns = []
+        terminal._print_exit_with_resume_hint()
+        printed = " ".join(str(c) for c in terminal.console.print.call_args_list)
+        assert "Goodbye!" in printed
+        assert "Resume this session with:" not in printed
+
+    def test_render_resumed_history_shows_query_and_answer(self, terminal):
+        turn = MagicMock()
+        turn.query = "what can you do?"
+        turn.answer = "I can help with target discovery."
+        terminal._render_resumed_history(40, [turn])
+        printed = " ".join(str(c) for c in terminal.console.print.call_args_list)
+        assert "Session History" in printed
+        assert "what can you do?" in printed
+        markdown_calls = [
+            c.args[0]
+            for c in terminal.console.print.call_args_list
+            if c.args and isinstance(c.args[0], Markdown)
+        ]
+        assert markdown_calls
+        assert markdown_calls[0].markup == "I can help with target discovery."
+
+    def test_render_resumed_history_prefers_trace_replay(self, terminal):
+        turn = MagicMock()
+        turn.query = "run fold"
+        turn.answer = "I can run fold."
+        with patch.object(terminal, "_load_trace_blocks", return_value=[{"events": [{"type": "text", "content": "Trace text"}]}]), patch.object(
+            terminal, "_replay_trace_events", return_value=True
+        ) as mock_replay:
+            terminal._render_resumed_history(40, [turn])
+        mock_replay.assert_called_once()
+        markdown_calls = [
+            c.args[0]
+            for c in terminal.console.print.call_args_list
+            if c.args and isinstance(c.args[0], Markdown)
+        ]
+        assert not markdown_calls
+
+    def test_render_resumed_history_trace_without_text_falls_back_to_answer(self, terminal):
+        turn = MagicMock()
+        turn.query = "run fold"
+        turn.answer = "I can run fold."
+        with patch.object(terminal, "_load_trace_blocks", return_value=[{"events": [{"type": "tool_start", "tool": "x"}]}]), patch.object(
+            terminal, "_replay_trace_events", return_value=False
+        ) as mock_replay:
+            terminal._render_resumed_history(40, [turn])
+        mock_replay.assert_called_once()
+        markdown_calls = [
+            c.args[0]
+            for c in terminal.console.print.call_args_list
+            if c.args and isinstance(c.args[0], Markdown)
+        ]
+        assert markdown_calls
+        assert markdown_calls[0].markup == "I can run fold."
+
+    def test_render_resumed_history_shows_generated_duration_from_trace_end(self, terminal):
+        turn = MagicMock()
+        turn.query = "run fold"
+        turn.answer = "done"
+        terminal._run_lock = MagicMock()
+        terminal._run_lock.__enter__ = MagicMock(return_value=None)
+        terminal._run_lock.__exit__ = MagicMock(return_value=False)
+        terminal._session_sdk_turn_rows = [{"input_tokens": 49652, "output_tokens": 524}]
+        with patch.object(
+            terminal,
+            "_load_trace_blocks",
+            return_value=[{"events": [{"type": "text", "content": "ok"}], "end": {"duration_s": 24.0}}],
+        ), patch.object(terminal, "_replay_trace_events", return_value=True):
+            terminal._render_resumed_history(40, [turn])
+        printed = " ".join(str(c) for c in terminal.console.print.call_args_list)
+        assert "Generated for 24s" in printed
+        assert "↑ 49,652 ↓ 524" in printed
+
+    def test_restore_usage_from_trajectory(self, terminal):
+        terminal.agent = MagicMock()
+        terminal.agent.trajectory.get_usage_data.return_value = {
+            "sdk_calls": 3,
+            "sdk_input_tokens": 1000,
+            "sdk_output_tokens": 400,
+            "sdk_cache_read_tokens": 20,
+            "sdk_cache_creation_tokens": 10,
+            "sdk_cost_usd": 0.12,
+            "sdk_total_cost_usd": 0.15,
+            "sdk_extra_server_tool_cost_usd": 0.03,
+            "sdk_models": ["gpt-5.5"],
+            "sdk_turn_rows": [{"turn": 1, "input_tokens": 200}],
+        }
+        terminal._run_lock = MagicMock()
+        terminal._run_lock.__enter__ = MagicMock(return_value=None)
+        terminal._run_lock.__exit__ = MagicMock(return_value=False)
+        terminal._restore_usage_from_trajectory()
+        assert terminal._session_sdk_calls == 3
+        assert terminal._session_sdk_input_tokens == 1000
+        assert terminal._session_sdk_output_tokens == 400
+        assert terminal._session_sdk_models == {"gpt-5.5"}
+
+    def test_run_upgrade_uses_shared_cli_upgrade_flow(self, terminal):
+        with patch("ct.cli.execute_upgrade", return_value=True) as mock_exec:
+            terminal._run_upgrade()
+        mock_exec.assert_called_once_with(console_obj=terminal.console, cfg=terminal.session.config)
 
 
 class TestExtractMentions:
