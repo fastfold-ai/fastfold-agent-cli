@@ -224,6 +224,12 @@ def test_set_llm_key_blank_unsets_value():
     assert cfg.get("llm.openai_api_key") is None
 
 
+def test_install_uv_flavor_roundtrip():
+    cfg = Config(data={})
+    cfg.set("install.uv_flavor", "all")
+    assert cfg.get("install.uv_flavor") == "all"
+
+
 def test_llm_preflight_requires_model_for_local():
     cfg = Config(data={"llm.provider": "local", "llm.model": None})
     issue = cfg.llm_preflight_issue()

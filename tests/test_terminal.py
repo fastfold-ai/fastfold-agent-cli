@@ -28,7 +28,7 @@ class TestSlashCommands:
 
     def test_core_commands_registered(self):
         expected = ["/help", "/tools", "/model", "/settings", "/usage", "/copy",
-                    "/export", "/compact", "/sessions", "/resume",
+                    "/export", "/compact", "/sessions", "/resume", "/upgrade",
                     "/clear", "/exit", "/config", "/keys", "/doctor"]
         for cmd in expected:
             assert cmd in SLASH_COMMANDS, f"{cmd} not in SLASH_COMMANDS"
@@ -465,6 +465,11 @@ class TestTerminalMethods:
         assert terminal._session_sdk_input_tokens == 1000
         assert terminal._session_sdk_output_tokens == 400
         assert terminal._session_sdk_models == {"gpt-5.5"}
+
+    def test_run_upgrade_uses_shared_cli_upgrade_flow(self, terminal):
+        with patch("ct.cli.execute_upgrade", return_value=True) as mock_exec:
+            terminal._run_upgrade()
+        mock_exec.assert_called_once_with(console_obj=terminal.console, cfg=terminal.session.config)
 
 
 class TestExtractMentions:

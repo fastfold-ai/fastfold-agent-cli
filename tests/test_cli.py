@@ -8,7 +8,16 @@ from typer.testing import CliRunner
 
 from ct.agent.config import Config
 from ct.agent.trace import TraceLogger
-from ct.cli import app, _parse_provider_list, _prompt_setup_providers, setup_cmd
+from ct.cli import (
+    app,
+    _parse_provider_list,
+    _prompt_setup_providers,
+    setup_cmd,
+    resolve_upgrade_flavor,
+    build_upgrade_command,
+    is_newer_version,
+    get_upgrade_available_version,
+)
 
 
 runner = CliRunner()
@@ -181,6 +190,24 @@ def test_entry_preserves_trace_subcommand(monkeypatch):
     assert called["args"] == ["trace", "diagnose"]
 
 
+def test_entry_preserves_upgrade_subcommand(monkeypatch):
+    called = {}
+
+    def fake_app(*, args, prog_name):
+        called["args"] = args
+        called["prog_name"] = prog_name
+
+    monkeypatch.setattr("ct.cli.app", fake_app)
+    monkeypatch.setattr("sys.argv", ["ct", "upgrade"])
+
+    from ct.cli import entry
+
+    entry()
+
+    assert called["prog_name"] == "fastfold"
+    assert called["args"] == ["upgrade"]
+
+
 def test_entry_routes_top_level_resume_flag_to_hidden_run(monkeypatch):
     called = {}
 
@@ -197,6 +224,63 @@ def test_entry_routes_top_level_resume_flag_to_hidden_run(monkeypatch):
 
     assert called["prog_name"] == "fastfold"
     assert called["args"] == ["run", "--resume", "d0b0571d"]
+
+
+def test_resolve_upgrade_flavor_uses_persisted_value():
+    cfg = Config(data={"install.uv_flavor": "win_build"})
+    with patch.object(cfg, "save") as mock_save:
+        flavor = resolve_upgrade_flavor(cfg=cfg, persist=True)
+    assert flavor == "win_build"
+    mock_save.assert_not_called()
+
+
+def test_resolve_upgrade_flavor_falls_back_to_os_and_persists(monkeypatch):
+    cfg = Config(data={})
+    monkeypatch.setattr("ct.cli.os.name", "posix", raising=False)
+    with patch.object(cfg, "save") as mock_save:
+        flavor = resolve_upgrade_flavor(cfg=cfg, persist=True)
+    assert flavor == "all"
+    assert cfg.get("install.uv_flavor") == "all"
+    mock_save.assert_called_once()
+
+
+def test_build_upgrade_command_for_win_build():
+    cmd = build_upgrade_command("win_build")
+    assert cmd == [
+        "uv",
+        "tool",
+        "install",
+        "fastfold-agent-cli[win_build]",
+        "--python",
+        "3.10",
+        "--upgrade",
+    ]
+
+
+def test_is_newer_version_semver():
+    assert is_newer_version("0.0.44", "0.0.43") is True
+    assert is_newer_version("0.0.43", "0.0.43") is False
+    assert is_newer_version("0.0.42", "0.0.43") is False
+
+
+def test_get_upgrade_available_version_returns_latest_when_newer():
+    with patch("ct.cli.fetch_pypi_latest_version", return_value="0.0.99"):
+        assert get_upgrade_available_version("0.0.43") == "0.0.99"
+
+
+def test_get_upgrade_available_version_returns_none_when_not_newer():
+    with patch("ct.cli.fetch_pypi_latest_version", return_value="0.0.43"):
+        assert get_upgrade_available_version("0.0.43") is None
+
+
+def test_upgrade_subcommand_invokes_execute_upgrade():
+    cfg = Config(data={})
+    with patch("ct.agent.config.Config.load", return_value=cfg), patch(
+        "ct.cli.execute_upgrade", return_value=True
+    ) as mock_exec:
+        result = runner.invoke(app, ["upgrade"])
+    assert result.exit_code == 0
+    mock_exec.assert_called_once()
 
 
 def test_config_set_agent_profile_applies_preset():

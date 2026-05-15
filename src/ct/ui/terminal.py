@@ -51,6 +51,7 @@ SLASH_COMMANDS = {
     "/settings": "Configure UI and agent preferences",
     "/config": "Show active runtime configuration",
     "/keys": "Show API key setup status by service",
+    "/upgrade": "Upgrade fastfold-agent-cli via uv",
     "/doctor": "Run readiness diagnostics and fix hints",
     "/autofix": "Apply automatic local fixes for common runtime issues",
     "/usage": "Show session token/cost usage",
@@ -1266,6 +1267,7 @@ class InteractiveTerminal:
                 or cmd.startswith("/compact")
                 or cmd.startswith("/export")
                 or cmd.startswith("/notebook")
+                or cmd.startswith("/upgrade")
             ):
                 self.console.print("  [dim]Command unavailable while a generation is running.[/dim]")
                 self.console.print("  [dim]Use /interrupt, or wait for queued messages to run.[/dim]")
@@ -1323,6 +1325,10 @@ class InteractiveTerminal:
             if cmd in ("keys", "/keys"):
                 from ct.agent.config import Config
                 self.console.print(Config.load().keys_table())
+                self._advance_suggestion()
+                continue
+            if cmd in ("upgrade", "/upgrade"):
+                self._run_upgrade()
                 self._advance_suggestion()
                 continue
             if cmd in ("doctor", "/doctor"):
@@ -2474,6 +2480,18 @@ class InteractiveTerminal:
             self.console.print("  [yellow]Command timed out (30s limit).[/yellow]")
         except Exception as e:
             self.console.print(f"  [red]Error: {e}[/red]")
+
+    def _run_upgrade(self) -> None:
+        """Upgrade CLI installation using the shared uv install flow."""
+        try:
+            from ct.cli import execute_upgrade
+        except Exception as exc:
+            self.console.print(f"  [red]Could not load upgrade command:[/red] {exc}")
+            return
+
+        ok = execute_upgrade(console_obj=self.console, cfg=self.session.config)
+        if ok:
+            self.console.print("  [dim]Tip: restart fastfold to confirm the new version.[/dim]")
 
     def _list_sessions(self):
         """Show recent saved sessions."""

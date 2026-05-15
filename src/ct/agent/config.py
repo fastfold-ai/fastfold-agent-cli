@@ -163,6 +163,7 @@ DEFAULTS = {
     "knowledge.schema_monitor_enabled": False,
 
     "ops.base_dir": str(Path.home() / ".fastfold-cli" / "ops"),
+    "install.uv_flavor": None,
 }
 
 AGENT_PROFILE_PRESETS = {

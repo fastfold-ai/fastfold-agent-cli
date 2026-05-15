@@ -12,6 +12,7 @@ Usage:
 import os
 import json
 import random
+import re
 import shutil
 import subprocess
 import sys
@@ -59,6 +60,9 @@ app = typer.Typer(
 console = Console()
 FASTFOLD_CLOUD_API_KEYS_URL = "https://cloud.fastfold.ai/api-keys"
 SETUP_PROVIDER_ORDER = ("anthropic", "openai")
+UV_INSTALL_FLAVORS = frozenset({"all", "win_build"})
+PYPI_PROJECT_JSON_URL = "https://pypi.org/pypi/fastfold-agent-cli/json"
+_SEMVER_TRIPLET_PATTERN = re.compile(r"^\s*v?(\d+)\.(\d+)\.(\d+)")
 
 
 def _installed_claude_skill_names() -> list[str]:
@@ -208,6 +212,123 @@ def _random_news_item_markup() -> str:
     return "[bold #25C19F]BoltzGen universal protein design now available[/] [#7A7A7A]· Try: Show me Boltzgen protein design examples[/]"
 
 
+def _normalize_upgrade_flavor(value: object) -> Optional[str]:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in UV_INSTALL_FLAVORS else None
+
+
+def _default_upgrade_flavor() -> str:
+    return "win_build" if os.name == "nt" else "all"
+
+
+def resolve_upgrade_flavor(cfg=None, persist: bool = True) -> str:
+    """Resolve uv install flavor from config, with OS fallback."""
+    if cfg is None:
+        from ct.agent.config import Config
+        cfg = Config.load()
+
+    configured = _normalize_upgrade_flavor(cfg.get("install.uv_flavor"))
+    if configured:
+        return configured
+
+    fallback = _default_upgrade_flavor()
+    if persist:
+        try:
+            cfg.set("install.uv_flavor", fallback)
+            cfg.save()
+        except Exception:
+            # Upgrade flow should still continue even if config write fails.
+            pass
+    return fallback
+
+
+def build_upgrade_command(flavor: str) -> list[str]:
+    normalized = _normalize_upgrade_flavor(flavor) or _default_upgrade_flavor()
+    package_ref = f"fastfold-agent-cli[{normalized}]"
+    return ["uv", "tool", "install", package_ref, "--python", "3.10", "--upgrade"]
+
+
+def _parse_semver_triplet(version: str) -> Optional[tuple[int, int, int]]:
+    match = _SEMVER_TRIPLET_PATTERN.match(str(version or "").strip())
+    if not match:
+        return None
+    return tuple(int(part) for part in match.groups())
+
+
+def is_newer_version(latest: str, current: str) -> bool:
+    latest_triplet = _parse_semver_triplet(latest)
+    current_triplet = _parse_semver_triplet(current)
+    if not latest_triplet or not current_triplet:
+        return False
+    return latest_triplet > current_triplet
+
+
+def fetch_pypi_latest_version(timeout_s: float = 2.5) -> Optional[str]:
+    req = urllib.request.Request(
+        url=PYPI_PROJECT_JSON_URL,
+        headers={"Accept": "application/json"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError):
+        return None
+
+    try:
+        payload = json.loads(text) if text else {}
+    except Exception:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+    info = payload.get("info")
+    if not isinstance(info, dict):
+        return None
+    version = str(info.get("version") or "").strip()
+    return version or None
+
+
+def get_upgrade_available_version(current_version: str = __version__) -> Optional[str]:
+    latest = fetch_pypi_latest_version()
+    if not latest:
+        return None
+    return latest if is_newer_version(latest, current_version) else None
+
+
+def execute_upgrade(console_obj: Optional[Console] = None, cfg=None) -> bool:
+    """Run uv tool upgrade with persisted (or fallback) install flavor."""
+    ui = console_obj or console
+    flavor = resolve_upgrade_flavor(cfg=cfg, persist=True)
+    cmd = build_upgrade_command(flavor)
+    ui.print("\n[bold cyan]Upgrading fastfold-agent-cli[/bold cyan]")
+    ui.print(f"[dim]Flavor:[/dim] {flavor}")
+    ui.print(f"[dim]$ {' '.join(cmd)}[/dim]")
+
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError:
+        ui.print("[red]`uv` command not found. Install uv first: https://docs.astral.sh/uv/[/red]")
+        return False
+    except Exception as exc:
+        ui.print(f"[red]Upgrade failed to start:[/red] {exc}")
+        return False
+
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    if stdout:
+        ui.print(stdout)
+    if stderr:
+        ui.print(stderr, style="yellow" if proc.returncode == 0 else "red")
+
+    if proc.returncode != 0:
+        ui.print(f"[red]Upgrade failed[/red] (exit={proc.returncode}).")
+        return False
+
+    ui.print("[green]Upgrade complete.[/green] Restart `fastfold` to use the new version.")
+    return True
+
+
 # ─── Config subcommand ────────────────────────────────────────
 
 config_app = typer.Typer(help="Manage fastfold configuration")
@@ -290,6 +411,17 @@ def keys_cmd():
 
     cfg = Config.load()
     console.print(cfg.keys_table())
+
+
+@app.command("upgrade")
+def upgrade_cmd():
+    """Upgrade fastfold-agent-cli with uv tool install --upgrade."""
+    from ct.agent.config import Config
+
+    cfg = Config.load()
+    ok = execute_upgrade(console_obj=console, cfg=cfg)
+    if not ok:
+        raise typer.Exit(code=1)
 
 
 @app.command("setup")
@@ -2042,6 +2174,7 @@ def print_banner():
     if tier_display:
         status_parts.append(tier_display)
     status_line = " · ".join(status_parts)
+    upgrade_version = get_upgrade_available_version(__version__)
 
     logo_text = Text.from_markup(BANNER.strip("\n"))
     meta_lines = [
@@ -2049,6 +2182,11 @@ def print_banner():
     ]
     if status_line:
         meta_lines.append(f"[dim]{status_line}[/dim]")
+    if upgrade_version:
+        meta_lines.append(
+            f"[bold yellow]Upgrade available:[/] [dim]v{__version__} -> v{upgrade_version}[/dim] "
+            "[dim]Run [/dim][bold #D4148E]/upgrade[/]"
+        )
     meta_lines.append(f"[dim]{n_tools} tools · {n_skills} skills[/dim]")
     meta_lines.append(_random_command_tip_markup())
     meta_lines.append(_random_news_item_markup())
@@ -2123,6 +2261,7 @@ def entry():
         "doctor",
         "setup",
         "release-check",
+        "upgrade",
         "report",
         "case-study",
         "bench",
