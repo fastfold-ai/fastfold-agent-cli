@@ -7,10 +7,11 @@ Supports persistence to JSONL for session resume.
 """
 
 import json
+import re
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 
 @dataclass
@@ -39,10 +40,40 @@ class Trajectory:
         self.created_at = time.time()
         self.updated_at: float = self.created_at
         self.model: Optional[str] = None
+        self.usage_data: dict[str, Any] = {}
+        self._uuid_pattern = re.compile(
+            r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}\b"
+        )
+
+    def _extract_entities(self, text: str) -> list[str]:
+        """Extract durable identifiers (e.g., UUID job IDs) from text."""
+        if not text:
+            return []
+        return [m.group(0) for m in self._uuid_pattern.finditer(text)]
+
+    @staticmethod
+    def _dedupe_preserve_order(items: list[str]) -> list[str]:
+        seen: set[str] = set()
+        out: list[str] = []
+        for item in items:
+            if not item or item in seen:
+                continue
+            seen.add(item)
+            out.append(item)
+        return out
+
+    def _turn_entities(self, turn: Turn) -> list[str]:
+        """Resolve entities for a turn, deriving from text if missing."""
+        if turn.entities:
+            return self._dedupe_preserve_order([str(e) for e in turn.entities if str(e)])
+        inferred = self._extract_entities(turn.query) + self._extract_entities(turn.answer)
+        return self._dedupe_preserve_order(inferred)
 
     def add_turn(self, query: str, answer: str, plan=None):
         """Record a completed turn with entity extraction."""
-        entities: list[str] = []
+        entities = self._dedupe_preserve_order(
+            self._extract_entities(query) + self._extract_entities(answer)
+        )
         tools_used = []
         if plan and hasattr(plan, "steps"):
             tools_used = [s.tool for s in plan.steps if s.status == "completed"]
@@ -68,7 +99,8 @@ class Trajectory:
         recent = self.turns[-5:]
         lines = ["## Session Context (prior queries this session)", ""]
         for i, turn in enumerate(recent, 1):
-            entities_str = ", ".join(turn.entities) if turn.entities else "none"
+            resolved_entities = self._turn_entities(turn)
+            entities_str = ", ".join(resolved_entities) if resolved_entities else "none"
             tools_str = ", ".join(turn.tools_used) if turn.tools_used else "none"
             # Truncate answer to first 200 chars for context
             answer_preview = turn.answer[:200] + "..." if len(turn.answer) > 200 else turn.answer
@@ -94,7 +126,7 @@ class Trajectory:
         seen = set()
         result = []
         for turn in self.turns:
-            for entity in turn.entities:
+            for entity in self._turn_entities(turn):
                 if entity not in seen:
                     seen.add(entity)
                     result.append(entity)
@@ -117,6 +149,7 @@ class Trajectory:
                 "updated_at": self.updated_at or self.created_at,
                 "model": self.model,
                 "n_turns": len(self.turns),
+                "usage_data": self.usage_data,
             }
             f.write(json.dumps(meta) + "\n")
             # Subsequent lines: turns
@@ -148,6 +181,8 @@ class Trajectory:
                     trajectory.created_at = record.get("created_at", 0)
                     trajectory.updated_at = record.get("updated_at", trajectory.created_at)
                     trajectory.model = record.get("model")
+                    usage_data = record.get("usage_data", {})
+                    trajectory.usage_data = usage_data if isinstance(usage_data, dict) else {}
                 elif record.get("type") == "turn":
                     turn = Turn(
                         query=record.get("query", ""),
@@ -224,6 +259,15 @@ class Trajectory:
         # Sort by last activity descending (most recent first)
         sessions.sort(key=lambda s: s.get("updated_at", s.get("created_at", 0)), reverse=True)
         return sessions
+
+    def set_usage_data(self, usage_data: dict[str, Any]) -> None:
+        """Persisted usage metadata for /usage restoration on resume."""
+        self.usage_data = dict(usage_data or {})
+        self.updated_at = time.time()
+
+    def get_usage_data(self) -> dict[str, Any]:
+        """Return persisted usage metadata for this session."""
+        return dict(self.usage_data or {})
 
     @classmethod
     def delete_session(cls, path_or_session_id: Path | str) -> dict:

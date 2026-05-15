@@ -425,6 +425,42 @@ class TestTerminalMethods:
         assert markdown_calls
         assert markdown_calls[0].markup == "I can run fold."
 
+    def test_render_resumed_history_shows_generated_duration_from_trace_end(self, terminal):
+        turn = MagicMock()
+        turn.query = "run fold"
+        turn.answer = "done"
+        with patch.object(
+            terminal,
+            "_load_trace_blocks",
+            return_value=[{"events": [{"type": "text", "content": "ok"}], "end": {"duration_s": 24.0}}],
+        ), patch.object(terminal, "_replay_trace_events", return_value=True):
+            terminal._render_resumed_history(40, [turn])
+        printed = " ".join(str(c) for c in terminal.console.print.call_args_list)
+        assert "Generated for 24s" in printed
+
+    def test_restore_usage_from_trajectory(self, terminal):
+        terminal.agent = MagicMock()
+        terminal.agent.trajectory.get_usage_data.return_value = {
+            "sdk_calls": 3,
+            "sdk_input_tokens": 1000,
+            "sdk_output_tokens": 400,
+            "sdk_cache_read_tokens": 20,
+            "sdk_cache_creation_tokens": 10,
+            "sdk_cost_usd": 0.12,
+            "sdk_total_cost_usd": 0.15,
+            "sdk_extra_server_tool_cost_usd": 0.03,
+            "sdk_models": ["gpt-5.5"],
+            "sdk_turn_rows": [{"turn": 1, "input_tokens": 200}],
+        }
+        terminal._run_lock = MagicMock()
+        terminal._run_lock.__enter__ = MagicMock(return_value=None)
+        terminal._run_lock.__exit__ = MagicMock(return_value=False)
+        terminal._restore_usage_from_trajectory()
+        assert terminal._session_sdk_calls == 3
+        assert terminal._session_sdk_input_tokens == 1000
+        assert terminal._session_sdk_output_tokens == 400
+        assert terminal._session_sdk_models == {"gpt-5.5"}
+
 
 class TestExtractMentions:
     """Tests for extract_mentions() — parsing @ tokens from query text."""

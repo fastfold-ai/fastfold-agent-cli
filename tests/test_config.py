@@ -12,9 +12,11 @@ from ct.agent.config import Config, _validate_config
 
 def test_load_invalid_json_does_not_crash(monkeypatch, tmp_path):
     bad_config = tmp_path / "config.json"
+    bad_backup = tmp_path / "config.json.bak"
     bad_config.write_text("{ not valid json")
 
     monkeypatch.setattr(config_mod, "CONFIG_FILE", bad_config)
+    monkeypatch.setattr(config_mod, "CONFIG_BACKUP_FILE", bad_backup)
 
     cfg = Config.load()
     # Should fall back to defaults when config file is corrupt

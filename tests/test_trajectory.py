@@ -84,6 +84,20 @@ class TestTrajectory:
         entities = traj.entities()
         assert entities == []
 
+    def test_extracts_uuid_entities_from_turns(self):
+        traj = Trajectory()
+        job_id = "0390dc98-ad2c-409a-bd11-f0ed280beef9"
+        traj.add_turn("Run fold", f"Completed. job_id: {job_id}")
+        assert traj.turns[0].entities == [job_id]
+        assert traj.entities() == [job_id]
+
+    def test_entities_fallback_extracts_uuid_for_legacy_turns(self):
+        traj = Trajectory()
+        job_id = "0390dc98-ad2c-409a-bd11-f0ed280beef9"
+        # Simulate legacy turn where entities were not persisted.
+        traj.turns.append(Turn(query="Analyze structure", answer=f"use job {job_id}", entities=[]))
+        assert traj.entities() == [job_id]
+
 
 class TestPersistence:
     """Test saving and loading trajectories to/from JSONL."""
@@ -204,6 +218,27 @@ class TestPersistence:
 
         assert loaded.turns[0].entities == []
         assert "literature.pubmed_search" in loaded.turns[0].tools_used
+
+    def test_roundtrip_preserves_usage_data(self, tmp_path):
+        traj = Trajectory(session_id="usage")
+        traj.set_usage_data(
+            {
+                "sdk_calls": 2,
+                "sdk_input_tokens": 120,
+                "sdk_output_tokens": 45,
+                "sdk_models": ["gpt-5.5"],
+                "sdk_turn_rows": [{"turn": 1, "input_tokens": 60, "output_tokens": 20}],
+            }
+        )
+        path = tmp_path / "usage.jsonl"
+        traj.save(path)
+
+        loaded = Trajectory.load(path)
+        usage = loaded.get_usage_data()
+        assert usage["sdk_calls"] == 2
+        assert usage["sdk_input_tokens"] == 120
+        assert usage["sdk_output_tokens"] == 45
+        assert usage["sdk_models"] == ["gpt-5.5"]
 
     def test_delete_session_removes_jsonl_and_trace(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Trajectory, "sessions_dir", staticmethod(lambda: tmp_path))

@@ -863,6 +863,66 @@ class InteractiveTerminal:
                     "timestamp": time.time(),
                 }
             )
+        self._persist_usage_to_trajectory()
+
+    def _usage_snapshot(self) -> dict:
+        """Create a serializable snapshot of current session usage counters."""
+        with self._run_lock:
+            return {
+                "sdk_calls": int(self._session_sdk_calls),
+                "sdk_input_tokens": int(self._session_sdk_input_tokens),
+                "sdk_output_tokens": int(self._session_sdk_output_tokens),
+                "sdk_cache_read_tokens": int(self._session_sdk_cache_read_tokens),
+                "sdk_cache_creation_tokens": int(self._session_sdk_cache_creation_tokens),
+                "sdk_cost_usd": float(self._session_sdk_cost_usd),
+                "sdk_total_cost_usd": float(self._session_sdk_total_cost_usd),
+                "sdk_extra_server_tool_cost_usd": float(self._session_sdk_extra_server_tool_cost_usd),
+                "sdk_models": sorted(self._session_sdk_models),
+                "sdk_turn_rows": list(self._session_sdk_turn_rows),
+            }
+
+    def _persist_usage_to_trajectory(self) -> None:
+        """Persist usage snapshot alongside trajectory metadata for resume."""
+        trajectory = getattr(getattr(self, "agent", None), "trajectory", None)
+        if trajectory is None:
+            return
+        snapshot = self._usage_snapshot()
+        if hasattr(trajectory, "set_usage_data"):
+            trajectory.set_usage_data(snapshot)
+            trajectory.save()
+
+    def _restore_usage_from_trajectory(self) -> None:
+        """Restore usage counters from persisted session metadata."""
+        trajectory = getattr(getattr(self, "agent", None), "trajectory", None)
+        if trajectory is None or not hasattr(trajectory, "get_usage_data"):
+            return
+        raw = trajectory.get_usage_data()
+        if not isinstance(raw, dict) or not raw:
+            return
+
+        rows_raw = raw.get("sdk_turn_rows")
+        rows: list[dict] = rows_raw if isinstance(rows_raw, list) else []
+        models_raw = raw.get("sdk_models")
+        if isinstance(models_raw, str):
+            models = {models_raw} if models_raw else set()
+        elif isinstance(models_raw, (list, tuple, set)):
+            models = {str(m).strip() for m in models_raw if str(m).strip()}
+        else:
+            models = set()
+
+        with self._run_lock:
+            self._session_sdk_calls = self._coerce_token_count(raw.get("sdk_calls"))
+            self._session_sdk_input_tokens = self._coerce_token_count(raw.get("sdk_input_tokens"))
+            self._session_sdk_output_tokens = self._coerce_token_count(raw.get("sdk_output_tokens"))
+            self._session_sdk_cache_read_tokens = self._coerce_token_count(raw.get("sdk_cache_read_tokens"))
+            self._session_sdk_cache_creation_tokens = self._coerce_token_count(raw.get("sdk_cache_creation_tokens"))
+            self._session_sdk_cost_usd = self._coerce_cost(raw.get("sdk_cost_usd"))
+            self._session_sdk_total_cost_usd = self._coerce_cost(raw.get("sdk_total_cost_usd"))
+            self._session_sdk_extra_server_tool_cost_usd = self._coerce_cost(
+                raw.get("sdk_extra_server_tool_cost_usd")
+            )
+            self._session_sdk_models = models
+            self._session_sdk_turn_rows = [r for r in rows if isinstance(r, dict)]
 
     def _toolbar_spinner_markup(self) -> str:
         """Render spinner frame with subtle cycling color."""
@@ -1125,6 +1185,7 @@ class InteractiveTerminal:
                     self.agent = AgentLoop.resume_latest(self.session)
                 else:
                     self.agent = AgentLoop.resume(self.session, resume_id)
+                self._restore_usage_from_trajectory()
                 n = len(self.agent.trajectory.turns)
                 title = self.agent.trajectory.title or "untitled"
                 self.console.print(f"  [green]Resumed session[/green] [bold]{self.agent.trajectory.session_id}[/bold] — {title} ({n} turns)")
@@ -1566,6 +1627,16 @@ class InteractiveTerminal:
 
         return rendered_text
 
+    @staticmethod
+    def _format_duration_label(duration_s: float) -> str:
+        """Format generation duration like live footer (e.g., 24s, 1m 05s)."""
+        duration = max(0.0, float(duration_s))
+        if duration >= 60:
+            mins = int(duration // 60)
+            secs = int(duration % 60)
+            return f"{mins}m {secs}s"
+        return f"{int(round(duration))}s"
+
     def _render_resumed_history(self, term_width: int, turns: list) -> None:
         """Render saved turns so resumed sessions reopen with full context."""
         if not turns:
@@ -1581,12 +1652,22 @@ class InteractiveTerminal:
             if query:
                 self.console.print(f"❯ {query}", markup=False)
             rendered_from_trace = False
+            duration_s = None
             if idx < len(trace_blocks):
+                end = trace_blocks[idx].get("end", {})
+                if isinstance(end, dict):
+                    raw_duration = end.get("duration_s")
+                    if isinstance(raw_duration, (int, float)):
+                        duration_s = float(raw_duration)
                 events = trace_blocks[idx].get("events", [])
                 if isinstance(events, list) and events:
                     rendered_from_trace = self._replay_trace_events(events)
             if answer and not rendered_from_trace:
                 self.console.print(RichMarkdown(answer))
+            if duration_s is not None:
+                self.console.print(
+                    f"  [#7f8790]✻ Generated for {self._format_duration_label(duration_s)}[/]"
+                )
 
     def _switch_model(self):
         """Interactive model switcher."""
@@ -1792,9 +1873,6 @@ class InteractiveTerminal:
             sdk_out = int(self._session_sdk_output_tokens)
             sdk_cache_read = int(self._session_sdk_cache_read_tokens)
             sdk_cache_create = int(self._session_sdk_cache_creation_tokens)
-            sdk_cost = float(self._session_sdk_cost_usd)
-            sdk_total_cost = float(self._session_sdk_total_cost_usd)
-            sdk_extra_cost = float(self._session_sdk_extra_server_tool_cost_usd)
             sdk_models = sorted(self._session_sdk_models)
             sdk_rows = list(self._session_sdk_turn_rows)
 
@@ -1807,7 +1885,6 @@ class InteractiveTerminal:
             table.add_column("Output", justify="right", style="green")
             table.add_column("Cache Read", justify="right", style="dim")
             table.add_column("Cache Create", justify="right", style="dim")
-            table.add_column("Cost (USD)", justify="right", style="yellow")
             table.add_column("Models", style="dim")
 
             for row in sdk_rows:
@@ -1818,7 +1895,6 @@ class InteractiveTerminal:
                     f"{int(row.get('output_tokens', 0)):,}",
                     f"{int(row.get('cache_read_tokens', 0)):,}",
                     f"{int(row.get('cache_creation_tokens', 0)):,}",
-                    f"${float(row.get('cost_usd', 0.0)):.4f}",
                     models,
                 )
 
@@ -1829,16 +1905,10 @@ class InteractiveTerminal:
                 f"{sdk_out:,}",
                 f"{sdk_cache_read:,}",
                 f"{sdk_cache_create:,}",
-                f"${sdk_cost:.4f}",
                 total_models,
                 style="bold",
             )
             self.console.print(table)
-            if sdk_extra_cost > 0.0:
-                self.console.print(
-                    f"  [dim]Extra server-tool charges (outside token rows): ${sdk_extra_cost:.4f} "
-                    f"(SDK total: ${sdk_total_cost:.4f})[/dim]"
-                )
             return
 
         # Fallback for legacy non-SDK flows.
@@ -2464,6 +2534,7 @@ class InteractiveTerminal:
 
         try:
             self.agent = AgentLoop.resume(self.session, session_id)
+            self._restore_usage_from_trajectory()
             n = len(self.agent.trajectory.turns)
             title = self.agent.trajectory.title or "untitled"
             self.console.print(f"  [green]Resumed[/green] [bold]{session_id}[/bold] — {title} ({n} turns)")
