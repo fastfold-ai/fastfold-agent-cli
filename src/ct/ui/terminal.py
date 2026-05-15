@@ -63,6 +63,7 @@ SLASH_COMMANDS = {
     "/notebook": "Export current session as Jupyter notebook (.ipynb)",
     "/compact": "Compress session context for longer runs",
     "/agents": "Run a query with N parallel research agents",
+    "/new": "Start a new empty session",
     "/sessions": "List saved sessions (or delete: /sessions delete <id>)",
     "/resume": "Resume a previous session by id/index",
     "/case-study": "Run/list curated case studies (/case-study list)",
@@ -1260,6 +1261,7 @@ class InteractiveTerminal:
                 cmd.startswith("/model")
                 or cmd.startswith("/settings")
                 or cmd.startswith("/plan")
+                or cmd.startswith("/new")
                 or cmd.startswith("/sessions")
                 or cmd.startswith("/resume")
                 or cmd.startswith("/agents")
@@ -1384,6 +1386,9 @@ class InteractiveTerminal:
                 parts = query.split(maxsplit=1)
                 instructions = parts[1] if len(parts) > 1 else None
                 self._compact_context(instructions)
+                continue
+            if cmd in ("new", "/new"):
+                self._new_session()
                 continue
             if cmd.startswith("/sessions") or cmd == "sessions":
                 parts = query.split(maxsplit=2)
@@ -2531,9 +2536,15 @@ class InteractiveTerminal:
             else None
         )
 
+        def _preview_text(value: object, max_len: int = 70) -> str:
+            # Keep preview strictly single-line so long multiline prompts
+            # don't break row layout in the sessions table.
+            normalized = " ".join(str(value or "untitled").split())
+            return normalized[:max_len] if normalized else "untitled"
+
         for s in sessions[:20]:
             sid = str(s.get("session_id", "?"))
-            title = str(s.get("title") or "untitled")
+            title = _preview_text(s.get("title"))
             model = str(s.get("model") or "—")
             n_turns = int(s.get("n_turns") or 0)
             updated_at = s.get("updated_at", s.get("created_at"))
@@ -2541,7 +2552,7 @@ class InteractiveTerminal:
             table.add_row(
                 marker,
                 sid,
-                title[:70],
+                title,
                 str(n_turns),
                 model,
                 _relative_time(updated_at),
@@ -2619,9 +2630,49 @@ class InteractiveTerminal:
         except FileNotFoundError:
             self.console.print(f"  [yellow]Session '{session_id}' not found.[/yellow]")
 
+    def _reset_usage_counters(self) -> None:
+        """Reset per-session usage counters for a fresh session."""
+        with self._run_lock:
+            self._session_sdk_calls = 0
+            self._session_sdk_input_tokens = 0
+            self._session_sdk_output_tokens = 0
+            self._session_sdk_cache_read_tokens = 0
+            self._session_sdk_cache_creation_tokens = 0
+            self._session_sdk_cost_usd = 0.0
+            self._session_sdk_total_cost_usd = 0.0
+            self._session_sdk_extra_server_tool_cost_usd = 0.0
+            self._session_sdk_models = set()
+            self._session_sdk_turn_rows = []
+
+    def _new_session(self) -> None:
+        """Start a brand-new local session."""
+        from ct.agent.loop import AgentLoop
+
+        # Clear visible transcript so /new feels like a blank chat start.
+        self.console.clear()
+        try:
+            # Mirror startup UX when beginning a fresh session.
+            from ct.cli import print_banner
+            # Add slight top margin so content isn't pinned to row 1.
+            self.console.print()
+            self.console.print()
+            self.console.print()
+            self.console.print()
+            self.console.print()
+            self.console.print()
+            print_banner()
+            self.console.print()
+        except Exception:
+            pass
+        self.agent = AgentLoop(self.session)
+        self._reset_usage_counters()
+        self._last_response = None
+        self.console.print(
+            f"  [green]Started new session[/green] [bold]{self.agent.trajectory.session_id}[/bold]."
+        )
+
     def _delete_session(self, identifier: str | None = None) -> None:
         """Delete a saved session (and trace file) by id, prefix, number, or 'last'."""
-        from ct.agent.loop import AgentLoop
         from ct.agent.trajectory import Trajectory
 
         sessions = Trajectory.list_sessions()
@@ -2662,7 +2713,7 @@ class InteractiveTerminal:
             else None
         )
         if current_session_id == session_id:
-            self.agent = AgentLoop(self.session)
+            self._new_session()
             self.console.print(
                 f"  [dim]Current session was deleted; switched to new session {self.agent.trajectory.session_id}.[/dim]"
             )

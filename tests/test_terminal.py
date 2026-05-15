@@ -28,7 +28,7 @@ class TestSlashCommands:
 
     def test_core_commands_registered(self):
         expected = ["/help", "/tools", "/model", "/settings", "/usage", "/copy",
-                    "/export", "/compact", "/sessions", "/resume", "/upgrade",
+                    "/export", "/compact", "/new", "/sessions", "/resume", "/upgrade",
                     "/clear", "/exit", "/config", "/keys", "/doctor"]
         for cmd in expected:
             assert cmd in SLASH_COMMANDS, f"{cmd} not in SLASH_COMMANDS"
@@ -56,6 +56,9 @@ class TestTerminalMethods:
             t._show_exit_hint = False
             t._suggestions = list(DEFAULT_SUGGESTIONS)
             t._suggestion_idx = 0
+            t._run_lock = MagicMock()
+            t._run_lock.__enter__ = MagicMock(return_value=None)
+            t._run_lock.__exit__ = MagicMock(return_value=False)
             return t
 
     def test_model_display_name(self, terminal):
@@ -319,6 +322,33 @@ class TestTerminalMethods:
         headers = [col.header for col in table.columns]
         assert headers == ["", "ID", "Preview", "Messages", "Model", "Last Used"]
 
+    def test_list_sessions_preview_collapses_multiline_titles(self, terminal):
+        terminal.agent = MagicMock()
+        terminal.agent.trajectory.session_id = "ab123456"
+        sessions = [
+            {
+                "session_id": "ab123456",
+                "title": "Use esm1b in Fastfold to run a fold job.\n\nUse these sequences:\nSequence 1",
+                "n_turns": 3,
+                "model": "claude-sonnet-4-5-20250929",
+                "created_at": 1000,
+                "updated_at": 2000,
+            },
+        ]
+        with patch("ct.agent.trajectory.Trajectory.list_sessions", return_value=sessions), patch(
+            "time.time", return_value=2002
+        ):
+            terminal._list_sessions()
+
+        table_calls = [
+            c for c in terminal.console.print.call_args_list if c.args and isinstance(c.args[0], Table)
+        ]
+        table = table_calls[-1].args[0]
+        previews = list(getattr(table.columns[2], "_cells", []))
+        assert previews
+        assert "\n" not in previews[0]
+        assert "Use these sequences:" in previews[0]
+
     def test_resume_session_accepts_session_prefix(self, terminal):
         sessions = [
             {"session_id": "abc12345"},
@@ -357,6 +387,42 @@ class TestTerminalMethods:
         ), patch("ct.agent.loop.AgentLoop", return_value=new_loop):
             terminal._delete_session("abc12345")
         assert terminal.agent is new_loop
+
+    def test_new_session_creates_fresh_loop_and_resets_usage(self, terminal):
+        terminal.agent = MagicMock()
+        terminal._last_response = "old response"
+        terminal._session_sdk_calls = 5
+        terminal._session_sdk_input_tokens = 100
+        terminal._session_sdk_output_tokens = 50
+        terminal._session_sdk_cache_read_tokens = 10
+        terminal._session_sdk_cache_creation_tokens = 2
+        terminal._session_sdk_cost_usd = 1.2
+        terminal._session_sdk_total_cost_usd = 1.3
+        terminal._session_sdk_extra_server_tool_cost_usd = 0.1
+        terminal._session_sdk_models = {"gpt-5.5"}
+        terminal._session_sdk_turn_rows = [{"turn": 1}]
+
+        new_loop = MagicMock()
+        new_loop.trajectory.session_id = "new12345"
+        with patch("ct.agent.loop.AgentLoop", return_value=new_loop), patch(
+            "ct.cli.print_banner"
+        ) as mock_print_banner:
+            terminal._new_session()
+
+        terminal.console.clear.assert_called_once()
+        mock_print_banner.assert_called_once()
+        assert terminal.agent is new_loop
+        assert terminal._last_response is None
+        assert terminal._session_sdk_calls == 0
+        assert terminal._session_sdk_input_tokens == 0
+        assert terminal._session_sdk_output_tokens == 0
+        assert terminal._session_sdk_cache_read_tokens == 0
+        assert terminal._session_sdk_cache_creation_tokens == 0
+        assert terminal._session_sdk_cost_usd == 0.0
+        assert terminal._session_sdk_total_cost_usd == 0.0
+        assert terminal._session_sdk_extra_server_tool_cost_usd == 0.0
+        assert terminal._session_sdk_models == set()
+        assert terminal._session_sdk_turn_rows == []
 
     def test_print_exit_with_resume_hint(self, terminal):
         terminal.agent = MagicMock()
