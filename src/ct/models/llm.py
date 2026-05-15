@@ -15,6 +15,22 @@ import time
 logger = logging.getLogger("ct.llm")
 
 
+def _openai_token_limit_kwargs(model: str, max_tokens: int) -> dict[str, int]:
+    """Return OpenAI token limit arg compatible with model family."""
+    model_name = str(model or "").strip().lower()
+    if model_name.startswith("gpt-5"):
+        return {"max_completion_tokens": int(max_tokens)}
+    return {"max_tokens": int(max_tokens)}
+
+
+def _openai_temperature_kwargs(model: str, temperature: float) -> dict[str, float]:
+    """Return OpenAI temperature kwargs compatible with model family."""
+    model_name = str(model or "").strip().lower()
+    if model_name.startswith("gpt-5"):
+        return {}
+    return {"temperature": float(temperature)}
+
+
 @dataclass
 class LLMResponse:
     """Standardized response from any LLM backend."""
@@ -277,8 +293,8 @@ class LLMClient:
         stream = client.chat.completions.create(
             model=self.model,
             messages=all_messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
+            **_openai_temperature_kwargs(self.model or "", temperature),
+            **_openai_token_limit_kwargs(self.model or "", max_tokens),
             stream=True,
             stream_options={"include_usage": True},
         )
@@ -302,8 +318,8 @@ class LLMClient:
         response = client.chat.completions.create(
             model=self.model,
             messages=all_messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
+            **_openai_temperature_kwargs(self.model or "", temperature),
+            **_openai_token_limit_kwargs(self.model or "", max_tokens),
         )
         return LLMResponse(
             content=response.choices[0].message.content,

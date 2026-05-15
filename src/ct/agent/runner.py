@@ -28,6 +28,7 @@ from ct.agent.claude_code_cli import resolve_claude_sdk_cli_path
 from ct.agent.types import ExecutionResult, Plan, Step
 
 logger = logging.getLogger("ct.runner")
+OPENAI_MAX_TOOLS = 128
 
 
 def _claude_sdk_cli_path() -> str | None:
@@ -63,6 +64,78 @@ def _inline_system_prompt_into_user_prompt(system_prompt: str, user_prompt: str)
         f"{user_prompt}"
     )
     return minimal_system_prompt, bridged_user_prompt
+
+
+def _limit_openai_tool_specs(tool_specs: list[Any], max_tools: int = OPENAI_MAX_TOOLS) -> list[Any]:
+    """Cap OpenAI tools to API max while preserving sandbox tools when possible."""
+    if len(tool_specs) <= max_tools:
+        return list(tool_specs)
+
+    pinned_names = ("run_python", "run_r", "shell.run")
+    selected = list(tool_specs[:max_tools])
+    selected_names = {getattr(spec, "name", "") for spec in selected}
+    by_name = {getattr(spec, "name", ""): spec for spec in tool_specs}
+
+    for pinned_name in pinned_names:
+        pinned_spec = by_name.get(pinned_name)
+        if pinned_spec is None or pinned_name in selected_names:
+            continue
+        replace_idx = next(
+            (
+                idx
+                for idx in range(len(selected) - 1, -1, -1)
+                if getattr(selected[idx], "name", "") not in pinned_names
+            ),
+            None,
+        )
+        if replace_idx is not None:
+            old_name = getattr(selected[replace_idx], "name", "")
+            selected[replace_idx] = pinned_spec
+            selected_names.discard(old_name)
+            selected_names.add(pinned_name)
+
+    return selected
+
+
+def _build_openai_tool_name_maps(tool_specs: list[Any]) -> tuple[dict[str, str], dict[str, str]]:
+    """Create stable OpenAI-safe tool names and reverse mapping."""
+    used: set[str] = set()
+    openai_to_runtime: dict[str, str] = {}
+    runtime_to_openai: dict[str, str] = {}
+
+    for spec in tool_specs:
+        runtime_name = str(getattr(spec, "name", "") or "").strip()
+        base = re.sub(r"[^a-zA-Z0-9_-]", "_", runtime_name)
+        if not base:
+            base = "tool"
+        candidate = base
+        i = 2
+        while candidate in used:
+            candidate = f"{base}_{i}"
+            i += 1
+        used.add(candidate)
+        openai_to_runtime[candidate] = runtime_name
+        runtime_to_openai[runtime_name] = candidate
+
+    return openai_to_runtime, runtime_to_openai
+
+
+def _openai_token_limit_kwargs(model: str, max_tokens: int) -> dict[str, int]:
+    """Return correct token limit kwarg for model family."""
+    model_name = str(model or "").strip().lower()
+    # GPT-5 family requires max_completion_tokens instead of max_tokens.
+    if model_name.startswith("gpt-5"):
+        return {"max_completion_tokens": int(max_tokens)}
+    return {"max_tokens": int(max_tokens)}
+
+
+def _openai_temperature_kwargs(model: str, temperature: float) -> dict[str, float]:
+    """Return temperature kwargs compatible with model family."""
+    model_name = str(model or "").strip().lower()
+    # GPT-5 chat completions currently only support default temperature behavior.
+    if model_name.startswith("gpt-5"):
+        return {}
+    return {"temperature": float(temperature)}
 
 
 # ------------------------------------------------------------------
@@ -153,6 +226,53 @@ def _safe_float(value: Any) -> float:
         return float(text)
     except Exception:
         return 0.0
+
+
+def _format_openai_error(exc: Exception) -> str:
+    """Extract a readable OpenAI error plus actionable hints."""
+    status = getattr(exc, "status_code", None)
+    message = str(exc).strip() or "Unknown OpenAI error"
+    body = getattr(exc, "body", None)
+    if not isinstance(body, dict):
+        response = getattr(exc, "response", None)
+        if response is not None:
+            with suppress(Exception):
+                parsed = response.json()
+                if isinstance(parsed, dict):
+                    body = parsed
+    if isinstance(body, dict):
+        err = body.get("error") if isinstance(body.get("error"), dict) else {}
+        msg = str(err.get("message") or "").strip()
+        code = str(err.get("code") or "").strip()
+        if msg:
+            message = msg
+        if code:
+            message = f"{message} (code={code})"
+
+    hint = ""
+    text = message.lower()
+    if status == 401 or "invalid_api_key" in text or "incorrect api key" in text:
+        hint = (
+            "OpenAI authentication failed. Set OPENAI_API_KEY or run "
+            "`fastfold config set llm.openai_api_key <key>`."
+        )
+    elif status == 400 and any(
+        k in text for k in ("model", "not found", "do not have access", "unsupported")
+    ):
+        hint = "Selected model may be unavailable for this account. Use `/model` to choose another OpenAI model."
+    elif status == 400:
+        hint = "OpenAI rejected the request parameters. Try a different model via `/model`."
+
+    if status == 400 and message.lower().strip() in {"error code: 400", "bad request"}:
+        hint = (
+            "OpenAI rejected the request. This often means the selected model is unavailable "
+            "for your account or incompatible with the current API path. Use `/model` to choose "
+            "another OpenAI model."
+        )
+
+    if hint:
+        return f"OpenAI request failed: {message}\n{hint}"
+    return f"OpenAI request failed: {message}"
 
 
 def _as_dict(value: Any) -> dict[str, Any] | None:
@@ -1204,6 +1324,17 @@ class AgentRunner:
         Uses ``ClaudeSDKClient`` (bidirectional client) which supports custom
         MCP tools, unlike ``query()`` which does not.
         """
+        provider = str(self.session.config.get("llm.provider", "anthropic") or "anthropic").strip().lower()
+        if provider == "openai":
+            return await self._run_async_openai(query, context, progress_callback)
+        if provider != "anthropic":
+            duration = 0.0
+            return self._make_error_result(
+                query,
+                f"Unsupported llm.provider for AgentRunner: {provider}",
+                duration,
+            )
+
         from claude_agent_sdk import (
             ClaudeSDKClient,
             ClaudeAgentOptions,
@@ -1532,7 +1663,6 @@ class AgentRunner:
                     non_code_results[key] = tc
 
             enriched: list[dict] = []
-            non_code_iter_idx = {}  # track which non-code tool_calls we've used
             for event in trace_events:
                 enriched.append(event)
                 if event.get("type") != "tool_start":
@@ -1620,6 +1750,432 @@ class AgentRunner:
                 )
 
         return exec_result
+
+    async def _run_async_openai(
+        self,
+        query: str,
+        context: dict | None = None,
+        progress_callback=None,
+    ) -> ExecutionResult:
+        """Execute a query using OpenAI chat completions + tool calling."""
+        import openai
+
+        from ct.agent.mcp_server import create_ct_tool_runtime
+        from ct.agent.system_prompt import build_system_prompt
+        from ct.models.llm import MODEL_PRICING
+        from ct.ui.traces import TraceRenderer
+
+        t0 = time.time()
+        config = self.session.config
+        ctx = context or {}
+
+        allow_live_spinner = (not self._headless) and (progress_callback is None)
+        thinking_status = None
+        if allow_live_spinner:
+            from ct.ui.status import ThinkingStatus
+
+            thinking_status = ThinkingStatus(self.session.console, phase="planning")
+            thinking_status.__enter__()
+            thinking_status.start_async_refresh()
+            self._active_spinner = thinking_status
+
+        def _emit_progress(event: str, **payload) -> None:
+            if not progress_callback:
+                return
+            try:
+                progress_callback(event, **payload)
+                return
+            except TypeError:
+                pass
+            except Exception:
+                return
+            if event == "activity":
+                text = str(payload.get("text") or "").strip()
+                if text:
+                    with suppress(Exception):
+                        progress_callback(text)
+
+        try:
+            exclude_cats = set()
+            if not config.get("agent.enable_experimental_tools", False):
+                from ct.tools import EXPERIMENTAL_CATEGORIES
+
+                exclude_cats = set(EXPERIMENTAL_CATEGORIES)
+
+            tool_specs, tool_executor, sandbox, _tool_names, code_trace_buffer = create_ct_tool_runtime(
+                self.session,
+                exclude_categories=exclude_cats,
+            )
+            openai_tool_specs = _limit_openai_tool_specs(tool_specs, OPENAI_MAX_TOOLS)
+            openai_tool_names = [spec.name for spec in openai_tool_specs]
+            openai_to_runtime_tool, runtime_to_openai_tool = _build_openai_tool_name_maps(
+                openai_tool_specs
+            )
+            if len(tool_specs) > len(openai_tool_specs):
+                logger.info(
+                    "OpenAI tool payload capped: %s -> %s",
+                    len(tool_specs),
+                    len(openai_tool_specs),
+                )
+
+            data_context = None
+            data_dir = ctx.get("data_dir")
+            if data_dir:
+                data_context = f"Data directory: {data_dir}\n"
+                config.set("sandbox.extra_read_dirs", str(data_dir))
+
+            history = None
+            if self.trajectory and self.trajectory.turns:
+                history = self.trajectory.context_for_planner()
+
+            system_prompt = build_system_prompt(
+                self.session,
+                tool_names=openai_tool_names,
+                data_context=data_context,
+                history=history,
+            )
+
+            user_prompt = query
+            context_parts = []
+            if ctx.get("compound_smiles"):
+                context_parts.append(f"Compound SMILES: {ctx['compound_smiles']}")
+            if ctx.get("target"):
+                context_parts.append(f"Target: {ctx['target']}")
+            if ctx.get("indication"):
+                context_parts.append(f"Indication: {ctx['indication']}")
+            if ctx.get("mention_context"):
+                context_parts.append(ctx["mention_context"])
+            if context_parts:
+                user_prompt = query + "\n\nContext:\n" + "\n".join(context_parts)
+
+            effective_system_prompt = system_prompt
+            if _windows_should_inline_system_prompt(system_prompt):
+                effective_system_prompt, user_prompt = _inline_system_prompt_into_user_prompt(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                )
+
+            model = config.get("llm.model") or "gpt-4o"
+            max_turns = int(config.get("agent.max_sdk_turns", 30))
+            temperature = float(config.get("llm.temperature", 0.1))
+            max_tokens = int(config.get("agent.synthesis_max_tokens", 8192))
+            plan_preview = bool(config.get("agent.plan_preview", False))
+
+            api_key = config.llm_api_key("openai")
+            client = openai.OpenAI(api_key=api_key)
+
+            if plan_preview and not self._headless:
+                plan_resp = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": "Create a concise execution plan before running tools."},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    **_openai_temperature_kwargs(model, 0.1),
+                    **_openai_token_limit_kwargs(model, 700),
+                )
+                proposed_plan = ((plan_resp.choices or [None])[0].message.content or "").strip()
+                if proposed_plan:
+                    self.session.console.print("\n  [bold cyan]Proposed Plan[/bold cyan]")
+                    self.session.console.print(f"  {proposed_plan}\n")
+                    try:
+                        answer = input("  Execute this plan? [Y/n] ").strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        answer = "n"
+                    if answer not in {"", "y", "yes"}:
+                        duration = time.time() - t0
+                        return self._make_error_result(
+                            query,
+                            "User rejected plan preview.",
+                            duration,
+                        )
+
+            openai_tools = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": runtime_to_openai_tool.get(spec.name, spec.name),
+                        "description": spec.description,
+                        "parameters": spec.input_schema,
+                    },
+                }
+                for spec in openai_tool_specs
+            ]
+
+            trace_renderer = TraceRenderer(self.session.console)
+            trace_events: list[dict] = [] if self.trace_store is not None else []
+            full_text: list[str] = []
+            tool_calls: list[dict] = []
+            token_usage = {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+            }
+
+            messages: list[dict[str, Any]] = [
+                {"role": "system", "content": effective_system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+
+            for _ in range(max_turns):
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    tools=openai_tools,
+                    tool_choice="auto",
+                    **_openai_temperature_kwargs(model, temperature),
+                    **_openai_token_limit_kwargs(model, max_tokens),
+                )
+                usage = response.usage
+                if usage:
+                    token_usage["input_tokens"] = max(
+                        int(token_usage["input_tokens"]),
+                        int(getattr(usage, "prompt_tokens", 0) or 0),
+                    )
+                    token_usage["output_tokens"] = max(
+                        int(token_usage["output_tokens"]),
+                        int(getattr(usage, "completion_tokens", 0) or 0),
+                    )
+                    _emit_progress(
+                        "usage",
+                        input_tokens=token_usage["input_tokens"],
+                        output_tokens=token_usage["output_tokens"],
+                        cache_creation_input_tokens=0,
+                        cache_read_input_tokens=0,
+                    )
+
+                choice = (response.choices or [None])[0]
+                if choice is None or choice.message is None:
+                    break
+                msg = choice.message
+
+                content_text = msg.content or ""
+                if content_text.strip():
+                    if thinking_status is not None:
+                        thinking_status.stop()
+                        thinking_status = None
+                        self._active_spinner = None
+                    full_text.append(content_text)
+                    if trace_events is not None:
+                        trace_events.append(
+                            {
+                                "type": "text",
+                                "content": content_text,
+                                "timestamp": time.time(),
+                            }
+                        )
+                    if not self._headless:
+                        trace_renderer.render_reasoning(content_text)
+                    snippet = content_text.strip().replace("\n", " ")[:40]
+                    if snippet:
+                        _emit_progress("activity", text=snippet)
+
+                msg_tool_calls = list(getattr(msg, "tool_calls", None) or [])
+                if not msg_tool_calls:
+                    break
+
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": content_text or "",
+                        "tool_calls": [tc.model_dump() for tc in msg_tool_calls],
+                    }
+                )
+
+                for tc in msg_tool_calls:
+                    openai_tool_name = tc.function.name
+                    tool_name = openai_to_runtime_tool.get(openai_tool_name, openai_tool_name)
+                    call_id = tc.id
+                    try:
+                        tool_args = json.loads(tc.function.arguments or "{}")
+                    except json.JSONDecodeError:
+                        tool_args = {}
+
+                    start = time.time()
+                    tool_calls.append({"name": tool_name, "input": tool_args})
+                    if trace_events is not None:
+                        trace_events.append(
+                            {
+                                "type": "tool_start",
+                                "tool": tool_name,
+                                "input": tool_args,
+                                "tool_use_id": call_id,
+                                "timestamp": start,
+                            }
+                        )
+                    if not self._headless:
+                        trace_renderer.render_tool_start(tool_name, tool_args)
+                    _emit_progress("activity", text=f"\u25b8 {tool_name}")
+
+                    tool_result = await tool_executor.run(tool_name, tool_args)
+                    duration_s = max(0.0, time.time() - start)
+                    parts = tool_result.get("content", [])
+                    text_parts = []
+                    for part in parts:
+                        if isinstance(part, dict) and part.get("type") == "text":
+                            text_parts.append(str(part.get("text", "")))
+                    result_text = "\n".join([p for p in text_parts if p]).strip()
+                    is_error = bool(tool_result.get("is_error"))
+
+                    for tc_entry in reversed(tool_calls):
+                        if tc_entry.get("name") == tool_name and "result_text" not in tc_entry:
+                            tc_entry["result_text"] = result_text
+                            tc_entry["duration_s"] = duration_s
+                            break
+
+                    if trace_events is not None:
+                        trace_events.append(
+                            {
+                                "type": "tool_result",
+                                "tool": tool_name,
+                                "tool_use_id": call_id,
+                                "result_text": result_text,
+                                "is_error": is_error,
+                                "duration_s": duration_s,
+                                "timestamp": time.time(),
+                            }
+                        )
+                    if not self._headless:
+                        if is_error:
+                            trace_renderer.render_tool_error(tool_name, result_text)
+                        else:
+                            trace_renderer.render_tool_complete(
+                                tool_name, tool_args, result_text, duration_s
+                            )
+
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call_id,
+                            "content": result_text or "(no output)",
+                        }
+                    )
+
+            duration = time.time() - t0
+            summary = "\n".join(full_text).strip() or "(Agent produced no text output)"
+            guardrail_unverified_execution = False
+            if _looks_like_unverified_execution_claim(summary, tool_calls):
+                guardrail_unverified_execution = True
+                summary = (
+                    "I did not execute any tool calls in this turn, so I cannot confirm a submission, "
+                    "status, or generated job/workflow ID. Ask me to run the submission now and I will "
+                    "execute it and return the real ID from tool output."
+                )
+
+            answer = None
+            if sandbox:
+                result_var = sandbox.get_variable("result")
+                if isinstance(result_var, dict):
+                    answer = result_var.get("answer")
+
+            steps = []
+            for i, tc in enumerate(tool_calls, 1):
+                step = Step(
+                    id=i,
+                    tool=tc["name"].replace("mcp__ct-tools__", ""),
+                    description=f"Called {tc['name']}",
+                    tool_args=tc.get("input", {}),
+                )
+                step.status = "completed"
+                steps.append(step)
+            plan = Plan(query=query, steps=steps)
+
+            pricing = MODEL_PRICING.get(model, {})
+            input_cost = (
+                float(token_usage["input_tokens"]) / 1_000_000.0 * float(pricing.get("input", 0.0))
+            )
+            output_cost = (
+                float(token_usage["output_tokens"]) / 1_000_000.0 * float(pricing.get("output", 0.0))
+            )
+            total_cost_usd = input_cost + output_cost
+
+            exec_result = ExecutionResult(
+                plan=plan,
+                summary=summary,
+                raw_results={
+                    "tool_calls": tool_calls,
+                    "answer": answer,
+                    "pending_background_tasks": [],
+                    "completed_background_tasks": [],
+                },
+                duration_s=duration,
+                iterations=1,
+                metadata={
+                    "sdk_cost_usd": total_cost_usd,
+                    "sdk_total_cost_usd": total_cost_usd,
+                    "sdk_model_usage_cost_usd": total_cost_usd,
+                    "sdk_server_tool_cost_usd": 0.0,
+                    "sdk_cost_split_known": True,
+                    "sdk_turns": len(tool_calls) + 1,
+                    "sdk_duration_ms": int(duration * 1000),
+                    "sdk_model": model,
+                    "sdk_models": [model] if model else [],
+                    "sdk_input_tokens": int(token_usage.get("input_tokens", 0)),
+                    "sdk_output_tokens": int(token_usage.get("output_tokens", 0)),
+                    "sdk_cache_creation_input_tokens": 0,
+                    "sdk_cache_read_input_tokens": 0,
+                    "tool_call_count": len(tool_calls),
+                    "guardrail_unverified_execution": guardrail_unverified_execution,
+                    "pending_background_task_count": 0,
+                    "completed_background_task_count": 0,
+                },
+            )
+
+            if trace_events is not None and trace_events:
+                buffer_iter = iter(code_trace_buffer)
+                enriched: list[dict] = []
+                for event in trace_events:
+                    enriched.append(event)
+                    if event.get("type") != "tool_start":
+                        continue
+                    tool = event.get("tool", "")
+                    tool_use_id = event.get("tool_use_id", "")
+                    if tool in ("run_python", "run_r"):
+                        meta = next(buffer_iter, None)
+                        if meta:
+                            enriched.append(
+                                {
+                                    "type": "tool_result",
+                                    "tool": tool,
+                                    "tool_use_id": tool_use_id,
+                                    "result_text": meta.get("stdout", ""),
+                                    "is_error": bool(meta.get("error")),
+                                    "duration_s": 0.0,
+                                    "code": meta.get("code", ""),
+                                    "stdout": meta.get("stdout", ""),
+                                    "plots": meta.get("plots", []),
+                                    "exports": meta.get("exports", []),
+                                    "error": meta.get("error"),
+                                    "timestamp": time.time(),
+                                }
+                            )
+                trace_events = enriched
+
+            if self.trace_store is not None and trace_events:
+                try:
+                    self.trace_store.add_events(
+                        trace_events,
+                        query=query,
+                        model=model,
+                        duration_s=duration,
+                        cost_usd=total_cost_usd,
+                    )
+                    self.trace_store.flush()
+                except Exception as e:
+                    logger.warning("Failed to flush trace: %s", e)
+
+            if not self._headless:
+                self._print_usage(None, duration)
+
+            return exec_result
+        except Exception as e:
+            logger.warning("OpenAI query failed: %s", e)
+            duration = time.time() - t0
+            return self._make_error_result(query, _format_openai_error(e), duration)
+        finally:
+            if thinking_status is not None:
+                thinking_status.stop()
 
     def _start_background_task_watcher(
         self,

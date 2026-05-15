@@ -46,8 +46,9 @@ class AgentLoop:
         self.evidence_board = evidence_board
         self.thread_id = thread_id
         self.headless = headless
-        self.trajectory = Trajectory()
         session_id = str(uuid.uuid4())[:8]
+        self.trajectory = Trajectory(session_id=session_id)
+        self.trajectory.model = session.current_model
         self.trace_store = TraceStore(session_id=session_id)
         self._runner = AgentRunner(
             session, trajectory=self.trajectory, trace_store=self.trace_store,
@@ -70,25 +71,32 @@ class AgentLoop:
 
         # Record turn in trajectory
         if result:
-            tools_used = []
-            if result.plan:
-                tools_used = [s.tool for s in result.plan.steps if s.tool]
             self.trajectory.add_turn(
                 query=query,
                 answer=result.summary or "",
                 plan=result.plan,
             )
+            if not self.trajectory.title:
+                self.trajectory.title = query.strip()[:80]
+            self.trajectory.model = self.session.current_model
+            self.trajectory.save()
 
         return result
 
     @classmethod
     def resume(cls, session, session_id: str):
         """Resume a saved session by ID."""
-        trajectory = Trajectory.load(session_id)
+        normalized_id = str(session_id or "").strip()
+        if not normalized_id:
+            raise FileNotFoundError("No session id provided.")
+        session_path = Trajectory.resolve_session_path(normalized_id)
+        trajectory = Trajectory.load(session_path)
         loop = cls(session)
         loop.trajectory = trajectory
+        if not loop.trajectory.session_id:
+            loop.trajectory.session_id = normalized_id
         # Reuse the same session ID for trace continuity
-        loop.trace_store = TraceStore(session_id=session_id)
+        loop.trace_store = TraceStore(session_id=loop.trajectory.session_id)
         loop._runner = AgentRunner(
             session, trajectory=trajectory, trace_store=loop.trace_store,
         )

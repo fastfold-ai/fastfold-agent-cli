@@ -11,6 +11,7 @@ Config is stored at ~/.fastfold-cli/config.json and manages:
 import json
 import os
 import logging
+import re
 from pathlib import Path
 from typing import Any, Optional
 
@@ -24,8 +25,11 @@ from rich.table import Table
 
 CONFIG_DIR = Path.home() / ".fastfold-cli"
 CONFIG_FILE = CONFIG_DIR / "config.json"
+CONFIG_BACKUP_FILE = CONFIG_DIR / "config.json.bak"
 VALID_LLM_PROVIDERS = frozenset({"anthropic", "openai", "local", "gluelm"})
 logger = logging.getLogger("ct.config")
+OPENAI_API_KEY_PATTERN = re.compile(r"^sk-[A-Za-z0-9_-]{6,}$")
+ANTHROPIC_API_KEY_PATTERN = re.compile(r"^sk-ant-[A-Za-z0-9_-]{6,}$")
 
 _LEGACY_DIR = Path.home() / ".ct"
 
@@ -56,6 +60,7 @@ _migrate_legacy_config()
 DEFAULTS = {
     "llm.provider": "anthropic",
     "llm.model": "claude-sonnet-4-5-20250929",
+    "llm.anthropic_api_key": None,
     "llm.api_key": None,
     "llm.openai_api_key": None,
     "llm.temperature": 0.1,
@@ -218,6 +223,20 @@ AGENT_PROFILE_PRESETS = {
 
 
 API_KEYS = {
+    "llm.anthropic_api_key": {
+        "name": "Anthropic",
+        "env_var": "ANTHROPIC_API_KEY",
+        "description": "Anthropic/Claude model access (default provider)",
+        "url": "https://console.anthropic.com/settings/keys",
+        "free": False,
+    },
+    "llm.openai_api_key": {
+        "name": "OpenAI",
+        "env_var": "OPENAI_API_KEY",
+        "description": "OpenAI model access (when llm.provider=openai)",
+        "url": "https://platform.openai.com/api-keys",
+        "free": False,
+    },
     "api.ibm_rxn_key": {
         "name": "IBM RXN",
         "env_var": "IBM_RXN_API_KEY",
@@ -354,6 +373,9 @@ class Config:
     def __init__(self, data: dict = None):
         self._data = data or {}
         self._env_loaded_keys: set[str] = set()
+        # Track mutations so save() only applies intentional changes.
+        self._dirty_keys: set[str] = set(self._data.keys())
+        self._unset_keys: set[str] = set()
 
     def __repr__(self) -> str:
         """Safe repr that masks API keys and secrets."""
@@ -368,6 +390,7 @@ class Config:
     @classmethod
     def load(cls) -> "Config":
         """Load config from disk, creating defaults if needed."""
+        loaded_from_backup = False
         if CONFIG_FILE.exists():
             try:
                 with open(CONFIG_FILE) as f:
@@ -384,6 +407,26 @@ class Config:
         else:
             data = {}
 
+        # Recovery path: if primary is unreadable/empty, try the last backup.
+        if not data and CONFIG_BACKUP_FILE.exists():
+            try:
+                with open(CONFIG_BACKUP_FILE) as f:
+                    backup_data = json.load(f)
+                if isinstance(backup_data, dict):
+                    data = backup_data
+                    loaded_from_backup = True
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.warning("Failed to read config backup %s: %s", CONFIG_BACKUP_FILE, exc)
+
+        if loaded_from_backup:
+            logger.warning("Recovered config from backup: %s", CONFIG_BACKUP_FILE)
+            try:
+                CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+                with open(CONFIG_FILE, "w") as f:
+                    json.dump(data, f, indent=2)
+            except OSError as exc:
+                logger.warning("Failed to restore recovered config to %s: %s", CONFIG_FILE, exc)
+
         # Migrate legacy global output dir default to workspace-local output dir.
         legacy_output_dirs = {
             str(Path.home() / ".fastfold-cli" / "outputs"),
@@ -394,7 +437,7 @@ class Config:
 
         # Check environment variables
         env_mappings = {
-            "ANTHROPIC_API_KEY": "llm.api_key",
+            "ANTHROPIC_API_KEY": "llm.anthropic_api_key",
             "OPENAI_API_KEY": "llm.openai_api_key",
             "CT_DATA_DIR": "data.base",
             "CT_LLM_PROVIDER": "llm.provider",
@@ -414,6 +457,8 @@ class Config:
                 data[config_key] = val
 
         cfg = cls(data)
+        cfg._dirty_keys.clear()
+        cfg._unset_keys.clear()
         # Track keys loaded from environment so they're masked in __repr__/logs
         cfg._env_loaded_keys = {
             config_key for env_var, config_key in env_mappings.items()
@@ -434,8 +479,46 @@ class Config:
     def save(self):
         """Save config to disk."""
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        with open(CONFIG_FILE, "w") as f:
-            json.dump(self._data, f, indent=2)
+        # Merge against latest on disk and apply only explicit mutations.
+        # This prevents stale in-memory config instances from wiping keys.
+        existing: dict[str, Any] = {}
+        if CONFIG_FILE.exists():
+            try:
+                with open(CONFIG_FILE) as f:
+                    parsed = json.load(f)
+                if isinstance(parsed, dict):
+                    existing = parsed
+            except (json.JSONDecodeError, OSError):
+                existing = {}
+
+        if self._dirty_keys or self._unset_keys:
+            merged = dict(existing)
+            for key in self._dirty_keys:
+                if key in self._data:
+                    merged[key] = self._data[key]
+            for key in self._unset_keys:
+                merged.pop(key, None)
+            payload = merged
+        else:
+            payload = dict(self._data)
+
+        tmp = CONFIG_FILE.with_suffix(".json.tmp")
+        with open(tmp, "w") as f:
+            json.dump(payload, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, CONFIG_FILE)
+
+        # Keep a latest-known-good backup for recovery from partial/corrupt writes.
+        try:
+            with open(CONFIG_BACKUP_FILE, "w") as f:
+                json.dump(payload, f, indent=2)
+        except OSError:
+            pass
+
+        self._data = payload
+        self._dirty_keys.clear()
+        self._unset_keys.clear()
 
     def get(self, key: str, default: Any = None) -> Any:
         """Get a config value, falling back to defaults."""
@@ -465,14 +548,84 @@ class Config:
             elif expected_type == int:
                 value = int(value)
 
+        if key in {"llm.anthropic_api_key", "llm.api_key", "llm.openai_api_key"}:
+            value = self._normalized_secret(value)
+            issue = self.validate_llm_api_key(key, value)
+            if issue:
+                raise ValueError(issue)
+
         self._data[key] = value
+        self._dirty_keys.add(key)
+        self._unset_keys.discard(key)
+
+    def unset(self, key: str) -> None:
+        """Remove a config key override, falling back to defaults/env."""
+        self._data.pop(key, None)
+        self._dirty_keys.discard(key)
+        self._unset_keys.add(key)
+
+    @staticmethod
+    def _normalized_secret(value: Any) -> Optional[str]:
+        """Normalize secret-like values; blank/whitespace becomes None."""
+        if value is None:
+            return None
+        text = str(value)
+        # Strip ANSI escape sequences that can leak from terminal control input.
+        text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
+        # Remove non-printable control characters (e.g. ^C bytes).
+        text = "".join(ch for ch in text if ch.isprintable())
+        text = text.strip()
+        return text or None
+
+    @classmethod
+    def validate_llm_api_key(cls, config_key: str, value: Any) -> Optional[str]:
+        """Validate provider API keys; return issue message, else None."""
+        normalized = cls._normalized_secret(value)
+        if normalized is None:
+            return None
+
+        if config_key == "llm.openai_api_key":
+            if normalized.startswith("sk-ant-"):
+                return (
+                    "Invalid OpenAI API key format: looks like an Anthropic key ('sk-ant-...'). "
+                    "Use an OpenAI key starting with 'sk-' (typically 'sk-proj-...')."
+                )
+            if not OPENAI_API_KEY_PATTERN.match(normalized):
+                return (
+                    "Invalid OpenAI API key format. Expected prefix 'sk-' "
+                    "(typically 'sk-proj-...')."
+                )
+            return None
+
+        if config_key in {"llm.anthropic_api_key", "llm.api_key"}:
+            if not ANTHROPIC_API_KEY_PATTERN.match(normalized):
+                return (
+                    "Invalid Anthropic API key format. Expected prefix 'sk-ant-'."
+                )
+
+        return None
+
+    @staticmethod
+    def _secret_preview(value: Any) -> str:
+        """Return a masked preview for secret-like values."""
+        normalized = Config._normalized_secret(value)
+        if not normalized:
+            return "—"
+        if len(normalized) <= 8:
+            return "***"
+        if len(normalized) <= 14:
+            return f"{normalized[:4]}...{normalized[-2:]}"
+        return f"{normalized[:8]}...{normalized[-4:]}"
 
     def llm_api_key(self, provider: Optional[str] = None) -> Optional[str]:
         """Get the best API key for the selected provider."""
         provider = (provider or self.get("llm.provider", "anthropic")).lower()
         if provider == "openai":
-            return self.get("llm.openai_api_key") or self.get("llm.api_key")
-        return self.get("llm.api_key")
+            return self._normalized_secret(self.get("llm.openai_api_key"))
+        # Backward compatibility: legacy llm.api_key is Anthropic-only fallback.
+        return self._normalized_secret(
+            self.get("llm.anthropic_api_key") or self.get("llm.api_key")
+        )
 
     def llm_preflight_issue(self) -> Optional[str]:
         """Return a human-readable LLM config issue, or None when ready."""
@@ -496,7 +649,14 @@ class Config:
                 )
             return None
 
-        if self.llm_api_key(provider):
+        provider_key = self.llm_api_key(provider)
+        if provider_key:
+            if provider == "openai" and str(provider_key).startswith("sk-ant-"):
+                return (
+                    "Configured OpenAI key appears to be an Anthropic key (starts with 'sk-ant-'). "
+                    "Set a valid OpenAI key with:\n"
+                    "  fastfold config set llm.openai_api_key <key>"
+                )
             return None
 
         # Azure AI Foundry: Foundry-specific env vars are valid Anthropic auth
@@ -514,7 +674,8 @@ class Config:
 
         return (
             "Anthropic API key not configured. Set ANTHROPIC_API_KEY or run:\n"
-            "  fastfold config set llm.api_key <key>\n"
+            "  fastfold config set llm.anthropic_api_key <key>\n"
+            "Legacy fallback (still supported): llm.api_key\n"
             "For Azure AI Foundry: set ANTHROPIC_FOUNDRY_API_KEY and "
             "ANTHROPIC_FOUNDRY_RESOURCE"
         )
@@ -524,21 +685,34 @@ class Config:
         table = Table(title="API Keys", caption="Set: fastfold config set <key> <value>  |  Or: export ENV_VAR=<value>")
         table.add_column("Service", style="bold")
         table.add_column("Status")
+        table.add_column("Preview", style="magenta dim")
         table.add_column("Unlocks", style="dim")
         table.add_column("Config Key", style="cyan dim")
         table.add_column("Sign Up", style="dim")
 
         for config_key, info in API_KEYS.items():
-            val = self.get(config_key)
-            if val:
-                status = "[green]configured[/green]"
+            if config_key == "llm.anthropic_api_key":
+                val = self.llm_api_key("anthropic")
+                # Mark legacy-only usage clearly.
+                if (
+                    not self._normalized_secret(self.get("llm.anthropic_api_key"))
+                    and self._normalized_secret(self.get("llm.api_key"))
+                ):
+                    status = "[yellow]configured (legacy llm.api_key)[/yellow]"
+                else:
+                    status = "[green]configured[/green]" if val else "[red]not set[/red]"
+            elif config_key == "llm.openai_api_key":
+                val = self.llm_api_key("openai")
+                status = "[green]configured[/green]" if val else "[red]not set[/red]"
             else:
-                status = "[red]not set[/red]"
+                val = self._normalized_secret(self.get(config_key))
+                status = "[green]configured[/green]" if val else "[red]not set[/red]"
 
             free_tag = " (free)" if info["free"] else ""
             table.add_row(
                 info["name"],
                 status,
+                self._secret_preview(val),
                 info["description"],
                 config_key,
                 info["url"] + free_tag,

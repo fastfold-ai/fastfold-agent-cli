@@ -21,6 +21,21 @@ def test_load_invalid_json_does_not_crash(monkeypatch, tmp_path):
     assert cfg.get("llm.provider") == "anthropic"
 
 
+def test_load_recovers_from_backup_when_primary_is_corrupt(monkeypatch, tmp_path):
+    bad_config = tmp_path / "config.json"
+    backup_config = tmp_path / "config.json.bak"
+    bad_config.write_text("{ not valid json")
+    backup_config.write_text(json.dumps({"llm.provider": "openai", "llm.model": "gpt-5.5"}))
+
+    monkeypatch.setattr(config_mod, "CONFIG_FILE", bad_config)
+    monkeypatch.setattr(config_mod, "CONFIG_BACKUP_FILE", backup_config)
+
+    cfg = Config.load()
+    assert cfg.get("llm.provider") == "openai"
+    restored = json.loads(bad_config.read_text())
+    assert restored["llm.provider"] == "openai"
+
+
 def test_llm_preflight_requires_anthropic_key(monkeypatch):
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_FOUNDRY_API_KEY", raising=False)
@@ -64,6 +79,147 @@ def test_llm_preflight_accepts_openai_key():
         }
     )
     assert cfg.llm_preflight_issue() is None
+
+
+def test_llm_preflight_openai_does_not_use_anthropic_key_fallback():
+    cfg = Config(
+        data={
+            "llm.provider": "openai",
+            "llm.api_key": "sk-ant-some-anthropic-key",
+            "llm.openai_api_key": None,
+        }
+    )
+    issue = cfg.llm_preflight_issue()
+    assert issue is not None
+    assert "OpenAI API key" in issue
+
+
+def test_llm_preflight_openai_rejects_anthropic_like_key():
+    cfg = Config(
+        data={
+            "llm.provider": "openai",
+            "llm.openai_api_key": "sk-ant-api03-looks-like-anthropic",
+        }
+    )
+    issue = cfg.llm_preflight_issue()
+    assert issue is not None
+    assert "appears to be an Anthropic key" in issue
+
+
+def test_llm_preflight_openai_whitespace_key_treated_as_missing():
+    cfg = Config(
+        data={
+            "llm.provider": "openai",
+            "llm.openai_api_key": "   ",
+        }
+    )
+    issue = cfg.llm_preflight_issue()
+    assert issue is not None
+    assert "OpenAI API key" in issue
+
+
+def test_llm_preflight_openai_control_sequence_key_treated_as_missing():
+    cfg = Config(
+        data={
+            "llm.provider": "openai",
+            "llm.openai_api_key": "\x1b[42;52R\x03\x03\x03",
+        }
+    )
+    issue = cfg.llm_preflight_issue()
+    assert issue is not None
+    assert "OpenAI API key" in issue
+
+
+def test_llm_api_key_prefers_new_anthropic_key():
+    cfg = Config(
+        data={
+            "llm.provider": "anthropic",
+            "llm.anthropic_api_key": "new-anthropic-key",
+            "llm.api_key": "legacy-anthropic-key",
+        }
+    )
+    assert cfg.llm_api_key("anthropic") == "new-anthropic-key"
+
+
+def test_llm_api_key_legacy_fallback_for_anthropic():
+    cfg = Config(
+        data={
+            "llm.provider": "anthropic",
+            "llm.api_key": "legacy-anthropic-key",
+        }
+    )
+    assert cfg.llm_api_key("anthropic") == "legacy-anthropic-key"
+
+
+def test_keys_table_includes_llm_provider_keys():
+    cfg = Config(data={})
+    table = cfg.keys_table()
+    first_col = list(getattr(table.columns[0], "_cells", []))
+    assert "Anthropic" in first_col
+    assert "OpenAI" in first_col
+
+
+def test_keys_table_includes_preview_column_and_masked_openai_value():
+    cfg = Config(data={"llm.openai_api_key": "sk-proj-AbCdEf1234567890xyz"})
+    table = cfg.keys_table()
+    headers = [getattr(col, "header", "") for col in table.columns]
+    assert "Preview" in headers
+    services = list(getattr(table.columns[0], "_cells", []))
+    openai_idx = services.index("OpenAI")
+    preview_col = list(getattr(table.columns[2], "_cells", []))
+    assert preview_col[openai_idx].startswith("sk-proj-")
+    assert "..." in preview_col[openai_idx]
+
+
+def test_set_openai_key_rejects_invalid_format():
+    cfg = Config(data={})
+    with pytest.raises(ValueError, match="Invalid OpenAI API key format"):
+        cfg.set("llm.openai_api_key", "not-a-key")
+
+
+def test_save_merges_only_dirty_keys_and_preserves_existing_secrets(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.json"
+    backup_path = tmp_path / "config.json.bak"
+    config_path.write_text(
+        json.dumps(
+            {
+                "llm.provider": "anthropic",
+                "llm.openai_api_key": "sk-proj-AbCdEf1234567890xyz",
+                "api.fastfold_cloud_key": "sk-ff-1234567890",
+            }
+        )
+    )
+    monkeypatch.setattr(config_mod, "CONFIG_FILE", config_path)
+    monkeypatch.setattr(config_mod, "CONFIG_BACKUP_FILE", backup_path)
+
+    cfg = Config.load()
+    cfg.set("llm.provider", "openai")
+    cfg.save()
+
+    saved = json.loads(config_path.read_text())
+    assert saved["llm.provider"] == "openai"
+    assert saved["llm.openai_api_key"] == "sk-proj-AbCdEf1234567890xyz"
+    assert saved["api.fastfold_cloud_key"] == "sk-ff-1234567890"
+    assert backup_path.exists()
+
+
+def test_set_openai_key_accepts_project_format():
+    cfg = Config(data={})
+    key = "sk-proj-AbCdEf1234567890xyz"
+    cfg.set("llm.openai_api_key", key)
+    assert cfg.get("llm.openai_api_key") == key
+
+
+def test_set_anthropic_key_rejects_invalid_format():
+    cfg = Config(data={})
+    with pytest.raises(ValueError, match="Invalid Anthropic API key format"):
+        cfg.set("llm.anthropic_api_key", "sk-proj-not-anthropic")
+
+
+def test_set_llm_key_blank_unsets_value():
+    cfg = Config(data={"llm.openai_api_key": "sk-proj-AbCdEf1234567890xyz"})
+    cfg.set("llm.openai_api_key", "   ")
+    assert cfg.get("llm.openai_api_key") is None
 
 
 def test_llm_preflight_requires_model_for_local():
