@@ -438,6 +438,11 @@ def setup_cmd(
         "--openai-base-url",
         help="OpenAI-compatible base URL (e.g. http://localhost:11434/v1)",
     ),
+    openai_compatible_backend: Optional[str] = typer.Option(
+        None,
+        "--openai-compatible-backend",
+        help="Compatible backend type: ollama, unsloth, or other",
+    ),
     fastfold_api_key: Optional[str] = typer.Option(
         None, "--fastfold-api-key", help="Fastfold AI Cloud API key (non-interactive mode)"
     ),
@@ -456,6 +461,8 @@ def setup_cmd(
         openai_api_key = None
     if isinstance(openai_base_url, OptionInfo):
         openai_base_url = None
+    if isinstance(openai_compatible_backend, OptionInfo):
+        openai_compatible_backend = None
     if isinstance(fastfold_api_key, OptionInfo):
         fastfold_api_key = None
     if isinstance(provider, OptionInfo):
@@ -494,11 +501,13 @@ def setup_cmd(
         selected_providers = _prompt_setup_providers(default_provider)
 
     resolved_openai_base_url: Optional[str] = None
+    resolved_openai_backend: Optional[str] = None
+    resolved_openai_compatible_model: Optional[str] = None
     if "openai_compatible" in selected_providers:
-        resolved_openai_base_url = _resolve_openai_base_url(
+        resolved_openai_base_url, resolved_openai_backend = _resolve_openai_compatible_endpoint(
             cfg,
             cli_base_url=openai_base_url,
-            force_mode="compatible",
+            cli_backend=openai_compatible_backend,
         )
     elif "openai" in selected_providers:
         resolved_openai_base_url = _resolve_openai_base_url(
@@ -514,6 +523,7 @@ def setup_cmd(
             provider=prov,
             cli_key=(openai_api_key if prov in {"openai", "openai_compatible"} else api_key),
             openai_base_url=resolved_openai_base_url if prov == "openai_compatible" else None,
+            compatible_backend=resolved_openai_backend if prov == "openai_compatible" else None,
         )
         if prov == "anthropic" and (not chosen_key or not chosen_key.startswith("sk-ant-")):
             console.print(
@@ -529,6 +539,17 @@ def setup_cmd(
                 console.print("  [dim]Setup cancelled.[/dim]")
                 raise typer.Exit()
         resolved_keys[prov] = chosen_key
+        if (
+            prov == "openai_compatible"
+            and resolved_openai_base_url
+            and resolved_openai_backend
+        ):
+            resolved_openai_compatible_model = _prompt_compatible_model_for_setup(
+                cfg,
+                base_url=resolved_openai_base_url,
+                backend=resolved_openai_backend,
+                api_key=chosen_key,
+            )
 
     # Determine Fastfold AI Cloud API key (optional, but recommended for cloud-integrated skills)
     cloud_key = _prompt_fastfold_cloud_api_key(cfg, fastfold_api_key)
@@ -537,13 +558,17 @@ def setup_cmd(
     for prov, key in resolved_keys.items():
         if prov == "openai":
             cfg.unset("llm.openai_base_url")
+            cfg.unset("llm.openai_compatible_backend")
             cfg.set("llm.openai_api_key", key)
         elif prov == "openai_compatible":
             if resolved_openai_base_url:
                 cfg.set("llm.openai_base_url", resolved_openai_base_url)
             else:
                 cfg.set("llm.openai_base_url", "http://localhost:11434/v1")
+            cfg.set("llm.openai_compatible_backend", resolved_openai_backend or "ollama")
             cfg.set("llm.openai_compatible_api_key", key)
+            if resolved_openai_compatible_model:
+                cfg.set("llm.model", resolved_openai_compatible_model)
         elif prov == "anthropic":
             cfg.set("llm.anthropic_api_key", key)
     active_setup_provider = default_provider if default_provider in selected_providers else selected_providers[0]
@@ -642,6 +667,31 @@ def _prompt_openai_api_key() -> str:
     return key.strip()
 
 
+def _prompt_openai_compatible_api_key(backend: str = "other") -> str:
+    """Prompt for OpenAI-compatible API key with backend-aware hints."""
+    backend_type = str(backend or "").strip().lower()
+    if backend_type == "unsloth":
+        console.print(
+            "  Unsloth Studio: [link=http://localhost:8888]http://localhost:8888[/link]"
+        )
+        console.print("  [dim]Use your Unsloth key (often starts with sk-unsloth-).[/dim]")
+    elif backend_type == "ollama":
+        console.print(
+            "  [dim]Ollama often accepts placeholder keys (for example: ollama).[/dim]"
+        )
+    else:
+        console.print(
+            "  [dim]Using a custom OpenAI-compatible endpoint key.[/dim]"
+        )
+    console.print()
+    try:
+        key = _prompt_masked_secret("  Enter your OpenAI-compatible API key: ")
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n  [dim]Setup cancelled.[/dim]")
+        raise typer.Exit()
+    return key.strip()
+
+
 def _prompt_openai_api_key_with_default(default_key: str = "ollama") -> str:
     """Prompt for OpenAI-compatible API key with a default fallback."""
     console.print(
@@ -705,7 +755,7 @@ def _prompt_openai_endpoint_mode(default_mode: str = "cloud") -> str:
                         value="cloud",
                     ),
                     questionary.Choice(
-                        title="OpenAI-compatible custom endpoint (Ollama/vLLM/LM Studio/proxy)",
+                        title="OpenAI-compatible custom endpoint (Ollama/Unsloth/vLLM/LM Studio/proxy)",
                         value="compatible",
                     ),
                 ],
@@ -784,6 +834,218 @@ def _resolve_openai_base_url(
     if not chosen or _is_openai_managed_base_url(chosen):
         return None
     return chosen
+
+
+def _infer_openai_compatible_backend(base_url: Optional[str], key: Optional[str] = None) -> str:
+    """Infer compatible backend type from endpoint/key hints."""
+    endpoint = str(base_url or "").strip().lower()
+    secret = str(key or "").strip().lower()
+    if secret.startswith("sk-unsloth-") or "8888" in endpoint:
+        return "unsloth"
+    if "11434" in endpoint:
+        return "ollama"
+    return "other"
+
+
+def _prompt_openai_compatible_backend(default_backend: str = "ollama") -> str:
+    """Prompt backend type for OpenAI-compatible setup."""
+    normalized_default = str(default_backend or "").strip().lower()
+    if normalized_default not in {"ollama", "unsloth", "other"}:
+        normalized_default = "ollama"
+
+    console.print("\n  [cyan]Endpoint type[/cyan]")
+    console.print("    [1] Ollama (/api/tags)")
+    console.print("    [2] Unsloth (/v1/models, auth)")
+    console.print("    [3] Other OpenAI-compatible (/v1/models then /api/tags)")
+    default_num = {"ollama": "1", "unsloth": "2", "other": "3"}[normalized_default]
+    try:
+        raw = input(f"  Select endpoint type [{default_num}]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n  [dim]Setup cancelled.[/dim]")
+        raise typer.Exit()
+    if not raw:
+        return normalized_default
+    if raw in {"1", "ollama", "o"}:
+        return "ollama"
+    if raw in {"2", "unsloth", "u"}:
+        return "unsloth"
+    if raw in {"3", "other", "custom", "k"}:
+        return "other"
+    console.print("  [dim]Invalid selection; using generic compatible mode.[/dim]")
+    return "other"
+
+
+def _resolve_openai_compatible_endpoint(
+    cfg,
+    cli_base_url: Optional[str] = None,
+    cli_backend: Optional[str] = None,
+) -> tuple[str, str]:
+    """Resolve compatible endpoint URL and backend type for setup."""
+    existing = _normalize_openai_base_url(cfg.get("llm.openai_base_url"))
+    existing_key = cfg.get("llm.openai_compatible_api_key")
+    configured_backend = str(cfg.get("llm.openai_compatible_backend") or "").strip().lower()
+    inferred_backend = _infer_openai_compatible_backend(existing, existing_key)
+    default_backend = configured_backend if configured_backend in {"ollama", "unsloth", "other"} else inferred_backend
+    selected_backend = str(cli_backend or "").strip().lower()
+    if selected_backend not in {"ollama", "unsloth", "other"}:
+        selected_backend = _prompt_openai_compatible_backend(default_backend=default_backend)
+
+    if cli_base_url is not None:
+        chosen = _normalize_openai_base_url(cli_base_url)
+        if not chosen:
+            chosen = "http://localhost:8888/v1" if selected_backend == "unsloth" else "http://localhost:11434/v1"
+        if _is_openai_managed_base_url(chosen):
+            console.print("  [yellow]OpenAI cloud URL detected; using compatible default endpoint instead.[/yellow]")
+            chosen = "http://localhost:8888/v1" if selected_backend == "unsloth" else "http://localhost:11434/v1"
+        return chosen, selected_backend
+
+    if selected_backend == "unsloth":
+        default_endpoint = "http://localhost:8888/v1"
+    elif selected_backend == "ollama":
+        default_endpoint = "http://localhost:11434/v1"
+    else:
+        default_endpoint = existing if (existing and not _is_openai_managed_base_url(existing)) else "http://localhost:11434/v1"
+
+    console.print("\n  [cyan]OpenAI endpoint setup[/cyan]")
+    console.print("  [dim]Examples: Ollama, Unsloth, vLLM, LM Studio, proxy gateways[/dim]")
+    try:
+        entered = input(f"  Endpoint base URL [{default_endpoint}]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n  [dim]Setup cancelled.[/dim]")
+        raise typer.Exit()
+    chosen = _normalize_openai_base_url(entered or default_endpoint)
+    if not chosen or _is_openai_managed_base_url(chosen):
+        chosen = default_endpoint
+    return chosen, selected_backend
+
+
+def _ollama_tags_url_from_base(base_url: str) -> str:
+    """Build an Ollama /api/tags URL from an OpenAI-compatible base URL."""
+    parsed = urlparse(str(base_url or "").strip())
+    path = (parsed.path or "").rstrip("/")
+    if path.endswith("/v1"):
+        path = path[:-3]
+    tags_path = f"{path}/api/tags" if path else "/api/tags"
+    return parsed._replace(path=tags_path, query="", fragment="").geturl()
+
+
+def _openai_models_url_from_base(base_url: str) -> str:
+    """Build a /v1/models URL from an OpenAI-compatible base URL."""
+    parsed = urlparse(str(base_url or "").strip())
+    path = (parsed.path or "").rstrip("/")
+    if not path.endswith("/v1"):
+        path = f"{path}/v1" if path else "/v1"
+    models_path = f"{path}/models"
+    return parsed._replace(path=models_path, query="", fragment="").geturl()
+
+
+def _fetch_openai_models_for_setup(base_url: str, api_key: Optional[str] = None) -> list[str]:
+    """Fetch model IDs from OpenAI-compatible /v1/models."""
+    url = _openai_models_url_from_base(base_url)
+    headers = {"Accept": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = urllib.request.Request(url=url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=4.0) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
+        return []
+    try:
+        payload = json.loads(text) if text else {}
+    except Exception:
+        return []
+    data = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(data, list):
+        return []
+    names = sorted({str(item.get("id") or "").strip() for item in data if isinstance(item, dict)} - {""})
+    if names:
+        console.print(f"  [green]Found {len(names)} model(s) from /v1/models.[/green]")
+    return names
+
+
+def _fetch_ollama_tags_for_setup(base_url: str, api_key: Optional[str] = None) -> list[str]:
+    """Fetch model names from Ollama /api/tags."""
+    url = _ollama_tags_url_from_base(base_url)
+    headers = {"Accept": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = urllib.request.Request(url=url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=4.0) as resp:
+            text = resp.read().decode("utf-8", errors="replace")
+    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
+        return []
+    try:
+        payload = json.loads(text) if text else {}
+    except Exception:
+        return []
+    models = payload.get("models") if isinstance(payload, dict) else None
+    if not isinstance(models, list):
+        return []
+    names = sorted({str(item.get("name") or "").strip() for item in models if isinstance(item, dict)} - {""})
+    if names:
+        console.print(f"  [green]Found {len(names)} model(s) from /api/tags.[/green]")
+    return names
+
+
+def _fetch_compatible_models_for_setup(base_url: str, backend: str, api_key: Optional[str] = None) -> list[str]:
+    """Discover compatible models based on selected backend."""
+    backend_type = str(backend or "").strip().lower()
+    if backend_type == "unsloth":
+        names = _fetch_openai_models_for_setup(base_url, api_key=api_key)
+    elif backend_type == "ollama":
+        names = _fetch_ollama_tags_for_setup(base_url, api_key=api_key)
+        if not names:
+            names = _fetch_openai_models_for_setup(base_url, api_key=api_key)
+    else:
+        names = _fetch_openai_models_for_setup(base_url, api_key=api_key)
+        if not names:
+            names = _fetch_ollama_tags_for_setup(base_url, api_key=api_key)
+    if names:
+        return names
+    console.print(
+        "  [yellow]No models found from discovery endpoint(s).[/yellow] "
+        "[dim]You can still enter a model manually.[/dim]"
+    )
+    return []
+
+
+def _prompt_compatible_model_for_setup(
+    cfg,
+    base_url: str,
+    backend: str,
+    api_key: Optional[str] = None,
+) -> str:
+    """Prompt for compatible model selection in setup flow."""
+    default_model = str(cfg.get("llm.model") or "").strip() or "llama3.1"
+    discovered = _fetch_compatible_models_for_setup(base_url, backend=backend, api_key=api_key)
+    if discovered:
+        console.print("  [cyan]Available models[/cyan]")
+        for idx, name in enumerate(discovered, 1):
+            console.print(f"    [{idx}] {name}")
+        manual_idx = len(discovered) + 1
+        console.print(f"    [{manual_idx}] Enter custom model name")
+        try:
+            raw_choice = input("  Select model (number): ").strip()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n  [dim]Setup cancelled.[/dim]")
+            raise typer.Exit()
+        if raw_choice.isdigit():
+            selected = int(raw_choice)
+            if 1 <= selected <= len(discovered):
+                return discovered[selected - 1]
+            if selected != manual_idx:
+                console.print("  [dim]Invalid selection; switching to manual entry.[/dim]")
+        elif raw_choice:
+            console.print("  [dim]Invalid selection; switching to manual entry.[/dim]")
+
+    try:
+        model_input = input(f"  Model ID [{default_model}]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n  [dim]Setup cancelled.[/dim]")
+        raise typer.Exit()
+    return model_input or default_model
 
 
 def _prompt_masked_secret(message: str) -> str:
@@ -966,6 +1228,7 @@ def _resolve_provider_key(
     provider: str,
     cli_key: Optional[str] = None,
     openai_base_url: Optional[str] = None,
+    compatible_backend: Optional[str] = None,
 ) -> str:
     """Resolve provider key from cli arg, existing config, env var, or prompt."""
     provider = str(provider).strip().lower()
@@ -979,7 +1242,12 @@ def _resolve_provider_key(
         prompt_fn = _prompt_openai_api_key
         label = "OpenAI-compatible" if is_compat else "OpenAI"
         config_key = key_config_key
-        default_compat_key = "ollama" if is_compat else None
+        backend = str(compatible_backend or "").strip().lower()
+        if backend not in {"ollama", "unsloth", "other"}:
+            backend = _infer_openai_compatible_backend(openai_base_url, existing_key)
+        default_compat_key = "ollama" if (is_compat and backend == "ollama") else None
+        if is_compat and not default_compat_key:
+            prompt_fn = lambda: _prompt_openai_compatible_api_key(backend=backend)
     else:
         existing_key = cfg.llm_api_key("anthropic")
         env_var_name = "ANTHROPIC_API_KEY"

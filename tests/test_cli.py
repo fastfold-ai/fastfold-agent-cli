@@ -14,7 +14,10 @@ from ct.cli import (
     _prompt_setup_providers,
     _is_openai_managed_base_url,
     _prompt_openai_endpoint_mode,
+    _prompt_openai_compatible_backend,
+    _prompt_compatible_model_for_setup,
     _resolve_openai_base_url,
+    _resolve_openai_compatible_endpoint,
     _resolve_provider_key,
     _setup_provider_runtime_id,
     setup_cmd,
@@ -91,13 +94,42 @@ def test_setup_cmd_direct_call_handles_typer_option_defaults(monkeypatch):
     monkeypatch.setattr("ct.cli._prompt_setup_providers", lambda default: ["anthropic"])
     monkeypatch.setattr(
         "ct.cli._resolve_provider_key",
-        lambda cfg, provider, cli_key=None, openai_base_url=None: "sk-ant-api03-test",
+        lambda cfg, provider, cli_key=None, openai_base_url=None, compatible_backend=None: "sk-ant-api03-test",
     )
     monkeypatch.setattr("ct.cli._prompt_fastfold_cloud_api_key", lambda cfg, cli_key: None)
 
     setup_cmd()
     assert cfg.get("llm.provider") == "anthropic"
     assert cfg.get("llm.anthropic_api_key") == "sk-ant-api03-test"
+
+
+def test_setup_cmd_openai_compatible_persists_backend(monkeypatch):
+    cfg = Config(data={})
+    monkeypatch.setattr("ct.agent.config.Config.load", lambda: cfg)
+    monkeypatch.setattr("ct.cli._prompt_setup_providers", lambda default: ["openai_compatible"])
+    monkeypatch.setattr(
+        "ct.cli._resolve_openai_compatible_endpoint",
+        lambda cfg, cli_base_url=None, cli_backend=None: ("http://localhost:8888/v1", "unsloth"),
+    )
+    monkeypatch.setattr(
+        "ct.cli._resolve_provider_key",
+        lambda cfg, provider, cli_key=None, openai_base_url=None, compatible_backend=None: "sk-unsloth-test",
+    )
+    monkeypatch.setattr(
+        "ct.cli._prompt_compatible_model_for_setup",
+        lambda cfg, base_url, backend, api_key=None: "gpt-oss:20b",
+    )
+    monkeypatch.setattr("ct.cli._prompt_fastfold_cloud_api_key", lambda cfg, cli_key: None)
+    monkeypatch.setattr("ct.agent.doctor.run_checks", lambda cfg: [])
+    monkeypatch.setattr("ct.agent.doctor.to_table", lambda checks: "")
+    monkeypatch.setattr("ct.agent.doctor.has_errors", lambda checks: False)
+
+    setup_cmd(provider="openai_compatible")
+    assert cfg.get("llm.provider") == "openai"
+    assert cfg.get("llm.openai_base_url") == "http://localhost:8888/v1"
+    assert cfg.get("llm.openai_compatible_backend") == "unsloth"
+    assert cfg.get("llm.openai_compatible_api_key") == "sk-unsloth-test"
+    assert cfg.get("llm.model") == "gpt-oss:20b"
 
 
 def test_is_openai_managed_base_url_detects_hosts():
@@ -124,10 +156,62 @@ def test_prompt_openai_endpoint_mode_fallback_compatible(monkeypatch):
     assert _prompt_openai_endpoint_mode(default_mode="cloud") == "compatible"
 
 
+def test_prompt_openai_compatible_backend_unsloth(monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda _: "u")
+    assert _prompt_openai_compatible_backend(default_backend="ollama") == "unsloth"
+
+
+def test_prompt_openai_compatible_backend_numeric_selection(monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda _: "2")
+    assert _prompt_openai_compatible_backend(default_backend="ollama") == "unsloth"
+
+
 def test_resolve_openai_base_url_interactive_cloud_mode_returns_none(monkeypatch):
     cfg = Config(data={})
     monkeypatch.setattr("ct.cli._prompt_openai_endpoint_mode", lambda default_mode="cloud": "cloud")
     assert _resolve_openai_base_url(cfg, cli_base_url=None) is None
+
+
+def test_resolve_openai_compatible_endpoint_unsloth_default(monkeypatch):
+    cfg = Config(data={})
+    monkeypatch.setattr("ct.cli._prompt_openai_compatible_backend", lambda default_backend="ollama": "unsloth")
+    monkeypatch.setattr("builtins.input", lambda _: "")
+    base_url, backend = _resolve_openai_compatible_endpoint(cfg, cli_base_url=None, cli_backend=None)
+    assert backend == "unsloth"
+    assert base_url == "http://localhost:8888/v1"
+
+
+def test_prompt_compatible_model_for_setup_uses_discovered_selection(monkeypatch):
+    cfg = Config(data={"llm.model": "llama3.1"})
+    monkeypatch.setattr(
+        "ct.cli._fetch_compatible_models_for_setup",
+        lambda base_url, backend, api_key=None: ["gemma4:12b", "gpt-oss:20b"],
+    )
+    monkeypatch.setattr("builtins.input", lambda _: "2")
+    model = _prompt_compatible_model_for_setup(
+        cfg,
+        base_url="http://localhost:11434/v1",
+        backend="ollama",
+        api_key="ollama",
+    )
+    assert model == "gpt-oss:20b"
+
+
+def test_prompt_compatible_model_for_setup_allows_manual_entry(monkeypatch):
+    cfg = Config(data={"llm.model": "llama3.1"})
+    monkeypatch.setattr(
+        "ct.cli._fetch_compatible_models_for_setup",
+        lambda base_url, backend, api_key=None: ["gemma4:12b"],
+    )
+    answers = iter(["2", "qwen3.6:27b"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
+    model = _prompt_compatible_model_for_setup(
+        cfg,
+        base_url="http://localhost:11434/v1",
+        backend="ollama",
+        api_key="ollama",
+    )
+    assert model == "qwen3.6:27b"
 
 
 def test_resolve_provider_key_openai_compatible_defaults_to_ollama(monkeypatch):
@@ -138,8 +222,23 @@ def test_resolve_provider_key_openai_compatible_defaults_to_ollama(monkeypatch):
         provider="openai",
         cli_key=None,
         openai_base_url="http://localhost:11434/v1",
+        compatible_backend="ollama",
     )
     assert key == "ollama"
+
+
+def test_resolve_provider_key_openai_compatible_unsloth_uses_compatible_prompt(monkeypatch):
+    cfg = Config(data={})
+    monkeypatch.setattr("ct.cli._prompt_openai_compatible_api_key", lambda backend="other": "sk-unsloth-new")
+    monkeypatch.setattr("ct.cli._prompt_openai_api_key", lambda: "sk-openai-should-not-be-used")
+    key = _resolve_provider_key(
+        cfg,
+        provider="openai_compatible",
+        cli_key=None,
+        openai_base_url="http://localhost:8888/v1",
+        compatible_backend="unsloth",
+    )
+    assert key == "sk-unsloth-new"
 
 
 def test_setup_provider_runtime_id_maps_compatible_to_openai():
