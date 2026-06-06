@@ -256,8 +256,20 @@ def test_set_openai_key_accepts_non_sk_for_custom_compatible_endpoint():
             "llm.openai_base_url": "http://ai-server.tail9762ec.ts.net:11434/v1",
         }
     )
-    cfg.set("llm.openai_api_key", "ollama")
-    assert cfg.get("llm.openai_api_key") == "ollama"
+    cfg.set("llm.openai_compatible_api_key", "ollama")
+    assert cfg.get("llm.openai_compatible_api_key") == "ollama"
+
+
+def test_llm_api_key_prefers_compatible_key_for_custom_endpoint():
+    cfg = Config(
+        data={
+            "llm.provider": "openai",
+            "llm.openai_base_url": "http://localhost:11434/v1",
+            "llm.openai_api_key": "sk-proj-cloud-key",
+            "llm.openai_compatible_api_key": "ollama",
+        }
+    )
+    assert cfg.llm_api_key("openai") == "ollama"
 
 
 def test_set_anthropic_key_rejects_invalid_format():

@@ -18,6 +18,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse
 import typer
 from typing import Optional
 from pathlib import Path
@@ -59,7 +60,7 @@ app = typer.Typer(
 )
 console = Console()
 FASTFOLD_CLOUD_API_KEYS_URL = "https://cloud.fastfold.ai/api-keys"
-SETUP_PROVIDER_ORDER = ("anthropic", "openai")
+SETUP_PROVIDER_ORDER = ("anthropic", "openai", "openai_compatible")
 UV_INSTALL_FLAVORS = frozenset({"all", "win_build"})
 PYPI_PROJECT_JSON_URL = "https://pypi.org/pypi/fastfold-agent-cli/json"
 _SEMVER_TRIPLET_PATTERN = re.compile(r"^\s*v?(\d+)\.(\d+)\.(\d+)")
@@ -432,11 +433,16 @@ def setup_cmd(
     openai_api_key: Optional[str] = typer.Option(
         None, "--openai-api-key", help="OpenAI API key (non-interactive mode)"
     ),
+    openai_base_url: Optional[str] = typer.Option(
+        None,
+        "--openai-base-url",
+        help="OpenAI-compatible base URL (e.g. http://localhost:11434/v1)",
+    ),
     fastfold_api_key: Optional[str] = typer.Option(
         None, "--fastfold-api-key", help="Fastfold AI Cloud API key (non-interactive mode)"
     ),
     provider: Optional[str] = typer.Option(
-        None, "--provider", help="LLM provider: anthropic or openai"
+        None, "--provider", help="LLM provider(s): anthropic, openai, openai_compatible"
     ),
 ):
     """Interactive setup wizard — configure fastfold for first use."""
@@ -448,6 +454,8 @@ def setup_cmd(
         api_key = None
     if isinstance(openai_api_key, OptionInfo):
         openai_api_key = None
+    if isinstance(openai_base_url, OptionInfo):
+        openai_base_url = None
     if isinstance(fastfold_api_key, OptionInfo):
         fastfold_api_key = None
     if isinstance(provider, OptionInfo):
@@ -456,7 +464,7 @@ def setup_cmd(
     cfg = Config.load()
 
     default_provider = str(provider or cfg.get("llm.provider", "anthropic") or "anthropic").strip().lower()
-    if default_provider not in {"anthropic", "openai"}:
+    if default_provider not in {"anthropic", "openai", "openai_compatible"}:
         default_provider = "anthropic"
 
     # Azure AI Foundry: skip interactive key prompt when Foundry is configured
@@ -485,12 +493,27 @@ def setup_cmd(
     else:
         selected_providers = _prompt_setup_providers(default_provider)
 
+    resolved_openai_base_url: Optional[str] = None
+    if "openai_compatible" in selected_providers:
+        resolved_openai_base_url = _resolve_openai_base_url(
+            cfg,
+            cli_base_url=openai_base_url,
+            force_mode="compatible",
+        )
+    elif "openai" in selected_providers:
+        resolved_openai_base_url = _resolve_openai_base_url(
+            cfg,
+            cli_base_url=openai_base_url,
+            force_mode="cloud",
+        )
+
     resolved_keys: dict[str, str] = {}
     for prov in selected_providers:
         chosen_key = _resolve_provider_key(
             cfg,
             provider=prov,
-            cli_key=(openai_api_key if prov == "openai" else api_key),
+            cli_key=(openai_api_key if prov in {"openai", "openai_compatible"} else api_key),
+            openai_base_url=resolved_openai_base_url if prov == "openai_compatible" else None,
         )
         if prov == "anthropic" and (not chosen_key or not chosen_key.startswith("sk-ant-")):
             console.print(
@@ -513,18 +536,32 @@ def setup_cmd(
     # Save
     for prov, key in resolved_keys.items():
         if prov == "openai":
+            cfg.unset("llm.openai_base_url")
             cfg.set("llm.openai_api_key", key)
+        elif prov == "openai_compatible":
+            if resolved_openai_base_url:
+                cfg.set("llm.openai_base_url", resolved_openai_base_url)
+            else:
+                cfg.set("llm.openai_base_url", "http://localhost:11434/v1")
+            cfg.set("llm.openai_compatible_api_key", key)
         elif prov == "anthropic":
             cfg.set("llm.anthropic_api_key", key)
-    active_provider = default_provider if default_provider in selected_providers else selected_providers[0]
-    cfg.set("llm.provider", active_provider)
+    active_setup_provider = default_provider if default_provider in selected_providers else selected_providers[0]
+    cfg.set("llm.provider", _setup_provider_runtime_id(active_setup_provider))
     if cloud_key:
         cfg.set("api.fastfold_cloud_key", cloud_key)
         # Make available immediately to subprocess tools/skills in this run.
         os.environ["FASTFOLD_API_KEY"] = cloud_key
     cfg.save()
     provider_labels = ", ".join(
-        "OpenAI" if p == "openai" else "Anthropic" for p in selected_providers
+        (
+            "OpenAI"
+            if p == "openai"
+            else "OpenAI-compatible"
+            if p == "openai_compatible"
+            else "Anthropic"
+        )
+        for p in selected_providers
     )
     console.print(
         f"\n  [green]{provider_labels} API key(s) saved to ~/.fastfold-cli/config.json[/green]"
@@ -605,6 +642,150 @@ def _prompt_openai_api_key() -> str:
     return key.strip()
 
 
+def _prompt_openai_api_key_with_default(default_key: str = "ollama") -> str:
+    """Prompt for OpenAI-compatible API key with a default fallback."""
+    console.print(
+        "  [dim]OpenAI-compatible endpoint detected.[/dim] "
+        f"Press Enter to use default key: [green]{default_key}[/green]"
+    )
+    console.print()
+    try:
+        key = _prompt_masked_secret(f"  Enter API key [{default_key}]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n  [dim]Setup cancelled.[/dim]")
+        raise typer.Exit()
+    return key or default_key
+
+
+def _is_openai_managed_base_url(base_url: Optional[str]) -> bool:
+    """Return True for OpenAI-managed hosts, False for compatible gateways."""
+    value = str(base_url or "").strip()
+    if not value:
+        return True
+    try:
+        host = (urlparse(value).hostname or "").strip().lower()
+    except Exception:
+        return False
+    if not host:
+        return False
+    return host == "api.openai.com" or host.endswith(".openai.com")
+
+
+def _normalize_openai_base_url(base_url: Optional[str]) -> Optional[str]:
+    value = str(base_url or "").strip().rstrip("/")
+    return value or None
+
+
+def _prompt_openai_endpoint_mode(default_mode: str = "cloud") -> str:
+    """Prompt whether to use OpenAI cloud or custom compatible endpoint."""
+    default_mode = "compatible" if str(default_mode).strip().lower() == "compatible" else "cloud"
+
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        try:
+            import questionary
+            from prompt_toolkit.styles import Style
+
+            selector_style = Style.from_dict(
+                {
+                    "qmark": "fg:#00bcd4 bold",
+                    "question": "bold",
+                    "answer": "fg:#4caf50 bold",
+                    "pointer": "fg:#4caf50",
+                    "highlighted": "noreverse bold",
+                    "selected": "fg:#4caf50 bold",
+                    "instruction": "fg:#858585",
+                    "text": "fg:#858585",
+                }
+            )
+            selected = questionary.select(
+                "OpenAI setup mode",
+                choices=[
+                    questionary.Choice(
+                        title="OpenAI cloud (api.openai.com)",
+                        value="cloud",
+                    ),
+                    questionary.Choice(
+                        title="OpenAI-compatible custom endpoint (Ollama/vLLM/LM Studio/proxy)",
+                        value="compatible",
+                    ),
+                ],
+                default=default_mode,
+                instruction="(↑/↓ move, enter confirm)",
+                style=selector_style,
+                qmark="❯",
+            ).ask()
+            if selected is None:
+                console.print("  [dim]Setup cancelled.[/dim]")
+                raise typer.Exit()
+            return "compatible" if selected == "compatible" else "cloud"
+        except typer.Exit:
+            raise
+        except Exception:
+            pass
+
+    console.print("\n  [cyan]OpenAI setup mode[/cyan]")
+    console.print("  [dim]Options:[/dim] cloud (c), compatible (k)")
+    prompt_default = "compatible" if default_mode == "compatible" else "cloud"
+    console.print(f"  [dim]Press Enter to keep default:[/dim] {prompt_default}")
+    try:
+        raw = input("  Mode: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n  [dim]Setup cancelled.[/dim]")
+        raise typer.Exit()
+    if not raw:
+        return prompt_default
+    if raw in {"compatible", "compat", "custom", "k"}:
+        return "compatible"
+    if raw in {"cloud", "openai", "c"}:
+        return "cloud"
+    console.print("  [yellow]Invalid mode selection; defaulting to cloud.[/yellow]")
+    return "cloud"
+
+
+def _resolve_openai_base_url(
+    cfg,
+    cli_base_url: Optional[str] = None,
+    force_mode: Optional[str] = None,
+) -> Optional[str]:
+    """Resolve OpenAI-compatible base URL from CLI/config/prompt.
+
+    Returns None for OpenAI default endpoint to avoid redundant config writes.
+    """
+    mode_override = str(force_mode or "").strip().lower()
+
+    if cli_base_url is not None:
+        normalized = _normalize_openai_base_url(cli_base_url)
+        if not normalized:
+            return None
+        if mode_override == "compatible":
+            return normalized
+        if _is_openai_managed_base_url(normalized):
+            return None
+        return normalized
+
+    existing = _normalize_openai_base_url(cfg.get("llm.openai_base_url"))
+    if mode_override in {"cloud", "compatible"}:
+        mode = mode_override
+    else:
+        default_mode = "compatible" if (existing and not _is_openai_managed_base_url(existing)) else "cloud"
+        mode = _prompt_openai_endpoint_mode(default_mode=default_mode)
+    if mode != "compatible":
+        return None
+    default_endpoint = existing if (existing and not _is_openai_managed_base_url(existing)) else "http://localhost:11434/v1"
+    console.print("\n  [cyan]OpenAI endpoint setup[/cyan]")
+    console.print("  [dim]Examples: OpenAI cloud, Ollama, vLLM, LM Studio, proxy gateways[/dim]")
+
+    try:
+        entered = input(f"  Endpoint base URL [{default_endpoint}]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n  [dim]Setup cancelled.[/dim]")
+        raise typer.Exit()
+    chosen = _normalize_openai_base_url(entered or default_endpoint)
+    if not chosen or _is_openai_managed_base_url(chosen):
+        return None
+    return chosen
+
+
 def _prompt_masked_secret(message: str) -> str:
     """Prompt for secrets with visible masked characters while typing."""
     # Prefer questionary in interactive terminals (shows mask while typing).
@@ -645,11 +826,19 @@ def _prompt_masked_secret(message: str) -> str:
 
 def _parse_provider_list(raw: str) -> list[str]:
     """Parse provider list from CLI option, preserving canonical order."""
-    requested = {
-        part.strip().lower()
-        for part in str(raw or "").split(",")
-        if part.strip()
+    alias_map = {
+        "anthropic": "anthropic",
+        "openai": "openai",
+        "openai_compatible": "openai_compatible",
+        "openai-compatible": "openai_compatible",
+        "compatible": "openai_compatible",
     }
+    requested = set()
+    for part in str(raw or "").split(","):
+        token = part.strip().lower()
+        if not token:
+            continue
+        requested.add(alias_map.get(token, token))
     selected = [p for p in SETUP_PROVIDER_ORDER if p in requested]
     if not selected:
         valid = ", ".join(SETUP_PROVIDER_ORDER)
@@ -661,8 +850,12 @@ def _parse_provider_list(raw: str) -> list[str]:
 def _prompt_setup_providers(default_provider: str) -> list[str]:
     """Interactive provider selector (arrow keys + space toggles)."""
     options = list(SETUP_PROVIDER_ORDER)
-    labels = {"anthropic": "Anthropic", "openai": "OpenAI"}
-    default = default_provider if default_provider in options else options[0]
+    labels = {
+        "anthropic": "Anthropic",
+        "openai": "OpenAI",
+        "openai_compatible": "OpenAI-compatible custom endpoint",
+    }
+    _ = default_provider
 
     # Preferred UX in real terminals: questionary inline checklist.
     if sys.stdin.isatty() and sys.stdout.isatty():
@@ -687,10 +880,9 @@ def _prompt_setup_providers(default_provider: str) -> list[str]:
 
             choices = [
                 questionary.Choice(
-                    title=f"{labels.get(prov, prov.title())}"
-                    + (" (default)" if prov == default else ""),
+                    title=f"{labels.get(prov, prov.title())}",
                     value=prov,
-                    checked=(prov == default),
+                    checked=False,
                 )
                 for prov in options
             ]
@@ -720,6 +912,10 @@ def _prompt_setup_providers(default_provider: str) -> list[str]:
         "anthropic": "anthropic",
         "o": "openai",
         "openai": "openai",
+        "k": "openai_compatible",
+        "compatible": "openai_compatible",
+        "openai-compatible": "openai_compatible",
+        "openai_compatible": "openai_compatible",
         "all": "all",
         "both": "all",
     }
@@ -727,10 +923,7 @@ def _prompt_setup_providers(default_provider: str) -> list[str]:
     while True:
         console.print("  [cyan]Select provider(s) to configure[/cyan]")
         console.print(
-            "  [dim]Options:[/dim] anthropic (a), openai (o), both/all"
-        )
-        console.print(
-            f"  [dim]Press Enter to keep default:[/dim] {labels[default]}"
+            "  [dim]Options:[/dim] anthropic (a), openai (o), openai_compatible (k), all"
         )
         try:
             raw = input("  Providers: ").strip().lower()
@@ -739,7 +932,8 @@ def _prompt_setup_providers(default_provider: str) -> list[str]:
             raise typer.Exit()
 
         if not raw:
-            return [default]
+            console.print("  [yellow]Select at least one provider.[/yellow]")
+            continue
 
         tokens = [t for t in raw.replace(",", " ").split() if t]
         selected: set[str] = set()
@@ -762,32 +956,56 @@ def _prompt_setup_providers(default_provider: str) -> list[str]:
         return [p for p in options if p in selected]
 
 
-def _resolve_provider_key(cfg, provider: str, cli_key: Optional[str] = None) -> str:
+def _setup_provider_runtime_id(provider_id: str) -> str:
+    """Map setup provider id to runtime llm.provider."""
+    return "openai" if provider_id == "openai_compatible" else provider_id
+
+
+def _resolve_provider_key(
+    cfg,
+    provider: str,
+    cli_key: Optional[str] = None,
+    openai_base_url: Optional[str] = None,
+) -> str:
     """Resolve provider key from cli arg, existing config, env var, or prompt."""
     provider = str(provider).strip().lower()
-    if provider == "openai":
-        existing_key = cfg.llm_api_key("openai")
-        env_var_name = "OPENAI_API_KEY"
+    if provider in {"openai", "openai_compatible"}:
+        is_compat = provider == "openai_compatible" or (
+            bool(openai_base_url) and not _is_openai_managed_base_url(openai_base_url)
+        )
+        key_config_key = "llm.openai_compatible_api_key" if is_compat else "llm.openai_api_key"
+        existing_key = cfg.get(key_config_key) or cfg.llm_api_key("openai")
+        env_var_name = "OPENAI_COMPATIBLE_API_KEY" if is_compat else "OPENAI_API_KEY"
         prompt_fn = _prompt_openai_api_key
-        label = "OpenAI"
-        config_key = "llm.openai_api_key"
+        label = "OpenAI-compatible" if is_compat else "OpenAI"
+        config_key = key_config_key
+        default_compat_key = "ollama" if is_compat else None
     else:
         existing_key = cfg.llm_api_key("anthropic")
         env_var_name = "ANTHROPIC_API_KEY"
         prompt_fn = _prompt_api_key
         label = "Anthropic"
         config_key = "llm.anthropic_api_key"
+        default_compat_key = None
 
     console.print(f"\n  [cyan]{label} setup[/cyan]")
     if cli_key:
         candidate = cli_key.strip()
-        issue = cfg.validate_llm_api_key(config_key, candidate)
+        issue = cfg.validate_llm_api_key(
+            config_key,
+            candidate,
+            openai_base_url=openai_base_url,
+        )
         if issue:
             console.print(f"  [red]{issue}[/red]")
             raise typer.Exit(code=2)
         return candidate
     if existing_key:
-        existing_issue = cfg.validate_llm_api_key(config_key, existing_key)
+        existing_issue = cfg.validate_llm_api_key(
+            config_key,
+            existing_key,
+            openai_base_url=openai_base_url,
+        )
         if existing_issue:
             console.print(
                 f"  [yellow]Existing {label} key is invalid and will be replaced:[/yellow] {existing_issue}"
@@ -806,7 +1024,11 @@ def _resolve_provider_key(cfg, provider: str, cli_key: Optional[str] = None) -> 
 
     env_key = os.environ.get(env_var_name)
     if env_key:
-        env_issue = cfg.validate_llm_api_key(config_key, env_key)
+        env_issue = cfg.validate_llm_api_key(
+            config_key,
+            env_key,
+            openai_base_url=openai_base_url,
+        )
         if env_issue:
             console.print(
                 f"  [yellow]Ignoring invalid {env_var_name} value:[/yellow] {env_issue}"
@@ -823,8 +1045,15 @@ def _resolve_provider_key(cfg, provider: str, cli_key: Optional[str] = None) -> 
                 return env_key
 
     while True:
-        candidate = prompt_fn()
-        issue = cfg.validate_llm_api_key(config_key, candidate)
+        if default_compat_key:
+            candidate = _prompt_openai_api_key_with_default(default_compat_key)
+        else:
+            candidate = prompt_fn()
+        issue = cfg.validate_llm_api_key(
+            config_key,
+            candidate,
+            openai_base_url=openai_base_url,
+        )
         if not issue:
             return candidate
         console.print(f"  [yellow]{issue}[/yellow]")

@@ -64,6 +64,7 @@ DEFAULTS = {
     "llm.anthropic_api_key": None,
     "llm.api_key": None,
     "llm.openai_api_key": None,
+    "llm.openai_compatible_api_key": None,
     "llm.openai_base_url": None,
     "llm.temperature": 0.1,
 
@@ -239,6 +240,13 @@ API_KEYS = {
         "description": "OpenAI model access (when llm.provider=openai)",
         "url": "https://platform.openai.com/api-keys",
         "free": False,
+    },
+    "llm.openai_compatible_api_key": {
+        "name": "OpenAI-compatible",
+        "env_var": "OPENAI_COMPATIBLE_API_KEY",
+        "description": "Custom OpenAI-compatible endpoints (Ollama/vLLM/LM Studio/proxy)",
+        "url": "https://docs.ollama.com/api/introduction",
+        "free": True,
     },
     "api.ibm_rxn_key": {
         "name": "IBM RXN",
@@ -442,6 +450,7 @@ class Config:
         env_mappings = {
             "ANTHROPIC_API_KEY": "llm.anthropic_api_key",
             "OPENAI_API_KEY": "llm.openai_api_key",
+            "OPENAI_COMPATIBLE_API_KEY": "llm.openai_compatible_api_key",
             "OPENAI_BASE_URL": "llm.openai_base_url",
             "CT_DATA_DIR": "data.base",
             "CT_LLM_PROVIDER": "llm.provider",
@@ -552,7 +561,12 @@ class Config:
             elif expected_type == int:
                 value = int(value)
 
-        if key in {"llm.anthropic_api_key", "llm.api_key", "llm.openai_api_key"}:
+        if key in {
+            "llm.anthropic_api_key",
+            "llm.api_key",
+            "llm.openai_api_key",
+            "llm.openai_compatible_api_key",
+        }:
             value = self._normalized_secret(value)
             issue = self.validate_llm_api_key(
                 key,
@@ -613,6 +627,10 @@ class Config:
                 )
             return None
 
+        if config_key == "llm.openai_compatible_api_key":
+            # Compatibility endpoints frequently use placeholder or custom keys.
+            return None
+
         if config_key in {"llm.anthropic_api_key", "llm.api_key"}:
             if not ANTHROPIC_API_KEY_PATTERN.match(normalized):
                 return (
@@ -637,6 +655,11 @@ class Config:
         """Get the best API key for the selected provider."""
         provider = (provider or self.get("llm.provider", "anthropic")).lower()
         if provider == "openai":
+            base_url = self.llm_openai_base_url()
+            if base_url and not self._is_openai_managed_base_url(base_url):
+                return self._normalized_secret(
+                    self.get("llm.openai_compatible_api_key") or self.get("llm.openai_api_key")
+                )
             return self._normalized_secret(self.get("llm.openai_api_key"))
         # Backward compatibility: legacy llm.api_key is Anthropic-only fallback.
         return self._normalized_secret(
@@ -717,7 +740,11 @@ class Config:
 
         if provider == "openai":
             base_url = self.llm_openai_base_url()
+            compat_key = self._normalized_secret(self.get("llm.openai_compatible_api_key"))
             if base_url and not self._is_openai_managed_base_url(base_url):
+                # For compatible endpoints, key may be optional or custom.
+                if compat_key:
+                    return None
                 return None
             if self._is_local_openai_base_url(base_url):
                 return None
@@ -756,7 +783,10 @@ class Config:
                 else:
                     status = "[green]configured[/green]" if val else "[red]not set[/red]"
             elif config_key == "llm.openai_api_key":
-                val = self.llm_api_key("openai")
+                val = self._normalized_secret(self.get("llm.openai_api_key"))
+                status = "[green]configured[/green]" if val else "[red]not set[/red]"
+            elif config_key == "llm.openai_compatible_api_key":
+                val = self._normalized_secret(self.get("llm.openai_compatible_api_key"))
                 status = "[green]configured[/green]" if val else "[red]not set[/red]"
             else:
                 val = self._normalized_secret(self.get(config_key))

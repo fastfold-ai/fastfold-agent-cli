@@ -99,6 +99,22 @@ AVAILABLE_MODELS = {
 
 from ct.ui.suggestions import DEFAULT_SUGGESTIONS
 
+_ANTHROPIC_MODEL_IDS = {m[0] for m in AVAILABLE_MODELS.get("anthropic", [])}
+
+
+def _is_openai_managed_base_url(base_url: str | None) -> bool:
+    """Return True for OpenAI-managed API hosts."""
+    value = str(base_url or "").strip()
+    if not value:
+        return True
+    try:
+        host = (urlparse(value).hostname or "").strip().lower()
+    except Exception:
+        return False
+    if not host:
+        return False
+    return host == "api.openai.com" or host.endswith(".openai.com")
+
 
 # ---------------------------------------------------------------------------
 # @ Mention: datasets and completer
@@ -1107,6 +1123,28 @@ class InteractiveTerminal:
         }
         return names.get(model_id, model_id)
 
+    def _current_provider_status(self) -> tuple[str, str, str | None]:
+        """Return effective provider id, user-facing label, and endpoint (if any)."""
+        raw_provider = str(self.session.config.get("llm.provider", "anthropic") or "anthropic").strip().lower()
+        current_model = str(self.session.current_model or "").strip()
+        openai_base_url = str(self.session.config.get("llm.openai_base_url") or "").strip()
+
+        if raw_provider == "openai":
+            if openai_base_url:
+                return "openai", "OpenAI-compatible custom endpoint", openai_base_url
+            return "openai", "OpenAI", None
+        if raw_provider == "anthropic":
+            # If a custom OpenAI-compatible endpoint is configured and the active
+            # model is not an Anthropic id, treat this as OpenAI-compatible mode.
+            if openai_base_url and current_model and current_model not in _ANTHROPIC_MODEL_IDS:
+                return "openai", "OpenAI-compatible custom endpoint", openai_base_url
+            return "anthropic", "Anthropic", None
+        if raw_provider == "local":
+            return "local", "Local", None
+        if raw_provider == "gluelm":
+            return "gluelm", "GlueLM", None
+        return raw_provider or "anthropic", (raw_provider or "anthropic"), None
+
     def _mention_completing(self) -> bool:
         """Check if @ mention completions are currently active."""
         try:
@@ -1532,11 +1570,19 @@ class InteractiveTerminal:
 
         self.console.print(f"  [yellow]{issue}[/yellow]")
         if provider == "openai":
+            openai_base_url = str(self.session.config.get("llm.openai_base_url") or "").strip()
+            is_compat = bool(openai_base_url) and not _is_openai_managed_base_url(openai_base_url)
             self.console.print(
-                "  [dim]Set OPENAI_API_KEY or enter it now to continue.[/dim]"
+                "  [dim]Set OPENAI_COMPATIBLE_API_KEY (or OPENAI_API_KEY) or enter it now to continue.[/dim]"
+                if is_compat
+                else "  [dim]Set OPENAI_API_KEY or enter it now to continue.[/dim]"
             )
-            prompt = "  Enter OpenAI API key (or press Enter to cancel): "
-            cfg_key = "llm.openai_api_key"
+            prompt = (
+                "  Enter OpenAI-compatible API key (or press Enter to cancel): "
+                if is_compat
+                else "  Enter OpenAI API key (or press Enter to cancel): "
+            )
+            cfg_key = "llm.openai_compatible_api_key" if is_compat else "llm.openai_api_key"
         else:
             self.console.print(
                 "  [dim]Set ANTHROPIC_API_KEY or enter it now to continue.[/dim]"
@@ -1747,7 +1793,7 @@ class InteractiveTerminal:
 
     def _switch_model(self):
         """Interactive model switcher."""
-        provider = self.session.config.get("llm.provider", "anthropic")
+        provider, provider_label, provider_endpoint = self._current_provider_status()
         models_with_provider: list[tuple[str, str, str, str]] = []
         for prov, models in AVAILABLE_MODELS.items():
             for model_id, display, desc in models:
@@ -1755,7 +1801,9 @@ class InteractiveTerminal:
         current = self.session.current_model
 
         self.console.print(f"\n  [cyan]Current model:[/cyan] {self._model_display_name()} ({current})")
-        self.console.print(f"  [cyan]Provider:[/cyan] {provider}\n")
+        self.console.print(f"  [cyan]Provider:[/cyan] {provider_label}\n")
+        if provider_endpoint:
+            self.console.print(f"  [cyan]Endpoint:[/cyan] {provider_endpoint}\n")
 
         if not models_with_provider:
             self.console.print("  [yellow]No model options configured[/yellow]")
@@ -1809,7 +1857,7 @@ class InteractiveTerminal:
         default_model = str(self.session.current_model or "").strip()
         if default_model in {"", "__custom_openai_compatible__"}:
             default_model = "llama3.1"
-        current_key = str(self.session.config.get("llm.openai_api_key") or "").strip()
+        current_key = str(self.session.config.get("llm.openai_compatible_api_key") or "").strip()
 
         self.console.print("\n  [cyan]OpenAI-compatible endpoint setup[/cyan]")
         self.console.print("  [dim]Examples: Ollama, vLLM, LM Studio, gateway proxies[/dim]")
@@ -1845,15 +1893,15 @@ class InteractiveTerminal:
         self.session.set_model(model_id, provider="openai")
         self.session.config.set("llm.openai_base_url", base_url)
         if api_key:
-            self.session.config.set("llm.openai_api_key", api_key)
+            self.session.config.set("llm.openai_compatible_api_key", api_key)
         elif current_key:
             # Enter with blank input keeps the existing key for convenience.
             pass
         else:
-            self.session.config.unset("llm.openai_api_key")
+            self.session.config.unset("llm.openai_compatible_api_key")
         self.session.config.save()
 
-        key_state = "configured" if self.session.config.get("llm.openai_api_key") else "not set"
+        key_state = "configured" if self.session.config.get("llm.openai_compatible_api_key") else "not set"
         self.console.print(
             "  [green]Switched to OpenAI-compatible endpoint[/green] "
             f"[dim]model={model_id} endpoint={base_url} api_key={key_state}[/dim]"

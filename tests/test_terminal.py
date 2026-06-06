@@ -68,6 +68,21 @@ class TestTerminalMethods:
         assert terminal._model_display_name("gpt-5.4-mini") == "GPT-5.4 Mini"
         assert terminal._model_display_name("unknown-model") == "unknown-model"
 
+    def test_current_provider_status_openai_compatible_when_custom_endpoint_active(self, terminal):
+        def _cfg_get(key, default=None):
+            values = {
+                "llm.provider": "anthropic",
+                "llm.openai_base_url": "http://ai-server.tailnet:11434/v1",
+            }
+            return values.get(key, default)
+
+        terminal.session.config.get.side_effect = _cfg_get
+        terminal.session.current_model = "qwen3.6:27b"
+        provider, label, endpoint = terminal._current_provider_status()
+        assert provider == "openai"
+        assert label == "OpenAI-compatible custom endpoint"
+        assert endpoint == "http://ai-server.tailnet:11434/v1"
+
     def test_ollama_tags_url_from_openai_base_url(self, terminal):
         del terminal  # static method coverage only
         assert (
@@ -110,7 +125,7 @@ class TestTerminalMethods:
             values = {
                 "llm.provider": "anthropic",
                 "llm.openai_base_url": None,
-                "llm.openai_api_key": None,
+                "llm.openai_compatible_api_key": None,
             }
             return values.get(key, default)
 
@@ -126,7 +141,7 @@ class TestTerminalMethods:
 
         terminal.session.set_model.assert_called_once_with("qwen3.6:27b", provider="openai")
         terminal.session.config.set.assert_called_once_with("llm.openai_base_url", "http://localhost:11434/v1")
-        terminal.session.config.unset.assert_called_once_with("llm.openai_api_key")
+        terminal.session.config.unset.assert_called_once_with("llm.openai_compatible_api_key")
         terminal.session.config.save.assert_called_once()
 
     def test_ensure_llm_ready_prompts_and_saves_openai_key(self, terminal):
@@ -141,6 +156,26 @@ class TestTerminalMethods:
         terminal._secret_prompt_session.prompt.return_value = "sk-openai-123"
         assert terminal._ensure_llm_ready_for_query() is True
         terminal.session.config.set.assert_called_once_with("llm.openai_api_key", "sk-openai-123")
+        terminal.session.config.save.assert_called_once()
+
+    def test_ensure_llm_ready_uses_openai_compatible_key_for_custom_endpoint(self, terminal):
+        terminal.session.config.llm_preflight_issue.side_effect = [
+            "OpenAI-compatible API key not configured",
+            None,
+        ]
+
+        def _cfg_get(key, default=None):
+            values = {
+                "llm.provider": "openai",
+                "llm.openai_base_url": "http://localhost:11434/v1",
+            }
+            return values.get(key, default)
+
+        terminal.session.config.get.side_effect = _cfg_get
+        terminal._secret_prompt_session = MagicMock()
+        terminal._secret_prompt_session.prompt.return_value = "ollama"
+        assert terminal._ensure_llm_ready_for_query() is True
+        terminal.session.config.set.assert_called_once_with("llm.openai_compatible_api_key", "ollama")
         terminal.session.config.save.assert_called_once()
 
     def test_ensure_llm_ready_cancelled_returns_false(self, terminal):

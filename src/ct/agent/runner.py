@@ -253,8 +253,9 @@ def _format_openai_error(exc: Exception) -> str:
     text = message.lower()
     if status == 401 or "invalid_api_key" in text or "incorrect api key" in text:
         hint = (
-            "OpenAI authentication failed. Set OPENAI_API_KEY or run "
-            "`fastfold config set llm.openai_api_key <key>`."
+            "OpenAI authentication failed. Set OPENAI_API_KEY (or OPENAI_COMPATIBLE_API_KEY for custom endpoints) "
+            "or run `fastfold config set llm.openai_api_key <key>` / "
+            "`fastfold config set llm.openai_compatible_api_key <key>`."
         )
     elif status == 400 and any(
         k in text for k in ("model", "not found", "do not have access", "unsupported")

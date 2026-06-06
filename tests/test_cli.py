@@ -12,6 +12,11 @@ from ct.cli import (
     app,
     _parse_provider_list,
     _prompt_setup_providers,
+    _is_openai_managed_base_url,
+    _prompt_openai_endpoint_mode,
+    _resolve_openai_base_url,
+    _resolve_provider_key,
+    _setup_provider_runtime_id,
     setup_cmd,
     resolve_upgrade_flavor,
     build_upgrade_command,
@@ -31,6 +36,10 @@ def test_parse_provider_list_multiple_preserves_order():
     assert _parse_provider_list("openai,anthropic") == ["anthropic", "openai"]
 
 
+def test_parse_provider_list_openai_compatible_alias():
+    assert _parse_provider_list("compatible,openai") == ["openai", "openai_compatible"]
+
+
 def test_parse_provider_list_invalid_raises():
     with pytest.raises(Exception):
         _parse_provider_list("bogus")
@@ -44,10 +53,11 @@ def test_prompt_setup_providers_inline_accepts_aliases(monkeypatch):
     assert selected == ["anthropic", "openai"]
 
 
-def test_prompt_setup_providers_inline_enter_keeps_default(monkeypatch):
+def test_prompt_setup_providers_inline_requires_explicit_selection(monkeypatch):
     monkeypatch.setattr("ct.cli.sys.stdin.isatty", lambda: False)
     monkeypatch.setattr("ct.cli.sys.stdout.isatty", lambda: False)
-    monkeypatch.setattr("builtins.input", lambda _: "")
+    answers = iter(["", "o"])
+    monkeypatch.setattr("builtins.input", lambda _: next(answers))
     selected = _prompt_setup_providers("openai")
     assert selected == ["openai"]
 
@@ -81,13 +91,60 @@ def test_setup_cmd_direct_call_handles_typer_option_defaults(monkeypatch):
     monkeypatch.setattr("ct.cli._prompt_setup_providers", lambda default: ["anthropic"])
     monkeypatch.setattr(
         "ct.cli._resolve_provider_key",
-        lambda cfg, provider, cli_key=None: "sk-ant-api03-test",
+        lambda cfg, provider, cli_key=None, openai_base_url=None: "sk-ant-api03-test",
     )
     monkeypatch.setattr("ct.cli._prompt_fastfold_cloud_api_key", lambda cfg, cli_key: None)
 
     setup_cmd()
     assert cfg.get("llm.provider") == "anthropic"
     assert cfg.get("llm.anthropic_api_key") == "sk-ant-api03-test"
+
+
+def test_is_openai_managed_base_url_detects_hosts():
+    assert _is_openai_managed_base_url("https://api.openai.com/v1") is True
+    assert _is_openai_managed_base_url("https://gateway.openai.com/v1") is True
+    assert _is_openai_managed_base_url("http://localhost:11434/v1") is False
+    assert _is_openai_managed_base_url("http://ai-server.tailnet:11434/v1") is False
+
+
+def test_resolve_openai_base_url_cli_custom():
+    cfg = Config(data={})
+    assert _resolve_openai_base_url(cfg, cli_base_url="http://localhost:11434/v1") == "http://localhost:11434/v1"
+
+
+def test_resolve_openai_base_url_cli_openai_default_returns_none():
+    cfg = Config(data={})
+    assert _resolve_openai_base_url(cfg, cli_base_url="https://api.openai.com/v1") is None
+
+
+def test_prompt_openai_endpoint_mode_fallback_compatible(monkeypatch):
+    monkeypatch.setattr("ct.cli.sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("ct.cli.sys.stdout.isatty", lambda: False)
+    monkeypatch.setattr("builtins.input", lambda _: "k")
+    assert _prompt_openai_endpoint_mode(default_mode="cloud") == "compatible"
+
+
+def test_resolve_openai_base_url_interactive_cloud_mode_returns_none(monkeypatch):
+    cfg = Config(data={})
+    monkeypatch.setattr("ct.cli._prompt_openai_endpoint_mode", lambda default_mode="cloud": "cloud")
+    assert _resolve_openai_base_url(cfg, cli_base_url=None) is None
+
+
+def test_resolve_provider_key_openai_compatible_defaults_to_ollama(monkeypatch):
+    cfg = Config(data={})
+    monkeypatch.setattr("ct.cli._prompt_openai_api_key_with_default", lambda default_key="ollama": default_key)
+    key = _resolve_provider_key(
+        cfg,
+        provider="openai",
+        cli_key=None,
+        openai_base_url="http://localhost:11434/v1",
+    )
+    assert key == "ollama"
+
+
+def test_setup_provider_runtime_id_maps_compatible_to_openai():
+    assert _setup_provider_runtime_id("openai_compatible") == "openai"
+    assert _setup_provider_runtime_id("anthropic") == "anthropic"
 
 
 def test_keys_subcommand_not_treated_as_query():
