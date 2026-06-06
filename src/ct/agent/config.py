@@ -14,6 +14,7 @@ import logging
 import re
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -63,6 +64,7 @@ DEFAULTS = {
     "llm.anthropic_api_key": None,
     "llm.api_key": None,
     "llm.openai_api_key": None,
+    "llm.openai_base_url": None,
     "llm.temperature": 0.1,
 
     "data.base": str(CONFIG_DIR / "data"),
@@ -440,6 +442,7 @@ class Config:
         env_mappings = {
             "ANTHROPIC_API_KEY": "llm.anthropic_api_key",
             "OPENAI_API_KEY": "llm.openai_api_key",
+            "OPENAI_BASE_URL": "llm.openai_base_url",
             "CT_DATA_DIR": "data.base",
             "CT_LLM_PROVIDER": "llm.provider",
             "CT_LLM_MODEL": "llm.model",
@@ -551,7 +554,11 @@ class Config:
 
         if key in {"llm.anthropic_api_key", "llm.api_key", "llm.openai_api_key"}:
             value = self._normalized_secret(value)
-            issue = self.validate_llm_api_key(key, value)
+            issue = self.validate_llm_api_key(
+                key,
+                value,
+                openai_base_url=self.get("llm.openai_base_url"),
+            )
             if issue:
                 raise ValueError(issue)
 
@@ -579,13 +586,21 @@ class Config:
         return text or None
 
     @classmethod
-    def validate_llm_api_key(cls, config_key: str, value: Any) -> Optional[str]:
+    def validate_llm_api_key(
+        cls,
+        config_key: str,
+        value: Any,
+        *,
+        openai_base_url: Optional[str] = None,
+    ) -> Optional[str]:
         """Validate provider API keys; return issue message, else None."""
         normalized = cls._normalized_secret(value)
         if normalized is None:
             return None
 
         if config_key == "llm.openai_api_key":
+            if not cls._is_openai_managed_base_url(openai_base_url):
+                return None
             if normalized.startswith("sk-ant-"):
                 return (
                     "Invalid OpenAI API key format: looks like an Anthropic key ('sk-ant-...'). "
@@ -628,6 +643,39 @@ class Config:
             self.get("llm.anthropic_api_key") or self.get("llm.api_key")
         )
 
+    def llm_openai_base_url(self) -> Optional[str]:
+        """Return normalized OpenAI-compatible base URL, if configured."""
+        value = self._normalized_secret(self.get("llm.openai_base_url"))
+        if not value:
+            return None
+        return value.rstrip("/")
+
+    @staticmethod
+    def _is_local_openai_base_url(base_url: Optional[str]) -> bool:
+        """Heuristic: localhost OpenAI-compatible endpoints can skip API keys."""
+        if not base_url:
+            return False
+        try:
+            parsed = urlparse(str(base_url).strip())
+        except Exception:
+            return False
+        host = (parsed.hostname or "").strip().lower()
+        return host in {"localhost", "127.0.0.1", "::1"}
+
+    @staticmethod
+    def _is_openai_managed_base_url(base_url: Optional[str]) -> bool:
+        """Return True when base URL points to OpenAI-managed API hosts."""
+        if not base_url:
+            return True
+        try:
+            parsed = urlparse(str(base_url).strip())
+        except Exception:
+            return False
+        host = (parsed.hostname or "").strip().lower()
+        if not host:
+            return False
+        return host == "api.openai.com" or host.endswith(".openai.com")
+
     def llm_preflight_issue(self) -> Optional[str]:
         """Return a human-readable LLM config issue, or None when ready."""
         provider_raw = self.get("llm.provider", "anthropic")
@@ -668,6 +716,11 @@ class Config:
             return None
 
         if provider == "openai":
+            base_url = self.llm_openai_base_url()
+            if base_url and not self._is_openai_managed_base_url(base_url):
+                return None
+            if self._is_local_openai_base_url(base_url):
+                return None
             return (
                 "OpenAI API key not configured. Set OPENAI_API_KEY or run:\n"
                 "  fastfold config set llm.openai_api_key <key>"

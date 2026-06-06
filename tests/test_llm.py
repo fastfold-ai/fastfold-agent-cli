@@ -167,3 +167,16 @@ class TestOpenAIModelCompatibility:
         assert kwargs["max_completion_tokens"] == 321
         assert "max_tokens" not in kwargs
         assert "temperature" not in kwargs
+
+    def test_openai_client_passes_custom_base_url(self):
+        with patch("openai.OpenAI") as mock_openai_ctor:
+            client = LLMClient(
+                provider="openai",
+                model="gpt-4o",
+                api_key="sk-test",
+                base_url="http://localhost:11434/v1",
+            )
+            client._get_client()
+
+        kwargs = mock_openai_ctor.call_args.kwargs
+        assert kwargs["base_url"] == "http://localhost:11434/v1"

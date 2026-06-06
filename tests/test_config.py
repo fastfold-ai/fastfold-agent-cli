@@ -72,6 +72,44 @@ def test_llm_preflight_requires_openai_key():
     assert "OpenAI API key" in issue
 
 
+def test_llm_preflight_allows_local_openai_base_url_without_key():
+    cfg = Config(
+        data={
+            "llm.provider": "openai",
+            "llm.model": "llama3.1",
+            "llm.openai_base_url": "http://localhost:11434/v1",
+            "llm.openai_api_key": None,
+        }
+    )
+    assert cfg.llm_preflight_issue() is None
+
+
+def test_llm_preflight_requires_key_for_non_local_openai_base_url():
+    cfg = Config(
+        data={
+            "llm.provider": "openai",
+            "llm.model": "gpt-5.5",
+            "llm.openai_base_url": "https://api.openai.com/v1",
+            "llm.openai_api_key": None,
+        }
+    )
+    issue = cfg.llm_preflight_issue()
+    assert issue is not None
+    assert "OpenAI API key" in issue
+
+
+def test_llm_preflight_allows_custom_remote_openai_compatible_without_key():
+    cfg = Config(
+        data={
+            "llm.provider": "openai",
+            "llm.model": "qwen3.6:27b",
+            "llm.openai_base_url": "http://ai-server.tail9762ec.ts.net:11434/v1",
+            "llm.openai_api_key": None,
+        }
+    )
+    assert cfg.llm_preflight_issue() is None
+
+
 def test_llm_preflight_accepts_openai_key():
     cfg = Config(
         data={
@@ -210,6 +248,16 @@ def test_set_openai_key_accepts_project_format():
     key = "sk-proj-AbCdEf1234567890xyz"
     cfg.set("llm.openai_api_key", key)
     assert cfg.get("llm.openai_api_key") == key
+
+
+def test_set_openai_key_accepts_non_sk_for_custom_compatible_endpoint():
+    cfg = Config(
+        data={
+            "llm.openai_base_url": "http://ai-server.tail9762ec.ts.net:11434/v1",
+        }
+    )
+    cfg.set("llm.openai_api_key", "ollama")
+    assert cfg.get("llm.openai_api_key") == "ollama"
 
 
 def test_set_anthropic_key_rejects_invalid_format():

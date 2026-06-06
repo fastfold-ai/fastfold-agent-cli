@@ -54,6 +54,7 @@ def test_runner_openai_tool_loop_and_summary():
     cfg.get.side_effect = lambda key, default=None: {
         "llm.provider": "openai",
         "llm.model": "gpt-4o",
+        "llm.openai_base_url": "http://localhost:11434/v1",
         "llm.temperature": 0.1,
         "agent.max_sdk_turns": 5,
         "agent.synthesis_max_tokens": 512,
@@ -61,6 +62,7 @@ def test_runner_openai_tool_loop_and_summary():
         "agent.enable_experimental_tools": False,
     }.get(key, default)
     cfg.llm_api_key.return_value = "sk-test"
+    cfg.llm_openai_base_url.return_value = "http://localhost:11434/v1"
 
     session = MagicMock()
     session.config = cfg
@@ -83,7 +85,7 @@ def test_runner_openai_tool_loop_and_summary():
         _fake_response("Final synthesized answer", tool_calls=[], in_tokens=50, out_tokens=30),
     ]
 
-    with patch("openai.OpenAI", return_value=client), patch(
+    with patch("openai.OpenAI", return_value=client) as openai_ctor, patch(
         "ct.agent.mcp_server.create_ct_tool_runtime",
         return_value=(tool_specs, executor, None, ["chemistry.pubchem_lookup"], []),
     ), patch("ct.agent.system_prompt.build_system_prompt", return_value="sys prompt"), patch(
@@ -99,6 +101,8 @@ def test_runner_openai_tool_loop_and_summary():
     assert result.metadata["sdk_output_tokens"] == 30
     tools_payload = client.chat.completions.create.call_args_list[0].kwargs["tools"]
     assert tools_payload[0]["function"]["name"] == "chemistry_pubchem_lookup"
+    openai_kwargs = openai_ctor.call_args.kwargs
+    assert openai_kwargs["base_url"] == "http://localhost:11434/v1"
 
 
 def test_runner_openai_plan_preview_rejection_returns_error():
@@ -113,6 +117,7 @@ def test_runner_openai_plan_preview_rejection_returns_error():
         "agent.enable_experimental_tools": False,
     }.get(key, default)
     cfg.llm_api_key.return_value = "sk-test"
+    cfg.llm_openai_base_url.return_value = None
 
     session = MagicMock()
     session.config = cfg
@@ -177,6 +182,7 @@ def test_runner_openai_caps_tool_payload_to_provider_limit():
         "agent.enable_experimental_tools": False,
     }.get(key, default)
     cfg.llm_api_key.return_value = "sk-test"
+    cfg.llm_openai_base_url.return_value = None
 
     session = MagicMock()
     session.config = cfg

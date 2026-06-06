@@ -16,6 +16,7 @@ from collections import deque
 from dataclasses import dataclass
 import urllib.error
 import urllib.request
+from urllib.parse import urlparse, urlunparse
 
 from rich.console import Console
 from rich.panel import Panel
@@ -88,6 +89,11 @@ AVAILABLE_MODELS = {
         ("gpt-5.4-nano", "GPT-5.4 Nano", "Cheapest GPT-5.4-class model for high-volume simple tasks"),
         ("gpt-5-mini", "GPT-5 Mini", "Near-frontier model for cost-sensitive low-latency workloads"),
         ("gpt-5-nano", "GPT-5 Nano", "Cheapest GPT-5-class model for simple high-volume tasks"),
+        (
+            "__custom_openai_compatible__",
+            "OpenAI-compatible (custom endpoint)",
+            "Use Ollama/local/self-hosted OpenAI-compatible APIs",
+        ),
     ],
 }
 
@@ -1777,15 +1783,177 @@ class InteractiveTerminal:
         idx = int(choice) - 1
         selected_provider, model_id, display, _ = models_with_provider[idx]
 
+        if model_id == "__custom_openai_compatible__":
+            self._configure_openai_compatible_model()
+            return
+
         if model_id == current and str(provider).strip().lower() == selected_provider:
             self.console.print(f"  [dim]Already using {display}.[/dim]")
             return
 
         self.session.set_model(model_id, provider=selected_provider)
+        if selected_provider != "openai":
+            # Prevent stale base URLs from affecting non-OpenAI providers.
+            self.session.config.unset("llm.openai_base_url")
         self.session.config.save()  # Persist to ~/.fastfold-cli/config.json
         self.console.print(
             f"  [green]Switched to {display}[/green] ({model_id}) [dim]provider={selected_provider}[/dim]"
         )
+
+    def _configure_openai_compatible_model(self) -> None:
+        """Configure OpenAI-compatible model endpoint (e.g., Ollama local server)."""
+        default_base_url = (
+            str(self.session.config.get("llm.openai_base_url") or "").strip()
+            or "http://localhost:11434/v1"
+        )
+        default_model = str(self.session.current_model or "").strip()
+        if default_model in {"", "__custom_openai_compatible__"}:
+            default_model = "llama3.1"
+        current_key = str(self.session.config.get("llm.openai_api_key") or "").strip()
+
+        self.console.print("\n  [cyan]OpenAI-compatible endpoint setup[/cyan]")
+        self.console.print("  [dim]Examples: Ollama, vLLM, LM Studio, gateway proxies[/dim]")
+
+        try:
+            endpoint_input = self._prompt_session.prompt(
+                [("class:prompt", f"  Endpoint base URL [{default_base_url}]: ")],
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            self.console.print("  [dim]Cancelled.[/dim]")
+            return
+        base_url = (endpoint_input or default_base_url).rstrip("/")
+        if not base_url:
+            self.console.print("  [dim]Cancelled.[/dim]")
+            return
+
+        discovered_models = self._fetch_ollama_model_tags(base_url)
+        model_id = self._choose_model_from_discovered_tags(discovered_models, default_model)
+        if not model_id:
+            self.console.print("  [dim]Cancelled.[/dim]")
+            return
+
+        key_hint = "  API key (optional, press Enter to keep existing/none): "
+        try:
+            api_key = self._secret_prompt_session.prompt(
+                [("class:prompt", key_hint)],
+                is_password=True,
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            self.console.print("  [dim]Cancelled.[/dim]")
+            return
+
+        self.session.set_model(model_id, provider="openai")
+        self.session.config.set("llm.openai_base_url", base_url)
+        if api_key:
+            self.session.config.set("llm.openai_api_key", api_key)
+        elif current_key:
+            # Enter with blank input keeps the existing key for convenience.
+            pass
+        else:
+            self.session.config.unset("llm.openai_api_key")
+        self.session.config.save()
+
+        key_state = "configured" if self.session.config.get("llm.openai_api_key") else "not set"
+        self.console.print(
+            "  [green]Switched to OpenAI-compatible endpoint[/green] "
+            f"[dim]model={model_id} endpoint={base_url} api_key={key_state}[/dim]"
+        )
+
+    @staticmethod
+    def _ollama_tags_url_from_base(base_url: str) -> str:
+        """Build an Ollama /api/tags URL from an OpenAI-compatible base URL."""
+        parsed = urlparse(str(base_url or "").strip())
+        path = (parsed.path or "").rstrip("/")
+        if path.endswith("/v1"):
+            path = path[:-3]
+        tags_path = f"{path}/api/tags" if path else "/api/tags"
+        return urlunparse(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                tags_path,
+                "",
+                "",
+                "",
+            )
+        )
+
+    def _fetch_ollama_model_tags(self, base_url: str) -> list[str]:
+        """Best-effort fetch of available Ollama models from /api/tags."""
+        tags_url = self._ollama_tags_url_from_base(base_url)
+        req = urllib.request.Request(
+            url=tags_url,
+            headers={"Accept": "application/json"},
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=5.0) as resp:
+                payload = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
+        except Exception:
+            self.console.print(
+                "  [yellow]Could not fetch model tags from endpoint.[/yellow] "
+                "[dim]You can still enter a model manually.[/dim]"
+            )
+            return []
+
+        models = payload.get("models") if isinstance(payload, dict) else None
+        if not isinstance(models, list):
+            self.console.print(
+                "  [yellow]Endpoint reachable, but /api/tags returned no model list.[/yellow] "
+                "[dim]You can still enter a model manually.[/dim]"
+            )
+            return []
+
+        names: list[str] = []
+        for item in models:
+            if not isinstance(item, dict):
+                continue
+            raw = item.get("name") or item.get("model")
+            name = str(raw or "").strip()
+            if name and name not in names:
+                names.append(name)
+        if names:
+            self.console.print(f"  [green]Found {len(names)} model(s) from /api/tags.[/green]")
+        else:
+            self.console.print(
+                "  [yellow]No models found at /api/tags.[/yellow] "
+                "[dim]You can still enter a model manually.[/dim]"
+            )
+        return names
+
+    def _choose_model_from_discovered_tags(self, discovered_models: list[str], default_model: str) -> str | None:
+        """Choose a model from discovered tags or enter one manually."""
+        if discovered_models:
+            self.console.print("  [cyan]Available models[/cyan]")
+            for i, model_name in enumerate(discovered_models, 1):
+                self.console.print(f"    [{i}] {model_name}")
+            manual_idx = len(discovered_models) + 1
+            self.console.print(f"    [{manual_idx}] Enter custom model name")
+            try:
+                choice = self._prompt_session.prompt(
+                    [("class:prompt", "  Select model (number): ")],
+                ).strip()
+            except (EOFError, KeyboardInterrupt):
+                return None
+            if choice.isdigit():
+                selected = int(choice)
+                if 1 <= selected <= len(discovered_models):
+                    return discovered_models[selected - 1]
+                if selected == manual_idx:
+                    pass
+                else:
+                    self.console.print("  [dim]Invalid selection; switching to manual entry.[/dim]")
+            elif choice:
+                self.console.print("  [dim]Invalid selection; switching to manual entry.[/dim]")
+
+        try:
+            model_input = self._prompt_session.prompt(
+                [("class:prompt", f"  Model ID [{default_model}]: ")],
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        model_id = model_input or default_model
+        return model_id or None
 
     def _getch(self):
         """Read a single character from standard input without requiring Enter."""

@@ -1867,7 +1867,11 @@ class AgentRunner:
             plan_preview = bool(config.get("agent.plan_preview", False))
 
             api_key = config.llm_api_key("openai")
-            client = openai.OpenAI(api_key=api_key)
+            openai_kwargs = {"api_key": api_key}
+            base_url = config.llm_openai_base_url()
+            if base_url:
+                openai_kwargs["base_url"] = base_url
+            client = openai.OpenAI(**openai_kwargs)
 
             if plan_preview and not self._headless:
                 plan_resp = client.chat.completions.create(

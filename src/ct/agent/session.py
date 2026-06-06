@@ -35,11 +35,13 @@ class Session:
         provider = self.config.get("llm.provider", "anthropic")
         model = self.config.get("llm.model", None)
         api_key = self.config.llm_api_key(provider)
+        base_url = self.config.llm_openai_base_url() if str(provider).strip().lower() == "openai" else None
 
         return LLMClient(
             provider=provider,
             model=model,
             api_key=api_key,
+            base_url=base_url,
         )
 
     def set_model(self, model: str, provider: str = None):

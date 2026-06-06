@@ -122,10 +122,11 @@ class LLMClient:
     }
 
     def __init__(self, provider: str = "anthropic", model: str = None,
-                 api_key: str = None):
+                 api_key: str = None, base_url: str | None = None):
         self.provider = provider
         self.model = model or self.DEFAULT_MODELS.get(provider)
         self.api_key = api_key
+        self.base_url = str(base_url).strip().rstrip("/") if base_url else None
         self._client = None
         self.usage = UsageTracker()
 
@@ -145,9 +146,12 @@ class LLMClient:
 
         elif self.provider == "openai":
             import openai
-            self._client = openai.OpenAI(
-                api_key=self.api_key or os.environ.get("OPENAI_API_KEY")
-            )
+            client_kwargs = {
+                "api_key": self.api_key or os.environ.get("OPENAI_API_KEY")
+            }
+            if self.base_url:
+                client_kwargs["base_url"] = self.base_url
+            self._client = openai.OpenAI(**client_kwargs)
 
         elif self.provider == "local":
             # Local model via vLLM, ollama, or direct transformers

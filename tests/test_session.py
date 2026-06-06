@@ -1,6 +1,5 @@
 """Tests for Session: model switching, LLM client management."""
 
-import pytest
 from unittest.mock import MagicMock, patch
 from ct.agent.session import Session
 from ct.agent.config import Config
@@ -94,6 +93,7 @@ class TestSessionBasics:
             "llm.model": "gpt-4o",
             "llm.api_key": "anthropic-key",
             "llm.openai_api_key": "openai-key",
+            "llm.openai_base_url": "http://localhost:11434/v1",
         })
         session = Session(config=cfg)
 
@@ -103,6 +103,7 @@ class TestSessionBasics:
 
         assert kwargs["provider"] == "openai"
         assert kwargs["api_key"] == "openai-key"
+        assert kwargs["base_url"] == "http://localhost:11434/v1"
 
 
 class TestToolHealth:
