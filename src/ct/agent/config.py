@@ -66,6 +66,7 @@ DEFAULTS = {
     "llm.openai_api_key": None,
     "llm.openai_compatible_api_key": None,
     "llm.openai_base_url": None,
+    "llm.openai_compatible_backend": None,
     "llm.temperature": 0.1,
 
     "data.base": str(CONFIG_DIR / "data"),

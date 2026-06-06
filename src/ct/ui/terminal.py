@@ -92,7 +92,7 @@ AVAILABLE_MODELS = {
         (
             "__custom_openai_compatible__",
             "OpenAI-compatible (custom endpoint)",
-            "Use Ollama/local/self-hosted OpenAI-compatible APIs",
+            "Use Ollama/Unsloth/local/self-hosted OpenAI-compatible APIs",
         ),
     ],
 }
@@ -625,6 +625,12 @@ class InteractiveTerminal:
             style=PT_STYLE,
             multiline=False,
         )
+        # Plain session for setup/config prompts that should not use completions
+        # and must never be masked like password inputs.
+        self._plain_prompt_session = PromptSession(
+            style=PT_STYLE,
+            multiline=False,
+        )
         # Auto-highlight (not apply) the first completion for slash commands
         # so the dropdown shows which item will be accepted on Enter.
         def _auto_highlight_first(buf):
@@ -1145,6 +1151,29 @@ class InteractiveTerminal:
             return "gluelm", "GlueLM", None
         return raw_provider or "anthropic", (raw_provider or "anthropic"), None
 
+    def _current_compatible_backend_label(self) -> str | None:
+        """Return compatible backend label for status line, when applicable."""
+        _, provider_label, endpoint = self._current_provider_status()
+        if not endpoint or "OpenAI-compatible" not in provider_label:
+            return None
+
+        backend = str(self.session.config.get("llm.openai_compatible_backend") or "").strip().lower()
+        if backend == "ollama":
+            return "Ollama"
+        if backend == "unsloth":
+            return "Unsloth"
+        if backend in {"other", "custom"}:
+            return "Custom"
+
+        # Fallback heuristics for older configs that predate backend selection.
+        key = str(self.session.config.get("llm.openai_compatible_api_key") or "").strip().lower()
+        endpoint_text = str(endpoint).strip().lower()
+        if key.startswith("sk-unsloth-") or "8888" in endpoint_text:
+            return "Unsloth"
+        if "11434" in endpoint_text:
+            return "Ollama"
+        return "Custom"
+
     def _mention_completing(self) -> bool:
         """Check if @ mention completions are currently active."""
         try:
@@ -1176,6 +1205,9 @@ class InteractiveTerminal:
             return HTML(f'{tab_bar}  <style fg="#555555" bg="default">·  ←/→ switch tab</style>')
 
         model = self._model_display_name()
+        compat_backend = self._current_compatible_backend_label()
+        if compat_backend:
+            model = f"{model} · {compat_backend}"
         if self._has_active_query():
             with self._run_lock:
                 queued = len(self._queued_queries)
@@ -1800,8 +1832,12 @@ class InteractiveTerminal:
                 models_with_provider.append((prov, model_id, display, desc))
         current = self.session.current_model
 
-        self.console.print(f"\n  [cyan]Current model:[/cyan] {self._model_display_name()} ({current})")
-        self.console.print(f"  [cyan]Provider:[/cyan] {provider_label}\n")
+        compat_backend = self._current_compatible_backend_label()
+        backend_suffix = f" ({compat_backend})" if compat_backend else ""
+        self.console.print(
+            f"\n  [cyan]Current model:[/cyan] {self._model_display_name()}{backend_suffix} ({current})"
+        )
+        self.console.print(f"  [cyan]Provider:[/cyan] {provider_label}{backend_suffix}\n")
         if provider_endpoint:
             self.console.print(f"  [cyan]Endpoint:[/cyan] {provider_endpoint}\n")
 
@@ -1844,9 +1880,11 @@ class InteractiveTerminal:
             # Choosing one of the built-in OpenAI models means "cloud OpenAI"
             # unless the user explicitly selected the custom-endpoint option.
             self.session.config.unset("llm.openai_base_url")
+            self.session.config.unset("llm.openai_compatible_backend")
         else:
             # Prevent stale base URLs from affecting non-OpenAI providers.
             self.session.config.unset("llm.openai_base_url")
+            self.session.config.unset("llm.openai_compatible_backend")
         self.session.config.save()  # Persist to ~/.fastfold-cli/config.json
         self.console.print(
             f"  [green]Switched to {display}[/green] ({model_id}) [dim]provider={selected_provider}[/dim]"
@@ -1854,20 +1892,32 @@ class InteractiveTerminal:
 
     def _configure_openai_compatible_model(self) -> None:
         """Configure OpenAI-compatible model endpoint (e.g., Ollama local server)."""
-        default_base_url = (
+        existing_base_url = (
             str(self.session.config.get("llm.openai_base_url") or "").strip()
             or "http://localhost:11434/v1"
         )
+        default_base_url = existing_base_url
         default_model = str(self.session.current_model or "").strip()
         if default_model in {"", "__custom_openai_compatible__"}:
             default_model = "llama3.1"
         current_key = str(self.session.config.get("llm.openai_compatible_api_key") or "").strip()
 
         self.console.print("\n  [cyan]OpenAI-compatible endpoint setup[/cyan]")
-        self.console.print("  [dim]Examples: Ollama, vLLM, LM Studio, gateway proxies[/dim]")
+        self.console.print("  [dim]Examples: Ollama, Unsloth, vLLM, LM Studio, gateway proxies[/dim]")
+
+        backend = self._prompt_openai_compatible_backend(default_base_url)
+        if not backend:
+            self.console.print("  [dim]Cancelled.[/dim]")
+            return
+        if backend == "unsloth":
+            default_base_url = "http://localhost:8888/v1"
+        elif backend == "ollama":
+            default_base_url = "http://localhost:11434/v1"
+        else:
+            default_base_url = existing_base_url
 
         try:
-            endpoint_input = self._prompt_session.prompt(
+            endpoint_input = self._plain_prompt_session.prompt(
                 [("class:prompt", f"  Endpoint base URL [{default_base_url}]: ")],
             ).strip()
         except (EOFError, KeyboardInterrupt):
@@ -1878,17 +1928,15 @@ class InteractiveTerminal:
             self.console.print("  [dim]Cancelled.[/dim]")
             return
 
-        discovered_models = self._fetch_ollama_model_tags(base_url)
-        model_id = self._choose_model_from_discovered_tags(discovered_models, default_model)
-        if not model_id:
-            self.console.print("  [dim]Cancelled.[/dim]")
-            return
-
-        default_key = "ollama"
-        key_hint = (
-            "  API key "
-            f"[(ollama) Enter to keep default, or enter custom key]: "
-        )
+        if backend == "ollama":
+            default_key = "ollama"
+            key_hint = "  API key [(ollama) Enter to keep default, or enter custom key]: "
+        elif backend == "unsloth":
+            default_key = current_key or ""
+            key_hint = "  API key [Unsloth sk-unsloth-...; Enter keeps existing]: "
+        else:
+            default_key = current_key or ""
+            key_hint = "  API key [optional; Enter keeps existing/none]: "
         try:
             api_key = self._secret_prompt_session.prompt(
                 [("class:prompt", key_hint)],
@@ -1898,8 +1946,20 @@ class InteractiveTerminal:
             self.console.print("  [dim]Cancelled.[/dim]")
             return
 
+        effective_key = api_key or current_key or default_key
+        discovered_models = self._fetch_compatible_models(
+            base_url,
+            backend=backend,
+            api_key=effective_key or None,
+        )
+        model_id = self._choose_model_from_discovered_tags(discovered_models, default_model)
+        if not model_id:
+            self.console.print("  [dim]Cancelled.[/dim]")
+            return
+
         self.session.set_model(model_id, provider="openai")
         self.session.config.set("llm.openai_base_url", base_url)
+        self.session.config.set("llm.openai_compatible_backend", backend)
         if api_key:
             self.session.config.set("llm.openai_compatible_api_key", api_key)
         elif current_key:
@@ -1914,6 +1974,36 @@ class InteractiveTerminal:
             "  [green]Switched to OpenAI-compatible endpoint[/green] "
             f"[dim]model={model_id} endpoint={base_url} api_key={key_state}[/dim]"
         )
+
+    def _prompt_openai_compatible_backend(self, base_url: str) -> str | None:
+        """Prompt for compatible backend type to avoid endpoint guessing."""
+        default_choice = "other"
+        current_key = str(self.session.config.get("llm.openai_compatible_api_key") or "").strip()
+        if current_key.startswith("sk-unsloth-"):
+            default_choice = "unsloth"
+        elif "11434" in str(base_url):
+            default_choice = "ollama"
+
+        self.console.print("  [cyan]Endpoint type[/cyan]")
+        self.console.print("    [1] Ollama (/api/tags)")
+        self.console.print("    [2] Unsloth (/v1/models, auth)")
+        self.console.print("    [3] Other OpenAI-compatible (/v1/models then /api/tags)")
+        default_num = {"ollama": "1", "unsloth": "2", "other": "3"}[default_choice]
+        try:
+            raw = self._plain_prompt_session.prompt(
+                [("class:prompt", f"  Select endpoint type [{default_num}]: ")],
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        selected = raw or default_num
+        if selected == "1":
+            return "ollama"
+        if selected == "2":
+            return "unsloth"
+        if selected == "3":
+            return "other"
+        self.console.print("  [dim]Invalid selection; using generic compatible mode.[/dim]")
+        return "other"
 
     @staticmethod
     def _ollama_tags_url_from_base(base_url: str) -> str:
@@ -1934,34 +2024,84 @@ class InteractiveTerminal:
             )
         )
 
-    def _fetch_ollama_model_tags(self, base_url: str) -> list[str]:
-        """Best-effort fetch of available Ollama models from /api/tags."""
-        tags_url = self._ollama_tags_url_from_base(base_url)
-        req = urllib.request.Request(
-            url=tags_url,
-            headers={"Accept": "application/json"},
+    @staticmethod
+    def _openai_models_url_from_base(base_url: str) -> str:
+        """Build an OpenAI-compatible /v1/models URL from base URL."""
+        parsed = urlparse(str(base_url or "").strip())
+        path = (parsed.path or "").rstrip("/")
+        if path.endswith("/v1"):
+            models_path = f"{path}/models"
+        elif path:
+            models_path = f"{path}/v1/models"
+        else:
+            models_path = "/v1/models"
+        return urlunparse(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                models_path,
+                "",
+                "",
+                "",
+            )
+        )
+
+    def _fetch_openai_models(self, base_url: str, api_key: str | None = None) -> list[str]:
+        """Fetch model ids from OpenAI-compatible /v1/models."""
+        auth_headers = {"Accept": "application/json"}
+        if api_key:
+            auth_headers["Authorization"] = f"Bearer {api_key}"
+        models_url = self._openai_models_url_from_base(base_url)
+        req_models = urllib.request.Request(
+            url=models_url,
+            headers=auth_headers,
             method="GET",
         )
         try:
-            with urllib.request.urlopen(req, timeout=5.0) as resp:
+            with urllib.request.urlopen(req_models, timeout=5.0) as resp:
                 payload = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
-        except Exception:
-            self.console.print(
-                "  [yellow]Could not fetch model tags from endpoint.[/yellow] "
-                "[dim]You can still enter a model manually.[/dim]"
-            )
+            data = payload.get("data") if isinstance(payload, dict) else None
+        except urllib.error.HTTPError as exc:
+            if exc.code in {401, 403}:
+                self.console.print(
+                    "  [yellow]/v1/models requires endpoint auth.[/yellow] "
+                    "[dim]Check API key if model list is empty.[/dim]"
+                )
             return []
-
-        models = payload.get("models") if isinstance(payload, dict) else None
-        if not isinstance(models, list):
-            self.console.print(
-                "  [yellow]Endpoint reachable, but /api/tags returned no model list.[/yellow] "
-                "[dim]You can still enter a model manually.[/dim]"
-            )
+        except Exception:
             return []
 
         names: list[str] = []
-        for item in models:
+        for item in data if isinstance(data, list) else []:
+            if not isinstance(item, dict):
+                continue
+            model_id = str(item.get("id") or "").strip()
+            if model_id and model_id not in names:
+                names.append(model_id)
+        if names:
+            self.console.print(f"  [green]Found {len(names)} model(s) from /v1/models.[/green]")
+        return names
+
+    def _fetch_ollama_tags(self, base_url: str, api_key: str | None = None) -> list[str]:
+        """Fetch model names from Ollama /api/tags."""
+        auth_headers = {"Accept": "application/json"}
+        if api_key:
+            auth_headers["Authorization"] = f"Bearer {api_key}"
+        tags_url = self._ollama_tags_url_from_base(base_url)
+        req_tags = urllib.request.Request(
+            url=tags_url,
+            headers=auth_headers,
+            method="GET",
+        )
+        try:
+            with urllib.request.urlopen(req_tags, timeout=5.0) as resp:
+                payload = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
+        except Exception:
+            return []
+
+        models = payload.get("models") if isinstance(payload, dict) else None
+        names: list[str] = []
+        for item in models if isinstance(models, list) else []:
             if not isinstance(item, dict):
                 continue
             raw = item.get("name") or item.get("model")
@@ -1970,12 +2110,29 @@ class InteractiveTerminal:
                 names.append(name)
         if names:
             self.console.print(f"  [green]Found {len(names)} model(s) from /api/tags.[/green]")
-        else:
-            self.console.print(
-                "  [yellow]No models found at /api/tags.[/yellow] "
-                "[dim]You can still enter a model manually.[/dim]"
-            )
         return names
+
+    def _fetch_compatible_models(self, base_url: str, backend: str, api_key: str | None = None) -> list[str]:
+        """Discover models based on selected endpoint type."""
+        backend_type = str(backend or "").strip().lower()
+        if backend_type == "unsloth":
+            names = self._fetch_openai_models(base_url, api_key=api_key)
+        elif backend_type == "ollama":
+            names = self._fetch_ollama_tags(base_url, api_key=api_key)
+            if not names:
+                names = self._fetch_openai_models(base_url, api_key=api_key)
+        else:
+            names = self._fetch_openai_models(base_url, api_key=api_key)
+            if not names:
+                names = self._fetch_ollama_tags(base_url, api_key=api_key)
+
+        if names:
+            return names
+        self.console.print(
+            "  [yellow]No models found from discovery endpoint(s).[/yellow] "
+            "[dim]You can still enter a model manually.[/dim]"
+        )
+        return []
 
     def _choose_model_from_discovered_tags(self, discovered_models: list[str], default_model: str) -> str | None:
         """Choose a model from discovered tags or enter one manually."""
@@ -1986,7 +2143,7 @@ class InteractiveTerminal:
             manual_idx = len(discovered_models) + 1
             self.console.print(f"    [{manual_idx}] Enter custom model name")
             try:
-                choice = self._prompt_session.prompt(
+                choice = self._plain_prompt_session.prompt(
                     [("class:prompt", "  Select model (number): ")],
                 ).strip()
             except (EOFError, KeyboardInterrupt):
@@ -2003,7 +2160,7 @@ class InteractiveTerminal:
                 self.console.print("  [dim]Invalid selection; switching to manual entry.[/dim]")
 
         try:
-            model_input = self._prompt_session.prompt(
+            model_input = self._plain_prompt_session.prompt(
                 [("class:prompt", f"  Model ID [{default_model}]: ")],
             ).strip()
         except (EOFError, KeyboardInterrupt):
