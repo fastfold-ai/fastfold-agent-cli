@@ -105,6 +105,7 @@ class TestTerminalMethods:
         terminal._switch_model()
 
         terminal.session.set_model.assert_called_once_with("gpt-5.5", provider="openai")
+        terminal.session.config.unset.assert_called_once_with("llm.openai_base_url")
         terminal.session.config.save.assert_called_once()
 
     def test_switch_model_no_change_when_same_model_and_provider(self, terminal):
@@ -140,8 +141,8 @@ class TestTerminalMethods:
         terminal._switch_model()
 
         terminal.session.set_model.assert_called_once_with("qwen3.6:27b", provider="openai")
-        terminal.session.config.set.assert_called_once_with("llm.openai_base_url", "http://localhost:11434/v1")
-        terminal.session.config.unset.assert_called_once_with("llm.openai_compatible_api_key")
+        terminal.session.config.set.assert_any_call("llm.openai_base_url", "http://localhost:11434/v1")
+        terminal.session.config.set.assert_any_call("llm.openai_compatible_api_key", "ollama")
         terminal.session.config.save.assert_called_once()
 
     def test_ensure_llm_ready_prompts_and_saves_openai_key(self, terminal):

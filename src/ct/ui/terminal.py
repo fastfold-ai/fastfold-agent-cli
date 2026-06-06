@@ -1840,7 +1840,11 @@ class InteractiveTerminal:
             return
 
         self.session.set_model(model_id, provider=selected_provider)
-        if selected_provider != "openai":
+        if selected_provider == "openai":
+            # Choosing one of the built-in OpenAI models means "cloud OpenAI"
+            # unless the user explicitly selected the custom-endpoint option.
+            self.session.config.unset("llm.openai_base_url")
+        else:
             # Prevent stale base URLs from affecting non-OpenAI providers.
             self.session.config.unset("llm.openai_base_url")
         self.session.config.save()  # Persist to ~/.fastfold-cli/config.json
@@ -1880,7 +1884,11 @@ class InteractiveTerminal:
             self.console.print("  [dim]Cancelled.[/dim]")
             return
 
-        key_hint = "  API key (optional, press Enter to keep existing/none): "
+        default_key = "ollama"
+        key_hint = (
+            "  API key "
+            f"[(ollama) Enter to keep default, or enter custom key]: "
+        )
         try:
             api_key = self._secret_prompt_session.prompt(
                 [("class:prompt", key_hint)],
@@ -1898,7 +1906,7 @@ class InteractiveTerminal:
             # Enter with blank input keeps the existing key for convenience.
             pass
         else:
-            self.session.config.unset("llm.openai_compatible_api_key")
+            self.session.config.set("llm.openai_compatible_api_key", default_key)
         self.session.config.save()
 
         key_state = "configured" if self.session.config.get("llm.openai_compatible_api_key") else "not set"
