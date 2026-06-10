@@ -1,52 +1,67 @@
 # Fastfold Agent CLI
 
-Where scientists and AI agents work together doing real science.
-
-Ask questions in natural language. Fastfold CLI plans the analysis, selects the right tools, executes them, validates results, and returns data-backed conclusions. Integrates with [Fastfold AI Cloud](https://fastfold.ai) for GPU compute, protein folding, workflow orchestration, and team collaboration.
+An agent CLI for scientists with local and cloud integrations.
 
 Built on top of [Claude Agent SDK](https://github.com/anthropics/anthropic-sdk-python) and [CellType CLI](https://github.com/celltype/cli).
 
 ### Prerequisites
 
+<details>
+<summary>Install `uv`</summary>
+
 - **Python 3.10+** (recommended: let `uv` install managed interpreters).
-- **`uv`** — install from the Astral docs: [Installing uv](https://docs.astral.sh/uv/getting-started/installation/). Quick options:
-  - **macOS / Linux** (standalone installer):
+- **`uv`** — [Installing uv](https://docs.astral.sh/uv/getting-started/installation/). Quick options:
 
-    ```bash
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    ```
+**macOS / Linux:**
 
-  - **Windows** (PowerShell):
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
 
-    ```powershell
-    powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
-    ```
+**Windows (PowerShell):**
 
-    Alternatively: `winget install --id=astral-sh.uv -e` (see Astral docs for other methods).
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
 
-    After installing **`uv`**, close and reopen your terminal or PowerShell so **`PATH`** picks up the `uv` executable.
+Alternatively: `winget install --id=astral-sh.uv -e` (see Astral docs for other methods).
+
+After installing `uv`, close and reopen your terminal or PowerShell so `PATH` picks up the `uv` executable.
+
+</details>
 
 ### Quick install
 
 Requires **Python 3.10+** and prerequisites above.
 
+**Linux / macOS:**
+
 ```bash
 uv tool install "fastfold-agent-cli[all]" --python 3.10
 ```
 
-**Windows users — prefer WSL2 + Ubuntu (`[all]`):** **`tiledbsoma`** does not publish usable native Windows wheels, so **`[all]`** on cmd/PowerShell usually fails. Install **Windows Subsystem for Linux** following Microsoft’s guide: **[Install WSL](https://learn.microsoft.com/en-us/windows/wsl/install)** (recommended default distro **Ubuntu**), open an **Ubuntu** terminal, install **`uv`** + Python there, then run **`uv tool install "fastfold-agent-cli[all]" --python 3.10`** inside WSL.
-
-**Staying on native Windows cmd/PowerShell:** use **`[win_build]`** instead of **`[all]`** (same stack minus **`scanpy` / `cellxgene-census` / `tiledbsoma`**), or explicitly. **Claude Code ships inside `claude_agent_sdk`**, so **`uv tool install` is normally enough** — no **`npm`** on Linux/mac. On native Windows, **CLI ≥ `0.0.41`** validates real launcher spawnability and auto-fixes short launcher cache paths (`fastfold setup`, `fastfold autofix`, or interactive `/autofix`) to avoid **`WinError 206`** from deep `site-packages`; **≥ `0.0.37`** also prefers **`claude`** on **`PATH`** if you install **`@anthropic-ai/claude-code`**. Fallbacks: set **`UV_TOOL_DIR`** shorter before reinstall, **or** **`FASTFOLD_CLAUDE_CODE_CLI`**.
-
-```bash
-uv tool install "fastfold-agent-cli[chemistry,biology,ml,analysis]" --python 3.10
-```
-
-Convenience extra (**CLI ≥ `0.0.38`** on PyPI; Windows **`uv`**‑only installs use a short‑path bundled copy automatically):
+**Windows (cmd/PowerShell):**
 
 ```bash
 uv tool install "fastfold-agent-cli[win_build]" --python 3.10
 ```
+
+<details>
+<summary>Windows installation notes</summary>
+
+#### Recommended: WSL2 + Ubuntu (full `[all]` stack)
+
+`tiledbsoma` does not publish usable native Windows wheels, so `[all]` on cmd/PowerShell usually fails. Use WSL instead:
+
+1. Install [WSL](https://learn.microsoft.com/en-us/windows/wsl/install) (Ubuntu recommended).
+2. Open an **Ubuntu** terminal and install `uv` + Python (see [Prerequisites](#prerequisites) above).
+3. Run the same install command inside WSL:
+
+```bash
+uv tool install "fastfold-agent-cli[all]" --python 3.10
+```
+
+</details>
 
 ### Authentication
 
