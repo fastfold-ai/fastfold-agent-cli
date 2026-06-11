@@ -111,6 +111,7 @@ DEFAULTS = {
 
     "agent.max_iterations": 3,
     "agent.enable_experimental_tools": False,
+    "skills.allow_agent_install": False,
     "agent.observer_model": None,
     "agent.executor_max_retries": 2,
     "agent.executor_loop_limit": 50,

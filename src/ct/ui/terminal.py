@@ -48,6 +48,9 @@ SLASH_COMMANDS = {
     "/help": "Show command reference with examples",
     "/tools": "List all tools with status (stable/experimental)",
     "/skills": "List currently loaded skills",
+    "/skills-add": "Install a skill from GitHub/local path/name",
+    "/skills-find": "Discover installable skills from the catalog",
+    "/skills-remove": "Remove a globally-installed skill",
     "/model": "Switch LLM model/provider interactively",
     "/settings": "Configure UI and agent preferences",
     "/config": "Show active runtime configuration",
@@ -1367,6 +1370,20 @@ class InteractiveTerminal:
                         f"[yellow]Warning:[/yellow] {len(errors)} tool module(s) failed to load: "
                         f"{names}{extra}"
                     )
+                self._advance_suggestion()
+                continue
+            cmd_head = cmd.split(maxsplit=1)[0]
+            cmd_rest = query.split(maxsplit=1)[1] if len(query.split(maxsplit=1)) > 1 else ""
+            if cmd_head in ("skills-add", "/skills-add", "skill-add", "/skill-add"):
+                self._add_skill(cmd_rest)
+                self._advance_suggestion()
+                continue
+            if cmd_head in ("skills-find", "/skills-find", "skill-find", "/skill-find"):
+                self._find_skills(cmd_rest)
+                self._advance_suggestion()
+                continue
+            if cmd_head in ("skills-remove", "/skills-remove", "skill-remove", "/skill-remove"):
+                self._remove_skill(cmd_rest)
                 self._advance_suggestion()
                 continue
             if cmd in ("skill", "/skill", "skills", "/skills"):
@@ -3242,54 +3259,76 @@ class InteractiveTerminal:
     def _show_skills(self):
         """List currently loaded skills in interactive mode."""
         from rich.table import Table
+        from ct.agent.skills import list_skills
 
-        skill_entries: dict[str, dict[str, str | Path]] = {}
-
-        # Bundled skills shipped with ct
-        bundled_dir = Path(__file__).resolve().parents[1] / "skills"
-        if bundled_dir.exists():
-            for d in sorted(bundled_dir.iterdir()):
-                skill_md = d / "SKILL.md"
-                if d.is_dir() and skill_md.exists():
-                    skill_entries[d.name] = {"source": "bundled", "path": skill_md}
-
-        # User-installed skills from skills-lock.json
-        lock_file = Path.cwd() / "skills-lock.json"
-        claude_skills_dir = Path.cwd() / ".claude" / "skills"
-        if lock_file.exists() and claude_skills_dir.exists():
-            try:
-                lock = json.loads(lock_file.read_text())
-                for name, meta in lock.get("skills", {}).items():
-                    skill_md = claude_skills_dir / name / "SKILL.md"
-                    if skill_md.exists():
-                        source = "installed"
-                        if isinstance(meta, dict):
-                            source = f"installed ({meta.get('source', 'user')})"
-                        skill_entries[name] = {"source": source, "path": skill_md}
-            except Exception:
-                pass
-
-        if not skill_entries:
+        skills = list_skills()
+        if not skills:
             self.console.print("  [yellow]No skills loaded.[/yellow]")
+            self.console.print(
+                "  [dim]Add one with[/dim] /skills-add <github url or owner/repo@path>"
+            )
             return
 
-        table = Table(title=f"Loaded Skills ({len(skill_entries)})", show_lines=False)
+        table = Table(title=f"Loaded Skills ({len(skills)})", show_lines=False)
         table.add_column("Skill", style="bold cyan", no_wrap=True)
         table.add_column("Source", style="dim")
         table.add_column("Description", style="white")
 
-        for name, entry in sorted(skill_entries.items()):
-            description = ""
-            skill_md_path = entry["path"]
-            try:
-                content = Path(skill_md_path).read_text(encoding="utf-8")
-                for line in content.splitlines():
-                    if line.startswith("description:"):
-                        description = line.split(":", 1)[1].strip().strip('"').strip("'")
-                        break
-            except Exception:
-                pass
-
-            table.add_row(name, str(entry["source"]), description)
+        for info in skills:
+            table.add_row(info.name, info.source, info.description)
 
         self.console.print(table)
+
+    def _add_skill(self, source: str):
+        """Install a skill from a GitHub URL / shorthand / local path / name."""
+        from ct.agent.skills import install_skill
+
+        source = (source or "").strip()
+        if not source:
+            self.console.print(
+                "  [yellow]Usage:[/yellow] /skills-add <github url | owner/repo@path | local path | name>"
+            )
+            return
+        self.console.print(f"  [cyan]Installing skill from[/cyan] {source} ...")
+        result = install_skill(source)
+        if result.get("ok"):
+            self.console.print(f"  [green]{result['summary']}[/green]")
+            self.console.print(
+                "  [dim]Available on your next message (the system prompt reloads each turn).[/dim]"
+            )
+        else:
+            self.console.print(f"  [red]{result['summary']}[/red]")
+
+    def _find_skills(self, query: str = ""):
+        """Discover installable skills from the catalog."""
+        from rich.table import Table
+        from ct.agent.skills import discover_skills
+
+        self.console.print("  [cyan]Searching skill catalog...[/cyan]")
+        results = discover_skills(query.strip() or None)
+        if not results:
+            self.console.print(
+                "  [yellow]No matching skills found.[/yellow] "
+                "[dim](Requires git; check network/catalog access.)[/dim]"
+            )
+            return
+        table = Table(title=f"Available Skills ({len(results)})", show_lines=False)
+        table.add_column("Skill", style="bold cyan", no_wrap=True)
+        table.add_column("Install source", style="dim")
+        table.add_column("Description", style="white")
+        for r in results:
+            table.add_row(r["name"], r["install_source"], r["description"])
+        self.console.print(table)
+        self.console.print("  [dim]Install with:[/dim] /skills-add <install source>")
+
+    def _remove_skill(self, name: str):
+        """Remove a globally-installed skill by name."""
+        from ct.agent.skills import remove_skill
+
+        name = (name or "").strip()
+        if not name:
+            self.console.print("  [yellow]Usage:[/yellow] /skills-remove <name>")
+            return
+        result = remove_skill(name)
+        style = "green" if result.get("ok") else "yellow"
+        self.console.print(f"  [{style}]{result['summary']}[/{style}]")

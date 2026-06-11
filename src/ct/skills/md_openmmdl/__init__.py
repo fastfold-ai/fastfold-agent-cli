@@ -1,2 +1,0 @@
-"""OpenMMDL FastFold skill package."""
-

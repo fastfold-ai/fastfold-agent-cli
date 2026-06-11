@@ -47,6 +47,7 @@ _TOOL_MODULES = (
     "data_api",
     "parity",
     "ops",
+    "skills",
     "dna",
     "omics",
     "shell",

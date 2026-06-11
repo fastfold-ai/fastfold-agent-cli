@@ -67,31 +67,10 @@ _SEMVER_TRIPLET_PATTERN = re.compile(r"^\s*v?(\d+)\.(\d+)\.(\d+)")
 
 
 def _installed_claude_skill_names() -> list[str]:
-    """Return installed skill names: bundled catalog + user-installed lockfile."""
-    import json
+    """Return installed skill names across all tiers (global, project, bundled)."""
+    from ct.agent.skills import installed_skill_names
 
-    skill_names: set[str] = set()
-
-    # 1. Bundled skills shipped with the package
-    bundled_dir = Path(__file__).parent / "skills"
-    if bundled_dir.exists():
-        for d in bundled_dir.iterdir():
-            if d.is_dir() and (d / "SKILL.md").exists():
-                skill_names.add(d.name)
-
-    # 2. User-installed skills listed in skills-lock.json
-    lock_file = Path.cwd() / "skills-lock.json"
-    claude_skills_dir = Path.cwd() / ".claude" / "skills"
-    if lock_file.exists() and claude_skills_dir.exists():
-        try:
-            lock = json.loads(lock_file.read_text())
-            for name in lock.get("skills", {}):
-                if (claude_skills_dir / name / "SKILL.md").exists():
-                    skill_names.add(name)
-        except Exception:
-            pass
-
-    return sorted(skill_names)
+    return installed_skill_names()
 
 
 def _count_installed_claude_skills() -> int:
@@ -449,6 +428,12 @@ def setup_cmd(
     provider: Optional[str] = typer.Option(
         None, "--provider", help="LLM provider(s): anthropic, openai, openai_compatible"
     ),
+    skills: Optional[str] = typer.Option(
+        None, "--skills", help="Comma-separated skill names/sources to install non-interactively"
+    ),
+    skip_skills: bool = typer.Option(
+        False, "--skip-skills", help="Skip the agent-skills install step"
+    ),
 ):
     """Interactive setup wizard — configure fastfold for first use."""
     from ct.agent.config import Config
@@ -467,6 +452,10 @@ def setup_cmd(
         fastfold_api_key = None
     if isinstance(provider, OptionInfo):
         provider = None
+    if isinstance(skills, OptionInfo):
+        skills = None
+    if isinstance(skip_skills, OptionInfo):
+        skip_skills = False
 
     cfg = Config.load()
 
@@ -599,6 +588,9 @@ def setup_cmd(
             f"Set later with `fastfold config set api.fastfold_cloud_key <key>` "
             f"or visit {FASTFOLD_CLOUD_API_KEYS_URL}"
         )
+
+    # Optional: install agent skills (live catalog + custom sources)
+    _prompt_install_skills(skills_arg=skills, skip=skip_skills)
 
     if sys.platform == "win32":
         from ct.agent.claude_code_cli import run_windows_autofix
@@ -1358,6 +1350,295 @@ def _prompt_fastfold_cloud_api_key(cfg, cli_value: Optional[str] = None) -> Opti
     return key or None
 
 
+_PROVIDER_BY_OWNER = {
+    "fastfold-ai": "Fastfold",
+    "k-dense-ai": "K-Dense-AI",
+    "anthropics": "Anthropic",
+    "anthropic": "Anthropic",
+    "google-deepmind": "DeepMind",
+    "deepmind": "DeepMind",
+    "vercel-labs": "Vercel",
+}
+
+
+def _provider_label_for_source(source: str) -> str:
+    """Return a friendly provider label for a skill source (Fastfold, Anthropic, ...)."""
+    s = (source or "").strip()
+    if not s:
+        return "Custom"
+    if s.startswith(("./", "../", "/", "~")) or os.path.exists(os.path.expanduser(s)):
+        return "Local"
+    owner = ""
+    m = re.search(r"github\.com[:/]([\w.-]+)/", s)
+    if m:
+        owner = m.group(1)
+    else:
+        head = s.split("@", 1)[0]
+        if "/" in head:
+            owner = head.split("/", 1)[0]
+    return _PROVIDER_BY_OWNER.get(owner.lower(), owner or "Custom")
+
+
+def _install_skill_sources(sources: list[str]) -> None:
+    """Install a list of skill sources, preferring npx when available, else git.
+
+    When npx is available, sources targeting the same repo are batched into a single
+    `npx skills add <repo> --skill A --skill B ...` call (installed into the
+    fastfold-owned ~/.fastfold-cli/.claude/skills).
+    """
+    from collections import OrderedDict
+    from ct.agent.skills import install_skill, npx_add, _npx_target, _npx_available
+
+    prefer = _npx_available()
+    if not prefer:
+        console.print(f"  [dim]Installing {len(sources)} skill source(s) via `git` (npx not found).[/dim]")
+        for src in sources:
+            provider = _provider_label_for_source(src)
+            result = install_skill(src, prefer_npx=False)
+            if result.get("ok"):
+                console.print(f"  [green]\u2713[/green] [cyan]{provider}[/cyan]: {result['summary']} [dim](method: git)[/dim]")
+            else:
+                console.print(f"  [red]\u2717[/red] [cyan]{provider}[/cyan] {src}: {result.get('summary', 'install failed')} [dim](method: git)[/dim]")
+        return
+
+    console.print(
+        f"  [dim]Installing {len(sources)} skill source(s) via `npx skills add` "
+        "(grouped per repo; git fallback)...[/dim]"
+    )
+    # Group GitHub sources by npx target repo; keep local paths separate (git/local).
+    groups: "OrderedDict[str, dict]" = OrderedDict()
+    fallback: list[str] = []
+    for src in sources:
+        s = src.strip()
+        if s.startswith(("./", "../", "/", "~")) or os.path.exists(os.path.expanduser(s)):
+            fallback.append(src)
+            continue
+        target, skill, whole = _npx_target(src)
+        g = groups.setdefault(target, {"skills": [], "whole": False, "provider": _provider_label_for_source(src)})
+        if whole:
+            g["whole"] = True
+        elif skill and skill not in g["skills"]:
+            g["skills"].append(skill)
+
+    for target, g in groups.items():
+        result = npx_add(target, g["skills"] or None, g["whole"])
+        provider = g["provider"]
+        if result.get("ok"):
+            console.print(f"  [green]\u2713[/green] [cyan]{provider}[/cyan]: {result['summary']} [dim](method: npx skills add)[/dim]")
+        else:
+            # Fall back to git for this repo's sources.
+            console.print(f"  [yellow]npx failed for {target}; trying git...[/yellow] [dim]{result.get('summary','')}[/dim]")
+            git_src = target if g["whole"] else f"{target}@skills/{g['skills'][0]}" if g["skills"] else target
+            gres = install_skill(git_src, prefer_npx=False)
+            style = "green" if gres.get("ok") else "red"
+            mark = "\u2713" if gres.get("ok") else "\u2717"
+            console.print(f"  [{style}]{mark}[/{style}] [cyan]{provider}[/cyan]: {gres.get('summary','')} [dim](method: git)[/dim]")
+
+    for src in fallback:
+        provider = _provider_label_for_source(src)
+        result = install_skill(src, prefer_npx=False)
+        method = {"git": "git", "local": "local copy"}.get(result.get("via", ""), result.get("via", "?"))
+        style = "green" if result.get("ok") else "red"
+        mark = "\u2713" if result.get("ok") else "\u2717"
+        console.print(f"  [{style}]{mark}[/{style}] [cyan]{provider}[/cyan]: {result.get('summary','')} [dim](method: {method})[/dim]")
+
+
+def _select_skills_from_catalog(catalog: list[dict]) -> list[str]:
+    """Let the user pick skills to install from the live catalog. Returns install sources."""
+    # Interactive multi-select (questionary) when available.
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        try:
+            import questionary
+            from prompt_toolkit.styles import Style
+
+            selector_style = Style.from_dict(
+                {
+                    "qmark": "fg:#00bcd4 bold",
+                    "question": "bold",
+                    "answer": "fg:#4caf50 bold",
+                    "pointer": "fg:#4caf50",
+                    "highlighted": "noreverse bold",
+                    "selected": "fg:#4caf50 bold",
+                    "instruction": "fg:#858585",
+                    "text": "fg:#858585",
+                }
+            )
+            choices = [
+                questionary.Choice(
+                    title=f"{c['name']} — {(c.get('description') or '').strip()[:80]}",
+                    value=c["install_source"],
+                    checked=True,
+                )
+                for c in catalog
+            ]
+            picked = questionary.checkbox(
+                "Select skills to install (all selected by default)",
+                choices=choices,
+                instruction="(↑/↓ move, space toggle, enter confirm — all preselected)",
+                style=selector_style,
+                qmark="❯",
+                pointer="▸",
+            ).ask()
+            return list(picked or [])
+        except typer.Exit:
+            raise
+        except Exception:
+            pass
+
+    # Inline fallback: numbered list + comma-separated selection.
+    console.print("  [cyan]Available skills[/cyan] [dim](all installed by default)[/dim]")
+    for idx, c in enumerate(catalog, 1):
+        console.print(f"    [{idx}] {c['name']} — [dim]{(c.get('description') or '').strip()[:80]}[/dim]")
+    try:
+        raw = input("  Select skills (comma-separated numbers, 'all', or 'none'; Enter for all): ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return []
+    if not raw or raw == "all":
+        return [c["install_source"] for c in catalog]
+    if raw == "none":
+        return []
+    sources: list[str] = []
+    for token in raw.split(","):
+        token = token.strip()
+        if token.isdigit() and 1 <= int(token) <= len(catalog):
+            sources.append(catalog[int(token) - 1]["install_source"])
+    return sources
+
+
+def _select_suggested_sources() -> list[str]:
+    """Offer curated third-party skill collections (grouped by provider). Returns install sources."""
+    from ct.agent.skills import SUGGESTED_SKILL_SOURCES
+
+    if not SUGGESTED_SKILL_SOURCES:
+        return []
+
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        try:
+            import questionary
+            from prompt_toolkit.styles import Style
+
+            selector_style = Style.from_dict(
+                {
+                    "qmark": "fg:#00bcd4 bold",
+                    "question": "bold",
+                    "answer": "fg:#4caf50 bold",
+                    "pointer": "fg:#4caf50",
+                    "highlighted": "noreverse bold",
+                    "selected": "fg:#4caf50 bold",
+                    "instruction": "fg:#858585",
+                    "text": "fg:#858585",
+                }
+            )
+            choices = [
+                questionary.Choice(
+                    title=f"{s['provider']} — {s['description']} ({s['source']})",
+                    value=s["source"],
+                )
+                for s in SUGGESTED_SKILL_SOURCES
+            ]
+            picked = questionary.checkbox(
+                "Suggested community skill collections (optional)",
+                choices=choices,
+                instruction="(↑/↓ move, space toggle, enter confirm; installs the whole collection)",
+                style=selector_style,
+                qmark="❯",
+                pointer="▸",
+            ).ask()
+            return list(picked or [])
+        except typer.Exit:
+            raise
+        except Exception:
+            pass
+
+    console.print("  [cyan]Suggested community skill collections[/cyan] [dim](installs the whole collection)[/dim]")
+    for idx, s in enumerate(SUGGESTED_SKILL_SOURCES, 1):
+        console.print(f"    [{idx}] {s['provider']} — [dim]{s['description']} ({s['source']})[/dim]")
+    try:
+        raw = input("  Select collections (comma-separated numbers, or 'all'; Enter to skip): ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return []
+    if not raw:
+        return []
+    if raw == "all":
+        return [s["source"] for s in SUGGESTED_SKILL_SOURCES]
+    sources: list[str] = []
+    for token in raw.split(","):
+        token = token.strip()
+        if token.isdigit() and 1 <= int(token) <= len(SUGGESTED_SKILL_SOURCES):
+            sources.append(SUGGESTED_SKILL_SOURCES[int(token) - 1]["source"])
+    return sources
+
+
+def _prompt_install_skills(skills_arg: Optional[str] = None, skip: bool = False) -> None:
+    """Setup step: install agent skills from the live Fastfold catalog or custom sources."""
+    from ct.agent.skills import discover_skills
+
+    if skip:
+        return
+
+    # Non-interactive explicit list (CI/scripting): `--skills a,b,owner/repo@path`
+    if skills_arg:
+        sources = [s.strip() for s in skills_arg.split(",") if s.strip()]
+        if sources:
+            console.print("\n  [cyan]Agent skills[/cyan]")
+            _install_skill_sources(sources)
+        return
+
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    if not interactive:
+        console.print(
+            "\n  [dim]Skipping skills install (non-interactive). "
+            "Add later with `fastfold skills find` / `fastfold skills add <source>`.[/dim]"
+        )
+        return
+
+    console.print("\n  [cyan]Agent skills[/cyan]")
+    console.print(
+        "  [dim]Skills add guided workflows (folding, MD, protein design, reporting). "
+        "They are optional and installed on demand.[/dim]"
+    )
+    try:
+        proceed = input("  Install agent skills now? [Y/n] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n  [dim]Setup cancelled.[/dim]")
+        raise typer.Exit()
+    if proceed in ("n", "no"):
+        console.print(
+            "  [dim]Skipped. Add later with `fastfold skills find` / `fastfold skills add <source>`.[/dim]"
+        )
+        return
+
+    console.print("  [cyan]Fetching the current Fastfold skills catalog...[/cyan]")
+    catalog = discover_skills()
+    selected: list[str] = []
+    if catalog:
+        selected = _select_skills_from_catalog(catalog)
+    else:
+        console.print(
+            "  [yellow]Could not fetch the catalog[/yellow] [dim](needs git + network). "
+            "You can still add suggested or custom sources below.[/dim]"
+        )
+
+    # Offer curated third-party collections (K-Dense-AI, Anthropic, DeepMind).
+    selected += _select_suggested_sources()
+
+    # Always offer custom sources (GitHub URL / owner/repo@subpath / local path).
+    try:
+        custom = input(
+            "  Add custom skill source(s)? (GitHub URL or owner/repo@path, comma-separated; Enter to skip): "
+        ).strip()
+    except (EOFError, KeyboardInterrupt):
+        custom = ""
+    if custom:
+        selected += [s.strip() for s in custom.split(",") if s.strip()]
+
+    if not selected:
+        console.print("  [dim]No skills selected.[/dim]")
+        return
+
+    _install_skill_sources(selected)
+
+
 @app.command("doctor")
 def doctor_cmd():
     """Run environment and configuration health checks."""
@@ -1447,65 +1728,233 @@ def tool_list():
 # ─── Skill subcommands ────────────────────────────────────────
 
 skill_app = typer.Typer(help="Manage and inspect agent skills")
-app.add_typer(skill_app, name="skill")
+app.add_typer(skill_app, name="skills")
+app.add_typer(skill_app, name="skill")  # back-compat alias
 
 
 @skill_app.command("list")
 def skill_list():
     """List all loaded agent skills."""
-    import json
     from rich.table import Table
+    from ct.agent.skills import list_skills
 
-    skill_names: dict[str, str] = {}  # name → source label
-
-    # Bundled skills
-    bundled_dir = Path(__file__).parent / "skills"
-    if bundled_dir.exists():
-        for d in sorted(bundled_dir.iterdir()):
-            if d.is_dir() and (d / "SKILL.md").exists():
-                skill_names[d.name] = "bundled"
-
-    # User-installed skills (skills-lock.json)
-    lock_file = Path.cwd() / "skills-lock.json"
-    claude_skills_dir = Path.cwd() / ".claude" / "skills"
-    if lock_file.exists() and claude_skills_dir.exists():
-        try:
-            lock = json.loads(lock_file.read_text())
-            for name, meta in lock.get("skills", {}).items():
-                if (claude_skills_dir / name / "SKILL.md").exists():
-                    source = meta.get("source", "user")
-                    skill_names[name] = f"installed ({source})"
-        except Exception:
-            pass
-
-    if not skill_names:
+    skills = list_skills()
+    if not skills:
         console.print("[yellow]No skills loaded.[/yellow]")
         raise typer.Exit()
 
-    table = Table(title=f"Agent Skills ({len(skill_names)} loaded)", show_lines=False)
+    table = Table(title=f"Agent Skills ({len(skills)} loaded)", show_lines=False)
     table.add_column("Skill", style="bold cyan", no_wrap=True)
     table.add_column("Source", style="dim")
     table.add_column("Description", style="white")
 
-    for name, source in sorted(skill_names.items()):
-        # Read description from SKILL.md frontmatter
-        description = ""
-        skill_md_path = (
-            (bundled_dir / name / "SKILL.md")
-            if source == "bundled"
-            else (claude_skills_dir / name / "SKILL.md")
-        )
-        try:
-            content = skill_md_path.read_text()
-            for line in content.splitlines():
-                if line.startswith("description:"):
-                    description = line.split(":", 1)[1].strip()
-                    break
-        except Exception:
-            pass
-        table.add_row(name, source, description)
+    for info in skills:
+        table.add_row(info.name, info.source, info.description)
 
     console.print(table)
+
+
+@skill_app.command("add")
+def skill_add(
+    source: str = typer.Argument(
+        ..., help="GitHub URL, owner/repo@subpath, local path, or catalog name"
+    ),
+):
+    """Install an agent skill from GitHub, a local path, or the catalog."""
+    from ct.agent.skills import install_skill
+
+    provider = _provider_label_for_source(source)
+    console.print(f"  [cyan]Installing skill from[/cyan] {source} [dim]({provider})[/dim] ...")
+    result = install_skill(source)
+    method = {"npx": "npx skills add", "git": "git", "local": "local copy"}.get(result.get("via", ""), result.get("via", "?"))
+    if result.get("ok"):
+        console.print(f"  [green]{result['summary']}[/green] [dim](provider: {provider}, method: {method})[/dim]")
+    else:
+        console.print(f"  [red]{result['summary']}[/red]")
+        raise typer.Exit(code=1)
+
+
+@skill_app.command("install")
+def skill_install(
+    source: str = typer.Argument(..., help="GitHub URL, owner/repo@subpath, local path, or name"),
+):
+    """Alias for `skills add`."""
+    skill_add(source)
+
+
+@skill_app.command("upgrade")
+def skill_upgrade(
+    catalog_only: bool = typer.Option(
+        False, "--catalog-only", help="Only sync the Fastfold catalog (skip other installed sources)"
+    ),
+    no_catalog: bool = typer.Option(
+        False, "--no-catalog", help="Only update already-installed skills (skip catalog sync)"
+    ),
+    no_npx: bool = typer.Option(
+        False, "--no-npx", help="Skip re-syncing npx-installed (project-local) skills"
+    ),
+):
+    """Sync skills: refresh the Fastfold catalog (add new + update) and re-install tracked skills."""
+    from ct.agent.skills import upgrade_skills, GLOBAL_SKILLS_DIR
+
+    if catalog_only and no_catalog:
+        console.print("  [red]--catalog-only and --no-catalog are mutually exclusive.[/red]")
+        raise typer.Exit(code=2)
+
+    console.print("  [cyan]Syncing agent skills...[/cyan]")
+
+    if catalog_only:
+        # Catalog sync only.
+        from ct.agent.skills import install_skill, DEFAULT_CATALOG
+
+        result = install_skill(DEFAULT_CATALOG.split("@", 1)[0])
+        if result.get("ok"):
+            console.print(f"  [green]{result['summary']}[/green]")
+        else:
+            console.print(f"  [red]{result['summary']}[/red]")
+            raise typer.Exit(code=1)
+        return
+
+    result = upgrade_skills(include_catalog=not no_catalog, include_npx=not no_npx)
+    if result["added"]:
+        console.print(f"  [green]Added:[/green] {', '.join(result['added'])}")
+    if result["updated"]:
+        console.print(f"  [green]Updated:[/green] {', '.join(result['updated'])}")
+    if result.get("npx_synced"):
+        console.print(f"  [green]npx-synced:[/green] {result['npx_synced']} project-local source(s)")
+    if result["failed"]:
+        for source, reason in result["failed"]:
+            console.print(f"  [yellow]Failed:[/yellow] {source} — {reason}")
+    console.print(f"  [dim]{result['summary']}[/dim]")
+    console.print(f"  [dim]Location: {GLOBAL_SKILLS_DIR}[/dim]")
+
+
+@skill_app.command("remove")
+def skill_remove(
+    name: str = typer.Argument(..., help="Installed skill name to remove"),
+):
+    """Remove a globally-installed agent skill."""
+    from ct.agent.skills import remove_skill
+
+    result = remove_skill(name)
+    if result.get("ok"):
+        console.print(f"  [green]{result['summary']}[/green]")
+    else:
+        console.print(f"  [yellow]{result['summary']}[/yellow]")
+        raise typer.Exit(code=1)
+
+
+@skill_app.command("delete")
+def skill_delete(
+    name: Optional[str] = typer.Argument(None, help="Skill name to delete (omit when using --all)"),
+    all_skills: bool = typer.Option(False, "--all", help="Delete ALL user-installed skills"),
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt"),
+):
+    """Delete a skill, or all user-installed skills with --all (asks to confirm first)."""
+    from ct.agent.skills import user_installed_skill_names, remove_all_skills, remove_skill
+
+    if not all_skills:
+        if not name:
+            console.print("  [yellow]Specify a skill name, or use --all to remove everything.[/yellow]")
+            raise typer.Exit(code=2)
+        result = remove_skill(name)
+        style = "green" if result.get("ok") else "yellow"
+        console.print(f"  [{style}]{result['summary']}[/{style}]")
+        if not result.get("ok"):
+            raise typer.Exit(code=1)
+        return
+
+    names = user_installed_skill_names()
+    if not names:
+        console.print("  [dim]No user-installed skills to delete.[/dim] [dim](Bundled skills are kept.)[/dim]")
+        return
+
+    console.print(
+        f"  [yellow]This will remove {len(names)} user-installed skill(s):[/yellow] {', '.join(names)}"
+    )
+    console.print("  [dim]Bundled skills (find_skills, skill_creator) are not affected.[/dim]")
+    if not yes:
+        try:
+            confirm = input("  Delete ALL of these skills? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n  [dim]Cancelled.[/dim]")
+            raise typer.Exit()
+        if confirm not in ("y", "yes"):
+            console.print("  [dim]Cancelled.[/dim]")
+            return
+
+    result = remove_all_skills()
+    console.print(f"  [green]{result['summary']}[/green]")
+    if result.get("removed"):
+        console.print(f"  [dim]Removed: {', '.join(result['removed'])}[/dim]")
+
+
+@skill_app.command("find")
+def skill_find(
+    query: Optional[str] = typer.Argument(None, help="Optional search query"),
+):
+    """Discover installable skills from the catalog."""
+    from rich.table import Table
+    from ct.agent.skills import discover_skills
+
+    console.print("  [cyan]Searching skill catalog...[/cyan]")
+    results = discover_skills(query)
+    if not results:
+        console.print(
+            "  [yellow]No matching skills found.[/yellow] "
+            "[dim](Requires git; check network/catalog access.)[/dim]"
+        )
+        raise typer.Exit()
+
+    table = Table(title=f"Available Skills ({len(results)})", show_lines=False)
+    table.add_column("Skill", style="bold cyan", no_wrap=True)
+    table.add_column("Install source", style="dim")
+    table.add_column("Description", style="white")
+    for r in results:
+        table.add_row(r["name"], r["install_source"], r["description"])
+    console.print(table)
+    console.print("  [dim]Install with:[/dim] fastfold skills add <install source>")
+
+
+@skill_app.command("info")
+def skill_info_cmd(
+    name: str = typer.Argument(..., help="Skill name"),
+):
+    """Show details for an installed skill."""
+    from ct.agent.skills import skill_info
+
+    info = skill_info(name)
+    if not info:
+        console.print(f"  [yellow]Skill '{name}' is not installed.[/yellow]")
+        raise typer.Exit(code=1)
+    console.print(f"  [bold cyan]{info.name}[/bold cyan] [dim]({info.source})[/dim]")
+    if info.description:
+        console.print(f"  {info.description}")
+    if info.tags:
+        console.print(f"  [dim]tags:[/dim] {', '.join(info.tags)}")
+    if info.path:
+        console.print(f"  [dim]path:[/dim] {info.path}")
+
+
+# ─── Top-level `add` group (alias: `fastfold add skill <source>`) ─────────────
+add_app = typer.Typer(help="Add skills and other resources")
+app.add_typer(add_app, name="add")
+
+
+@add_app.command("skills")
+def add_skills_cmd(
+    source: str = typer.Argument(..., help="GitHub URL, owner/repo@subpath, local path, or name"),
+):
+    """Install an agent skill (alias for ``fastfold skills add``)."""
+    skill_add(source)
+
+
+@add_app.command("skill", hidden=True)
+def add_skill_cmd(
+    source: str = typer.Argument(..., help="GitHub URL, owner/repo@subpath, local path, or name"),
+):
+    """Back-compat alias for `fastfold add skills`."""
+    skill_add(source)
 
 
 # ─── Knowledge subcommands ────────────────────────────────────
@@ -2751,7 +3200,9 @@ def entry():
         "config",
         "data",
         "tool",
+        "skills",
         "skill",
+        "add",
         "trace",
         "knowledge",
         "keys",

@@ -17,53 +17,12 @@ logger = logging.getLogger("ct.system_prompt")
 def _load_installed_skills() -> str:
     """Load agent skill SKILL.md files and return formatted context for the system prompt.
 
-    Two sources, merged (user-installed wins on name collision):
-    1. Bundled catalog — src/ct/skills/<name>/SKILL.md (ships with the CLI package)
-    2. User-installed  — .claude/skills/<name>/SKILL.md, filtered to names listed in
-       skills-lock.json to avoid injecting Cursor IDE skills (openspec-*, etc.)
+    Delegates to :mod:`ct.agent.skills`, which merges three tiers
+    (global install dir, project-local lock-gated skills, bundled catalog).
     """
-    import json
+    from ct.agent.skills import build_skills_prompt
 
-    project_root = Path(__file__).parent.parent.parent.parent
-
-    # 1. Bundled skills (package catalog)
-    bundled_dir = Path(__file__).parent.parent / "skills"
-    skills: dict[str, str] = {}  # name → SKILL.md content
-
-    if bundled_dir.exists():
-        for skill_dir in sorted(bundled_dir.iterdir()):
-            skill_md = skill_dir / "SKILL.md"
-            if skill_dir.is_dir() and skill_md.exists():
-                try:
-                    skills[skill_dir.name] = skill_md.read_text()
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("Could not read bundled skill %s: %s", skill_dir.name, exc)
-
-    # 2. User-installed skills (.claude/skills/ filtered by skills-lock.json)
-    lock_file = project_root / "skills-lock.json"
-    claude_skills_dir = project_root / ".claude" / "skills"
-    if lock_file.exists() and claude_skills_dir.exists():
-        try:
-            lock = json.loads(lock_file.read_text())
-            for name in lock.get("skills", {}):
-                skill_md = claude_skills_dir / name / "SKILL.md"
-                if skill_md.exists():
-                    try:
-                        skills[name] = skill_md.read_text()  # overrides bundled
-                    except Exception as exc:  # noqa: BLE001
-                        logger.debug("Could not read user skill %s: %s", name, exc)
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("Could not read skills-lock.json: %s", exc)
-
-    if not skills:
-        return ""
-
-    sections = [f"### Skill: `{name}`\n\n{content}" for name, content in sorted(skills.items())]
-    return (
-        "## Installed Agent Skills\n\n"
-        "You have the following agent skills installed. Follow their instructions exactly "
-        "when the user's request matches a skill's use-case.\n\n" + "\n\n---\n\n".join(sections)
-    )
+    return build_skills_prompt()
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +127,7 @@ def build_system_prompt(
         parts.append(f"\n## Available Tools ({len(tool_names)} total)\n")
         parts.append(
             "You have access to all tools via MCP. Key tools:\n"
-            "- **shell.run**: Execute terminal commands (best for skill/CLI scripts like `fastfold-fold-*` and `python -m ct.skills...`).\n"
+            "- **shell.run**: Execute terminal commands (best for skill scripts, e.g. `python scripts/<name>.py ...` from a skill's directory).\n"
             "- **run_python**: Execute Python code in a sandbox (pd, np, plt, scipy, sklearn, pysam, gseapy, pydeseq2, BioPython). Variables persist between calls.\n"
             "- **run_r**: Execute R code directly. Prefer run_r over run_python for: natural splines (ns()), wilcox.test(), p.adjust(), fisher.test(), lm()/predict(), organism-specific KEGG ORA (use KEGGREST package: keggList, keggLink, keggGet for any organism code), and any analysis where R is the reference implementation. R and Python give DIFFERENT results for splines, multiple testing correction, and nonparametric tests — when the expected answer was computed in R, use R.\n"
             "- **literature.pubmed_search**, **literature.chembl_query**, **literature.openalex_search**: Literature/DB search\n"
