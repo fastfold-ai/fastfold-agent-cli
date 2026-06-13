@@ -1,8 +1,8 @@
 # Fastfold Agent CLI
 
 <p align="center">
-  <a href="https://github.com/fastfold-ai/fastfold-agent-cli/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/fastfold-ai/fastfold-agent-cli/ci.yml?branch=skills-refactor&label=CI&logo=github" alt="CI status" /></a>
-  <a href="https://codecov.io/gh/fastfold-ai/fastfold-agent-cli"><img src="https://img.shields.io/codecov/c/github/fastfold-ai/fastfold-agent-cli?branch=skills-refactor&logo=codecov&label=coverage" alt="Codecov coverage" /></a>
+  <a href="https://github.com/fastfold-ai/fastfold-agent-cli/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/fastfold-ai/fastfold-agent-cli/ci.yml?branch=main&label=CI&logo=github" alt="CI status" /></a>
+  <a href="https://codecov.io/gh/fastfold-ai/fastfold-agent-cli"><img src="https://img.shields.io/codecov/c/github/fastfold-ai/fastfold-agent-cli?branch=main&logo=codecov&label=coverage" alt="Codecov coverage" /></a>
   <a href="https://skills.sh/fastfold-ai/skills"><img src="https://img.shields.io/badge/Skills-000000?logo=vercel&logoColor=white" alt="Skills" /></a>
   <a href="https://pypi.org/project/fastfold-agent-cli/"><img src="https://img.shields.io/pypi/v/fastfold-agent-cli.svg?label=agent-cli&color=22c55e" alt="fastfold-agent-cli on PyPI" /></a>
   <a href="https://hub.docker.com/r/fastfold/fastfold-agent-cli"><img src="https://img.shields.io/docker/v/fastfold/fastfold-agent-cli?sort=semver&label=docker&logo=docker" alt="Docker Hub" /></a>
