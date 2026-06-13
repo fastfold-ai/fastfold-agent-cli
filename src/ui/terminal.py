@@ -427,7 +427,7 @@ def render_plan_preview(plan, console=None):
         if args_str:
             lines.append(f"     {args_str}\n", style="dim")
 
-    console.print(Panel(lines, border_style="cyan", title="Plan Preview"))
+    console.print(Panel(lines, border_style="cyan", title="Plan Preview", width=80))
     return lines
 
 
