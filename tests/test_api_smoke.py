@@ -16,7 +16,7 @@ from tools.clinical import (
     trial_design_benchmark,
     trial_search,
 )
-from tools.data_api import opentargets_search, uniprot_lookup
+from tools.data_api import chembl_advanced, opentargets_search, uniprot_lookup
 from tools.genomics import coloc, gwas_lookup
 from tools.intel import pipeline_watch
 from tools.literature import openalex_search, pubmed_search
@@ -47,7 +47,22 @@ def _skip_if_non_strict_error(payload: dict):
     if _STRICT_SMOKE:
         return
     if "error" in payload:
-        pytest.skip(f"Live API smoke skipped in non-strict mode: {payload.get('error')}")
+        pytest.skip(f"Live data smoke skipped in non-strict mode: {payload.get('error')}")
+
+
+def _assert_live_result(payload: dict, *, allow_ctgov_block: bool = False):
+    """Assert a live tool response is healthy, with optional CT.gov datacenter blocks."""
+    _assert_no_signature_error(payload)
+    if "error" not in payload:
+        assert "summary" in payload
+        return
+    err = str(payload.get("error", "")).lower()
+    if allow_ctgov_block and "403" in err and "clinicaltrials" in err:
+        # ClinicalTrials.gov often returns 403 from cloud CI/datacenter IPs.
+        return
+    if _STRICT_SMOKE:
+        assert "error" not in payload, payload.get("error")
+    _skip_if_non_strict_error(payload)
 
 
 def test_pubmed_search_smoke():
@@ -88,11 +103,18 @@ def test_gwas_lookup_smoke():
 
 def test_trial_search_smoke():
     result = trial_search(query="Parkinson disease")
+    _assert_live_result(result, allow_ctgov_block=True)
+    if "error" not in result:
+        assert result.get("total_count", 0) >= 1
+
+
+def test_chembl_target_activities_smoke():
+    result = chembl_advanced(query="EGFR", search_type="target_activities")
     _assert_no_signature_error(result)
     _skip_if_non_strict_error(result)
     assert "error" not in result, result.get("error")
     assert "summary" in result
-    assert result.get("total_count", 0) >= 1
+    assert "activity_statistics" in result
 
 
 def test_coloc_smoke():
@@ -146,20 +168,16 @@ def test_opentargets_search_smoke():
 
 def test_trial_design_benchmark_smoke():
     result = trial_design_benchmark(query="Parkinson disease", max_results=5)
-    _assert_no_signature_error(result)
-    _skip_if_non_strict_error(result)
-    assert "error" not in result, result.get("error")
-    assert "summary" in result
-    assert "top_primary_endpoints" in result
+    _assert_live_result(result, allow_ctgov_block=True)
+    if "error" not in result:
+        assert "top_primary_endpoints" in result
 
 
 def test_endpoint_benchmark_smoke():
     result = endpoint_benchmark(query="ulcerative colitis", max_results=5)
-    _assert_no_signature_error(result)
-    _skip_if_non_strict_error(result)
-    assert "error" not in result, result.get("error")
-    assert "summary" in result
-    assert "endpoint_families" in result
+    _assert_live_result(result, allow_ctgov_block=True)
+    if "error" not in result:
+        assert "endpoint_families" in result
 
 
 def test_competitive_landscape_smoke():

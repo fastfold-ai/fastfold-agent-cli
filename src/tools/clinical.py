@@ -11,6 +11,14 @@ import re
 from tools import registry
 from tools.http_client import request, request_json
 
+_CTGOV_STUDIES_URL = "https://clinicaltrials.gov/api/v2/studies"
+_CTGOV_HEADERS = {
+    "Accept": "application/json",
+    "User-Agent": (
+        "fastfold-agent-cli (research tool; +https://github.com/fastfold-ai/fastfold-agent-cli)"
+    ),
+}
+
 
 # US annual incidence by cancer type (SEER/Globocan estimates)
 US_INCIDENCE = {
@@ -439,7 +447,7 @@ def trial_search(query: str, status: str = "", **kwargs) -> dict:
         import httpx
     except ImportError:
         return {"error": "httpx required (pip install httpx)", "summary": "httpx required (pip install httpx)"}
-    url = "https://clinicaltrials.gov/api/v2/studies"
+    url = _CTGOV_STUDIES_URL
     params = {
         "query.term": query,
         "pageSize": 20,
@@ -451,6 +459,7 @@ def trial_search(query: str, status: str = "", **kwargs) -> dict:
         "GET",
         url,
         params=params,
+        headers=_CTGOV_HEADERS,
         timeout=15,
         retries=2,
     )
@@ -586,8 +595,9 @@ def trial_design_benchmark(
 
     data, error = request_json(
         "GET",
-        "https://clinicaltrials.gov/api/v2/studies",
+        _CTGOV_STUDIES_URL,
         params=params,
+        headers=_CTGOV_HEADERS,
         timeout=20,
         retries=2,
     )
