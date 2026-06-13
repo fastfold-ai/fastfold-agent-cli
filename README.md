@@ -1,9 +1,12 @@
 # Fastfold Agent CLI
 
 <div className="not-prose mx-auto mb-2 flex max-w-full flex-nowrap items-center justify-center gap-2 overflow-x-auto">
+  <a href="https://github.com/fastfold-ai/fastfold-agent-cli/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/fastfold-ai/fastfold-agent-cli/ci.yml?branch=main&label=CI&logo=github" alt="CI status" /></a>
+  <a href="https://codecov.io/gh/fastfold-ai/fastfold-agent-cli"><img src="https://img.shields.io/codecov/c/github/fastfold-ai/fastfold-agent-cli?logo=codecov&label=coverage" alt="Codecov coverage" /></a>
   <a href="https://skills.sh/fastfold-ai/skills"><img src="https://img.shields.io/badge/Skills-000000?logo=vercel&logoColor=white" alt="Skills" /></a>
-  <a href="https://pypi.org/project/fastfold-ai/"><img src="https://img.shields.io/pypi/v/fastfold-ai.svg?label=python-sdk&color=0ea5e9" alt="fastfold-ai on PyPI" /></a>
+
   <a href="https://pypi.org/project/fastfold-agent-cli/"><img src="https://img.shields.io/pypi/v/fastfold-agent-cli.svg?label=agent-cli&color=22c55e" alt="fastfold-agent-cli on PyPI" /></a>
+  <a href="https://hub.docker.com/r/fastfold/fastfold-agent-cli"><img src="https://img.shields.io/docker/v/fastfold/fastfold-agent-cli?sort=semver&label=docker&logo=docker" alt="Docker Hub" /></a>
   <a href="https://fastfoldcommunity.slack.com/join/shared_invite/zt-3azbiw7qv-majshu97TymCma_TwFT6mw#/shared-invite/email"><img src="https://img.shields.io/badge/Slack-Join%20Slack-4A154B?logo=slack" alt="Join Slack" /></a>
 </div>
 
@@ -25,7 +28,7 @@ You get the full open-source agent[1](#notes) with 190+ tools, 30+ database APIs
 ### Quick install
 
 <details>
-<summary>Install <code>uv</code></summary>
+<summary>Install <code>uv</code> (for native CLI install)</summary>
 
 - **Python 3.10+** (recommended: let `uv` install managed interpreters).
 - **uv** — [Installing uv](https://docs.astral.sh/uv/getting-started/installation/). Quick options:
@@ -75,16 +78,12 @@ uv tool install "fastfold-agent-cli[all]" --python 3.10
 
 </details>
 
-**Docker:**
+### Docker
 
 ```bash
-git clone https://github.com/fastfold-ai/fastfold-agent-cli.git
-cd fastfold-agent-cli
-docker compose build
-```
-
-```bash
-docker compose run --rm fastfold
+docker run -it --rm \
+  -v fastfold-cli:/root/.fastfold-cli \
+  fastfold/fastfold-agent-cli:latest
 ```
 
 ### Authentication

@@ -26,7 +26,12 @@ venv/
 # OS
 .DS_Store
 
-# Test workspace
+# Test / coverage artifacts
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.pytest_cache/
 exports/
 outputs/
 *.faa

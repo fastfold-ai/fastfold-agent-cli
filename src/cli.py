@@ -2354,8 +2354,8 @@ def release_check_cmd(
 
     if include_live:
         smoke_env = dict(os.environ)
-        smoke_env["CT_RUN_API_SMOKE"] = "1"
-        smoke_env.setdefault("CT_API_SMOKE_STRICT", "1")
+        smoke_env["RUN_API_SMOKE"] = "1"
+        smoke_env.setdefault("API_SMOKE_STRICT", "1")
         smoke_ok = _run_step_command(
             "Live API smoke checks",
             ["pytest", "-q", "tests/test_api_smoke.py"],
@@ -2364,10 +2364,10 @@ def release_check_cmd(
         failed = failed or (not smoke_ok)
 
         matrix_env = dict(os.environ)
-        matrix_env["CT_RUN_E2E_MATRIX"] = "1"
-        matrix_env["CT_E2E_MATRIX_LIMIT"] = str(max(1, matrix_limit))
-        matrix_env["CT_E2E_MATRIX_STRICT"] = "1" if matrix_strict else "0"
-        matrix_env["CT_E2E_MATRIX_MAX_FAILED_QUERIES"] = str(max(0, matrix_max_failed))
+        matrix_env["RUN_E2E_MATRIX"] = "1"
+        matrix_env["E2E_MATRIX_LIMIT"] = str(max(1, matrix_limit))
+        matrix_env["E2E_MATRIX_STRICT"] = "1" if matrix_strict else "0"
+        matrix_env["E2E_MATRIX_MAX_FAILED_QUERIES"] = str(max(0, matrix_max_failed))
         matrix_ok = _run_step_command(
             "Live E2E prompt matrix",
             ["pytest", "-q", "tests/test_e2e_matrix.py", "--run-e2e"],

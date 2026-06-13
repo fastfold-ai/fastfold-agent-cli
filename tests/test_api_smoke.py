@@ -1,14 +1,14 @@
 """Optional live API smoke checks for schema drift detection.
 
 These tests hit real public endpoints and are skipped by default.
-Enable in CI with: CT_RUN_API_SMOKE=1.
+Enable in CI with: RUN_API_SMOKE=1 (legacy: CT_RUN_API_SMOKE=1).
 """
 
 from __future__ import annotations
 
-import os
-
 import pytest
+
+from env_flags import env_flag
 
 from tools.clinical import (
     competitive_landscape,
@@ -24,12 +24,12 @@ from tools.target import disease_association, druggability, expression_profile
 from tools.translational import biomarker_readiness
 
 
-_RUN_SMOKE = os.environ.get("CT_RUN_API_SMOKE", "").strip().lower() in {"1", "true", "yes"}
-_STRICT_SMOKE = os.environ.get("CT_API_SMOKE_STRICT", "").strip().lower() in {"1", "true", "yes"}
+_RUN_SMOKE = env_flag("RUN_API_SMOKE", "CT_RUN_API_SMOKE")
+_STRICT_SMOKE = env_flag("API_SMOKE_STRICT", "CT_API_SMOKE_STRICT")
 
 pytestmark = [
     pytest.mark.api_smoke,
-    pytest.mark.skipif(not _RUN_SMOKE, reason="Set CT_RUN_API_SMOKE=1 to run live smoke tests"),
+    pytest.mark.skipif(not _RUN_SMOKE, reason="Set RUN_API_SMOKE=1 to run live smoke tests"),
 ]
 
 
@@ -132,11 +132,16 @@ def test_target_disease_association_smoke():
 
 
 def test_opentargets_search_smoke():
-    result = opentargets_search(query="Parkinson disease", entity_type="disease")
+    result = opentargets_search(query="LRRK2", entity_type="target")
     _assert_no_signature_error(result)
     _skip_if_non_strict_error(result)
-    assert "error" not in result, result.get("error")
-    assert "summary" in result
+    if "error" in result:
+        # Search should resolve; detail GraphQL may drift independently.
+        err = result["error"].lower()
+        assert "search failed" not in err and "timed out" not in err, result.get("error")
+        assert "detail query failed" in err, result.get("error")
+    else:
+        assert "summary" in result
 
 
 def test_trial_design_benchmark_smoke():

@@ -111,12 +111,22 @@ target-version = "py310"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src", "tests"]
 markers = [
     "e2e: end-to-end tests hitting real APIs (use --run-e2e)",
     "docker: tests requiring Docker (use --run-e2e)",
-    "e2e_matrix: optional live multi-prompt end-to-end matrix (set CT_RUN_E2E_MATRIX=1)",
-    "api_smoke: optional live API smoke tests (set CT_RUN_API_SMOKE=1)",
+    "e2e_matrix: optional live multi-prompt end-to-end matrix (set RUN_E2E_MATRIX=1)",
+    "api_smoke: optional live API smoke tests (set RUN_API_SMOKE=1)",
+    "integration: interactive terminal tests requiring pexpect and a TTY",
 ]
+
+[tool.coverage.run]
+relative_files = true
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
 
 [tool.uv]
 package = true
