@@ -7,7 +7,7 @@ from pathlib import Path
 
 class TestSendEmail:
     def test_dry_run(self, tmp_path):
-        with patch("ct.agent.config.Config.load") as mock_load:
+        with patch("agent.config.Config.load") as mock_load:
             config_inst = MagicMock()
             config_inst.get.side_effect = lambda k, d=None: {
                 "notification.from_email": "test@celltype.bio",
@@ -16,7 +16,7 @@ class TestSendEmail:
             mock_load.return_value = config_inst
 
             with patch("pathlib.Path.home", return_value=tmp_path):
-                from ct.tools.notification import send_email
+                from tools.notification import send_email
                 result = send_email(
                     to="user@example.com",
                     subject="Test Subject",
@@ -32,13 +32,13 @@ class TestSendEmail:
         assert result["body"] == "Test body content"
 
     def test_dry_run_logs(self, tmp_path):
-        with patch("ct.agent.config.Config.load") as mock_load:
+        with patch("agent.config.Config.load") as mock_load:
             config_inst = MagicMock()
             config_inst.get.side_effect = lambda k, d=None: d
             mock_load.return_value = config_inst
 
             with patch("pathlib.Path.home", return_value=tmp_path):
-                from ct.tools.notification import send_email
+                from tools.notification import send_email
                 send_email(
                     to="user@example.com",
                     subject="Test",
@@ -53,13 +53,13 @@ class TestSendEmail:
             assert "user@example.com" in content
 
     def test_missing_api_key(self, tmp_path):
-        with patch("ct.agent.config.Config.load") as mock_load:
+        with patch("agent.config.Config.load") as mock_load:
             config_inst = MagicMock()
             config_inst.get.side_effect = lambda k, d=None: None
             mock_load.return_value = config_inst
 
             with patch("pathlib.Path.home", return_value=tmp_path):
-                from ct.tools.notification import send_email
+                from tools.notification import send_email
                 result = send_email(
                     to="user@example.com",
                     subject="Test",
@@ -77,7 +77,7 @@ class TestSendEmail:
         mock_resp.raise_for_status.return_value = None
         mock_post.return_value = mock_resp
 
-        with patch("ct.agent.config.Config.load") as mock_load:
+        with patch("agent.config.Config.load") as mock_load:
             config_inst = MagicMock()
             config_inst.get.side_effect = lambda k, d=None: {
                 "notification.sendgrid_api_key": "SG.test-key",
@@ -86,7 +86,7 @@ class TestSendEmail:
             mock_load.return_value = config_inst
 
             with patch("pathlib.Path.home", return_value=tmp_path):
-                from ct.tools.notification import send_email
+                from tools.notification import send_email
                 result = send_email(
                     to="user@example.com",
                     subject="Test",
@@ -99,13 +99,13 @@ class TestSendEmail:
         mock_post.assert_called_once()
 
     def test_custom_from_email(self, tmp_path):
-        with patch("ct.agent.config.Config.load") as mock_load:
+        with patch("agent.config.Config.load") as mock_load:
             config_inst = MagicMock()
             config_inst.get.side_effect = lambda k, d=None: d
             mock_load.return_value = config_inst
 
             with patch("pathlib.Path.home", return_value=tmp_path):
-                from ct.tools.notification import send_email
+                from tools.notification import send_email
                 result = send_email(
                     to="user@example.com",
                     subject="Test",

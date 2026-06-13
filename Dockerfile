@@ -1,5 +1,10 @@
 FROM python:3.11-slim
 
+ARG VERSION=dev
+LABEL org.opencontainers.image.title="fastfold-agent-cli" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.source="https://github.com/fastfold-ai/fastfold-agent-cli"
+
 WORKDIR /app
 
 # Install build dependencies
@@ -10,13 +15,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc && \
 COPY pyproject.toml README.md ./
 COPY src/ src/
 
-# Install with configurable extras (default: biology)
-ARG EXTRAS="biology"
-RUN pip install --no-cache-dir -e ".[$EXTRAS]"
+# Install the full project (all optional dependencies)
+RUN pip install --no-cache-dir ".[all]"
 
-# Create data directory for persistent downloads
-RUN mkdir -p /root/.ct/data
+# Persistent config, sessions, skills, and downloaded datasets
+RUN mkdir -p /root/.fastfold-cli/data
 
-VOLUME /root/.ct/data
+VOLUME /root/.fastfold-cli
 
-ENTRYPOINT ["ct"]
+ENTRYPOINT ["fastfold"]

@@ -1,28 +1,16 @@
 services:
-  ct:
+  fastfold:
     build:
       context: .
       dockerfile: Dockerfile
-    environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
-      - CT_DATA_ENDPOINT=http://data-api:8000
+    # API keys are optional — omit .env entirely, or add keys when you need them.
+    env_file:
+      - path: .env
+        required: false
     volumes:
-      - ct-data:/root/.ct/data
+      - fastfold-cli:/root/.fastfold-cli
     stdin_open: true
     tty: true
-    depends_on:
-      - data-api
-
-  data-api:
-    build:
-      context: .
-      dockerfile: Dockerfile.api
-    ports:
-      - "8000:8000"
-    volumes:
-      - "${CT_DATA_PATH:-/mnt2/bronze}:/data:ro"
-    environment:
-      CT_DATA_ROOT: /data
 
 volumes:
-  ct-data:
+  fastfold-cli:

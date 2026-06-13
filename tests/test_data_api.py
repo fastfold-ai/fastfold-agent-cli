@@ -27,7 +27,7 @@ class TestHttpRetryHelpers:
     @patch("time.sleep")
     @patch("httpx.get")
     def test_http_get_retries_on_transient_status(self, mock_get, mock_sleep):
-        from ct.tools.data_api import _http_get
+        from tools.data_api import _http_get
 
         mock_get.side_effect = [
             _mock_response(503, {}),
@@ -43,7 +43,7 @@ class TestHttpRetryHelpers:
     @patch("httpx.post")
     def test_http_post_retries_on_timeout(self, mock_post, mock_sleep):
         import httpx
-        from ct.tools.data_api import _http_post
+        from tools.data_api import _http_post
 
         mock_post.side_effect = [
             httpx.TimeoutException("timeout"),
@@ -61,11 +61,11 @@ class TestHttpRetryHelpers:
 # ===========================================================================
 
 class TestDepMapSearch:
-    @patch("ct.data.loaders.load_crispr")
+    @patch("data.loaders.load_crispr")
     def test_local_crispr_data(self, mock_crispr):
         import pandas as pd
         import numpy as np
-        from ct.tools.data_api import depmap_search
+        from tools.data_api import depmap_search
 
         np.random.seed(42)
         n_lines = 100
@@ -86,10 +86,10 @@ class TestDepMapSearch:
         assert result["n_essential"] >= 10
         assert result["mean_score"] < 0
 
-    @patch("ct.data.loaders.load_crispr")
+    @patch("data.loaders.load_crispr")
     def test_gene_not_found(self, mock_crispr):
         import pandas as pd
-        from ct.tools.data_api import depmap_search
+        from tools.data_api import depmap_search
 
         mock_crispr.return_value = pd.DataFrame(
             {"TP53": [0.1, -0.5]}, index=["L1", "L2"]
@@ -99,16 +99,16 @@ class TestDepMapSearch:
         assert "error" in result
 
     def test_invalid_dataset(self):
-        from ct.tools.data_api import depmap_search
+        from tools.data_api import depmap_search
 
         result = depmap_search(gene="BRCA1", dataset="invalid")
         assert "error" in result
         assert "invalid" in result["error"].lower() or "Invalid" in result["error"]
 
-    @patch("ct.data.loaders.load_crispr", side_effect=ImportError)
+    @patch("data.loaders.load_crispr", side_effect=ImportError)
     @patch("httpx.get")
     def test_fallback_to_api(self, mock_get, mock_crispr):
-        from ct.tools.data_api import depmap_search
+        from tools.data_api import depmap_search
 
         mock_get.return_value = _mock_response(200, {
             "data": [{"symbol": "BRCA1", "id": 672}]
@@ -118,11 +118,11 @@ class TestDepMapSearch:
         assert "summary" in result
         assert result["source"] == "cell_model_passports"
 
-    @patch("ct.data.loaders.load_crispr", side_effect=ImportError)
+    @patch("data.loaders.load_crispr", side_effect=ImportError)
     @patch("httpx.get")
     def test_api_timeout(self, mock_get, mock_crispr):
         import httpx
-        from ct.tools.data_api import depmap_search
+        from tools.data_api import depmap_search
 
         mock_get.side_effect = httpx.TimeoutException("timeout")
 
@@ -137,7 +137,7 @@ class TestDepMapSearch:
 class TestOpenTargetsSearch:
     @patch("httpx.post")
     def test_target_search(self, mock_post):
-        from ct.tools.data_api import opentargets_search
+        from tools.data_api import opentargets_search
 
         # First call: search
         search_resp = _mock_response(200, {
@@ -178,7 +178,7 @@ class TestOpenTargetsSearch:
 
     @patch("httpx.post")
     def test_disease_search(self, mock_post):
-        from ct.tools.data_api import opentargets_search
+        from tools.data_api import opentargets_search
 
         search_resp = _mock_response(200, {
             "data": {"search": {
@@ -210,7 +210,7 @@ class TestOpenTargetsSearch:
 
     @patch("httpx.post")
     def test_drug_search(self, mock_post):
-        from ct.tools.data_api import opentargets_search
+        from tools.data_api import opentargets_search
 
         search_resp = _mock_response(200, {
             "data": {"search": {
@@ -244,7 +244,7 @@ class TestOpenTargetsSearch:
 
     @patch("httpx.post")
     def test_not_found(self, mock_post):
-        from ct.tools.data_api import opentargets_search
+        from tools.data_api import opentargets_search
 
         mock_post.return_value = _mock_response(200, {
             "data": {"search": {"total": 0, "hits": []}}
@@ -254,7 +254,7 @@ class TestOpenTargetsSearch:
         assert "error" in result
 
     def test_invalid_entity_type(self):
-        from ct.tools.data_api import opentargets_search
+        from tools.data_api import opentargets_search
 
         result = opentargets_search(query="TP53", entity_type="bogus")
         assert "error" in result
@@ -267,7 +267,7 @@ class TestOpenTargetsSearch:
 class TestUniProtLookup:
     @patch("httpx.get")
     def test_accession_lookup(self, mock_get):
-        from ct.tools.data_api import uniprot_lookup
+        from tools.data_api import uniprot_lookup
 
         mock_get.return_value = _mock_response(200, {
             "primaryAccession": "P04637",
@@ -308,7 +308,7 @@ class TestUniProtLookup:
 
     @patch("httpx.get")
     def test_gene_symbol_search(self, mock_get):
-        from ct.tools.data_api import uniprot_lookup
+        from tools.data_api import uniprot_lookup
 
         # First call: direct lookup fails (not an accession)
         # Second call: search succeeds
@@ -335,7 +335,7 @@ class TestUniProtLookup:
 
     @patch("httpx.get")
     def test_not_found(self, mock_get):
-        from ct.tools.data_api import uniprot_lookup
+        from tools.data_api import uniprot_lookup
 
         mock_get.return_value = _mock_response(200, {"results": []})
 
@@ -345,7 +345,7 @@ class TestUniProtLookup:
     @patch("httpx.get")
     def test_timeout(self, mock_get):
         import httpx
-        from ct.tools.data_api import uniprot_lookup
+        from tools.data_api import uniprot_lookup
 
         mock_get.side_effect = httpx.TimeoutException("timeout")
 
@@ -354,7 +354,7 @@ class TestUniProtLookup:
 
     @patch("httpx.get")
     def test_non_human_query_uses_species_fallback_candidates(self, mock_get):
-        from ct.tools.data_api import uniprot_lookup
+        from tools.data_api import uniprot_lookup
 
         def _side_effect(url, **kwargs):
             params = kwargs.get("params", {}) or {}
@@ -390,7 +390,7 @@ class TestUniProtLookup:
 
     @patch("httpx.get")
     def test_uniprot_lookup_organism_any_disables_organism_filter(self, mock_get):
-        from ct.tools.data_api import uniprot_lookup
+        from tools.data_api import uniprot_lookup
 
         captured = {}
 
@@ -406,7 +406,7 @@ class TestUniProtLookup:
 
     @patch("httpx.get")
     def test_non_human_query_rejects_human_only_hits(self, mock_get):
-        from ct.tools.data_api import uniprot_lookup
+        from tools.data_api import uniprot_lookup
 
         mock_get.return_value = _mock_response(
             200,
@@ -442,7 +442,7 @@ class TestPDBSearch:
     @patch("httpx.get")
     @patch("httpx.post")
     def test_text_search(self, mock_post, mock_get):
-        from ct.tools.data_api import pdb_search
+        from tools.data_api import pdb_search
 
         mock_post.return_value = _mock_response(200, {
             "total_count": 156,
@@ -472,7 +472,7 @@ class TestPDBSearch:
 
     @patch("httpx.get")
     def test_direct_pdb_id(self, mock_get):
-        from ct.tools.data_api import pdb_search
+        from tools.data_api import pdb_search
 
         mock_get.return_value = _mock_response(200, {
             "struct": {"title": "Crystal structure of EGFR"},
@@ -490,7 +490,7 @@ class TestPDBSearch:
 
     @patch("httpx.post")
     def test_no_results(self, mock_post):
-        from ct.tools.data_api import pdb_search
+        from tools.data_api import pdb_search
 
         mock_post.return_value = _mock_response(200, {
             "total_count": 0,
@@ -503,7 +503,7 @@ class TestPDBSearch:
     @patch("httpx.post")
     def test_search_timeout(self, mock_post):
         import httpx
-        from ct.tools.data_api import pdb_search
+        from tools.data_api import pdb_search
 
         mock_post.side_effect = httpx.TimeoutException("timeout")
 
@@ -518,7 +518,7 @@ class TestPDBSearch:
 class TestEnsemblLookup:
     @patch("httpx.get")
     def test_gene_symbol_lookup(self, mock_get):
-        from ct.tools.data_api import ensembl_lookup
+        from tools.data_api import ensembl_lookup
 
         # First call: gene lookup
         gene_resp = _mock_response(200, {
@@ -552,7 +552,7 @@ class TestEnsemblLookup:
 
     @patch("httpx.get")
     def test_ensembl_id_lookup(self, mock_get):
-        from ct.tools.data_api import ensembl_lookup
+        from tools.data_api import ensembl_lookup
 
         gene_resp = _mock_response(200, {
             "id": "ENSG00000012048",
@@ -573,7 +573,7 @@ class TestEnsemblLookup:
 
     @patch("httpx.get")
     def test_gene_not_found(self, mock_get):
-        from ct.tools.data_api import ensembl_lookup
+        from tools.data_api import ensembl_lookup
 
         mock_get.return_value = _mock_response(400, {})
 
@@ -583,7 +583,7 @@ class TestEnsemblLookup:
     @patch("httpx.get")
     def test_timeout(self, mock_get):
         import httpx
-        from ct.tools.data_api import ensembl_lookup
+        from tools.data_api import ensembl_lookup
 
         mock_get.side_effect = httpx.TimeoutException("timeout")
 
@@ -598,7 +598,7 @@ class TestEnsemblLookup:
 class TestNCBIGene:
     @patch("httpx.get")
     def test_gene_search(self, mock_get):
-        from ct.tools.data_api import ncbi_gene
+        from tools.data_api import ncbi_gene
 
         search_resp = _mock_response(200, {
             "esearchresult": {"count": "1", "idlist": ["672"]}
@@ -629,7 +629,7 @@ class TestNCBIGene:
 
     @patch("httpx.get")
     def test_clinvar_search(self, mock_get):
-        from ct.tools.data_api import ncbi_gene
+        from tools.data_api import ncbi_gene
 
         search_resp = _mock_response(200, {
             "esearchresult": {"count": "500", "idlist": ["12345", "12346"]}
@@ -663,7 +663,7 @@ class TestNCBIGene:
 
     @patch("httpx.get")
     def test_no_results(self, mock_get):
-        from ct.tools.data_api import ncbi_gene
+        from tools.data_api import ncbi_gene
 
         mock_get.return_value = _mock_response(200, {
             "esearchresult": {"count": "0", "idlist": []}
@@ -673,7 +673,7 @@ class TestNCBIGene:
         assert result["total_count"] == 0
 
     def test_invalid_database(self):
-        from ct.tools.data_api import ncbi_gene
+        from tools.data_api import ncbi_gene
 
         result = ncbi_gene(query="BRCA1", database="invalid")
         assert "error" in result
@@ -681,7 +681,7 @@ class TestNCBIGene:
     @patch("httpx.get")
     def test_timeout(self, mock_get):
         import httpx
-        from ct.tools.data_api import ncbi_gene
+        from tools.data_api import ncbi_gene
 
         mock_get.side_effect = httpx.TimeoutException("timeout")
 
@@ -696,7 +696,7 @@ class TestNCBIGene:
 class TestChEMBLAdvanced:
     @patch("httpx.get")
     def test_compound_search(self, mock_get):
-        from ct.tools.data_api import chembl_advanced
+        from tools.data_api import chembl_advanced
 
         mock_get.return_value = _mock_response(200, {
             "molecules": [{
@@ -735,7 +735,7 @@ class TestChEMBLAdvanced:
 
     @patch("httpx.get")
     def test_target_activities(self, mock_get):
-        from ct.tools.data_api import chembl_advanced
+        from tools.data_api import chembl_advanced
 
         # First call: target search
         target_resp = _mock_response(200, {
@@ -766,7 +766,7 @@ class TestChEMBLAdvanced:
 
     @patch("httpx.get")
     def test_mechanism_search(self, mock_get):
-        from ct.tools.data_api import chembl_advanced
+        from tools.data_api import chembl_advanced
 
         mock_get.return_value = _mock_response(200, {
             "mechanisms": [{
@@ -787,7 +787,7 @@ class TestChEMBLAdvanced:
 
     @patch("httpx.get")
     def test_drug_indication(self, mock_get):
-        from ct.tools.data_api import chembl_advanced
+        from tools.data_api import chembl_advanced
 
         # First call: molecule search (resolve name to ID)
         mol_resp = _mock_response(200, {
@@ -809,7 +809,7 @@ class TestChEMBLAdvanced:
         assert result["n_approved"] == 2
 
     def test_invalid_search_type(self):
-        from ct.tools.data_api import chembl_advanced
+        from tools.data_api import chembl_advanced
 
         result = chembl_advanced(query="imatinib", search_type="bogus")
         assert "error" in result
@@ -822,7 +822,7 @@ class TestChEMBLAdvanced:
 class TestDrugInfo:
     @patch("httpx.get")
     def test_drug_lookup(self, mock_get):
-        from ct.tools.data_api import drug_info
+        from tools.data_api import drug_info
 
         # CID lookup
         cid_resp = _mock_response(200, {
@@ -891,7 +891,7 @@ class TestDrugInfo:
 
     @patch("httpx.get")
     def test_drug_not_found(self, mock_get):
-        from ct.tools.data_api import drug_info
+        from tools.data_api import drug_info
 
         mock_get.return_value = _mock_response(404, {})
 
@@ -901,7 +901,7 @@ class TestDrugInfo:
     @patch("httpx.get")
     def test_timeout(self, mock_get):
         import httpx
-        from ct.tools.data_api import drug_info
+        from tools.data_api import drug_info
 
         mock_get.side_effect = httpx.TimeoutException("timeout")
 
@@ -910,7 +910,7 @@ class TestDrugInfo:
 
     @patch("httpx.get")
     def test_no_cids(self, mock_get):
-        from ct.tools.data_api import drug_info
+        from tools.data_api import drug_info
 
         mock_get.return_value = _mock_response(200, {
             "IdentifierList": {"CID": []}
@@ -921,7 +921,7 @@ class TestDrugInfo:
 
     @patch("httpx.get")
     def test_combined_synonym_query_resolves_with_fallback_candidate(self, mock_get):
-        from ct.tools.data_api import drug_info
+        from tools.data_api import drug_info
 
         first_404 = _mock_response(404, {})
         cid_resp = _mock_response(200, {"IdentifierList": {"CID": [12345]}})
@@ -953,7 +953,7 @@ class TestDataAPIRegistration:
     """Verify data_api tools are registered in the correct category."""
 
     def test_all_tools_registered(self):
-        from ct.tools import registry, ensure_loaded
+        from tools import registry, ensure_loaded
         ensure_loaded()
 
         expected_tools = [
@@ -980,14 +980,14 @@ class TestDataAPIRegistration:
             assert "summary" in tool.description.lower() or tool.description  # Has description
 
     def test_data_api_category_exists(self):
-        from ct.tools import registry, ensure_loaded
+        from tools import registry, ensure_loaded
         ensure_loaded()
 
         categories = registry.categories()
         assert "data_api" in categories
 
     def test_tool_count(self):
-        from ct.tools import registry, ensure_loaded
+        from tools import registry, ensure_loaded
         ensure_loaded()
 
         tools = registry.list_tools(category="data_api")

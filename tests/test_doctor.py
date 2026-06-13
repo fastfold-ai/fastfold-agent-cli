@@ -3,8 +3,8 @@
 import time
 from unittest.mock import MagicMock, patch
 
-from ct.agent.config import Config
-from ct.agent.doctor import (
+from agent.config import Config
+from agent.doctor import (
     DoctorCheck,
     _check_api_connectivity,
     _check_data_availability,
@@ -70,7 +70,7 @@ def test_doctor_warns_when_pharma_profile_not_using_pharma_style():
 
 
 class TestDataAvailability:
-    @patch("ct.agent.doctor.Path.home")
+    @patch("agent.doctor.Path.home")
     def test_all_datasets_missing(self, mock_home, tmp_path):
         mock_home.return_value = tmp_path / "fakehome"
         cfg = Config(data={"data.base": str(tmp_path / "empty_data")})
@@ -81,7 +81,7 @@ class TestDataAvailability:
         assert "prism" in check.detail
         assert "l1000" in check.detail
 
-    @patch("ct.agent.doctor.Path.home")
+    @patch("agent.doctor.Path.home")
     def test_some_datasets_found(self, mock_home, tmp_path):
         mock_home.return_value = tmp_path / "fakehome"
         data_dir = tmp_path / "data" / "depmap"
@@ -144,7 +144,7 @@ class TestApiConnectivity:
         with patch.dict("sys.modules", {"httpx": None}):
             # Force ImportError in the function
             import importlib
-            import ct.agent.doctor
+            import agent.doctor
             # The function catches ImportError internally
             checks = _check_api_connectivity()
             # If httpx is actually installed we just verify the check ran
@@ -196,7 +196,7 @@ class TestDoctorWithSession:
         session = MagicMock()
         session.tool_health_suppressed_tools.return_value = set()
         session._tool_health_failures = {}
-        with patch("ct.agent.doctor._check_api_connectivity", return_value=[
+        with patch("agent.doctor._check_api_connectivity", return_value=[
             DoctorCheck(name="api_connectivity", status="ok", detail="mocked")
         ]):
             checks = _checks_by_name(run_checks(cfg, session=session))
@@ -205,7 +205,7 @@ class TestDoctorWithSession:
 
     def test_run_checks_reports_tool_health_unavailable_without_session(self):
         cfg = Config(data={"llm.provider": "anthropic", "llm.api_key": "x"})
-        with patch("ct.agent.doctor._check_api_connectivity", return_value=[
+        with patch("agent.doctor._check_api_connectivity", return_value=[
             DoctorCheck(name="api_connectivity", status="ok", detail="mocked")
         ]):
             checks = _checks_by_name(run_checks(cfg))
@@ -217,7 +217,7 @@ class TestDoctorWithSession:
 class TestPreflightValidationConfig:
     def test_preflight_enabled_by_default(self):
         cfg = Config(data={"llm.provider": "anthropic", "llm.api_key": "x"})
-        with patch("ct.agent.doctor._check_api_connectivity", return_value=[
+        with patch("agent.doctor._check_api_connectivity", return_value=[
             DoctorCheck(name="api_connectivity", status="ok", detail="mocked")
         ]):
             checks = _checks_by_name(run_checks(cfg))
@@ -229,7 +229,7 @@ class TestPreflightValidationConfig:
             "llm.api_key": "x",
             "agent.preflight_validation_enabled": False,
         })
-        with patch("ct.agent.doctor._check_api_connectivity", return_value=[
+        with patch("agent.doctor._check_api_connectivity", return_value=[
             DoctorCheck(name="api_connectivity", status="ok", detail="mocked")
         ]):
             checks = _checks_by_name(run_checks(cfg))

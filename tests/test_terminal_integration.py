@@ -1,6 +1,6 @@
 """Integration tests for the interactive terminal.
 
-These tests use pexpect to drive the ct REPL and verify UI features.
+These tests use pexpect to drive the fastfold REPL and verify UI features.
 Marked with @pytest.mark.integration — skipped in environments without a terminal.
 """
 
@@ -13,8 +13,8 @@ import pytest
 pytestmark = [
     pytest.mark.integration,
     pytest.mark.skipif(
-        shutil.which("ct") is None,
-        reason="ct CLI not found in PATH",
+        shutil.which("fastfold") is None,
+        reason="fastfold CLI not found in PATH",
     ),
     pytest.mark.skipif(
         sys.platform == "win32",
@@ -33,15 +33,15 @@ except ImportError:
 
 @pytest.fixture
 def ct_repl():
-    """Spawn a ct interactive session and yield the pexpect child."""
+    """Spawn a fastfold interactive session and yield the pexpect child."""
     if pexpect is None:
         pytest.skip("pexpect not installed")
     try:
-        child = pexpect.spawn("ct", timeout=30, encoding="utf-8")
+        child = pexpect.spawn("fastfold", timeout=30, encoding="utf-8")
         # Wait for the prompt to appear
         child.expect("❯", timeout=15)
     except (pexpect.TIMEOUT, pexpect.EOF, OSError):
-        pytest.skip("ct REPL failed to start — likely missing dependencies or config")
+        pytest.skip("fastfold REPL failed to start — likely missing dependencies or config")
     yield child
     try:
         child.sendline("/exit")

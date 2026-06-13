@@ -2,9 +2,9 @@
 
 from types import SimpleNamespace
 
-from ct.agent.config import Config
-from ct.agent.types import Plan, Step
-from ct.kb.governance import GovernanceEngine
+from agent.config import Config
+from agent.types import Plan, Step
+from kb.governance import GovernanceEngine
 
 
 def _session_with_config(data: dict):

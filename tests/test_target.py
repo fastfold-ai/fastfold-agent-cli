@@ -18,9 +18,9 @@ class TestNeosubstrateScore:
         data[1, :1] = -2.0  # PROT_1: strongly degraded by 1 compound
         return pd.DataFrame(data, index=proteins, columns=compounds)
 
-    @patch("ct.data.loaders.load_proteomics")
+    @patch("data.loaders.load_proteomics")
     def test_returns_top_targets(self, mock_load):
-        from ct.tools.target import neosubstrate_score
+        from tools.target import neosubstrate_score
         mock_load.return_value = self._make_proteomics()
 
         result = neosubstrate_score(top_n=10)
@@ -30,9 +30,9 @@ class TestNeosubstrateScore:
         assert len(result["top_targets"]) <= 10
         assert result["n_proteins_scored"] > 0
 
-    @patch("ct.data.loaders.load_proteomics")
+    @patch("data.loaders.load_proteomics")
     def test_selective_degradation_scores_high(self, mock_load):
-        from ct.tools.target import neosubstrate_score
+        from tools.target import neosubstrate_score
         mock_load.return_value = self._make_proteomics()
 
         result = neosubstrate_score(top_n=5)
@@ -41,9 +41,9 @@ class TestNeosubstrateScore:
         top_names = [t["protein"] for t in result["top_targets"]]
         assert "PROT_0" in top_names or "PROT_1" in top_names
 
-    @patch("ct.data.loaders.load_proteomics")
+    @patch("data.loaders.load_proteomics")
     def test_scoring_fields_present(self, mock_load):
-        from ct.tools.target import neosubstrate_score
+        from tools.target import neosubstrate_score
         mock_load.return_value = self._make_proteomics()
 
         result = neosubstrate_score(top_n=5)
@@ -56,9 +56,9 @@ class TestNeosubstrateScore:
             assert "selectivity" in target
             assert target["score"] > 0
 
-    @patch("ct.data.loaders.load_proteomics")
+    @patch("data.loaders.load_proteomics")
     def test_no_degradation(self, mock_load):
-        from ct.tools.target import neosubstrate_score
+        from tools.target import neosubstrate_score
         # All values above -0.5 threshold → no degradation detected
         data = pd.DataFrame(
             np.ones((10, 5)) * 0.1,
@@ -73,7 +73,7 @@ class TestNeosubstrateScore:
         assert result["top_targets"] == []
 
     def test_custom_proteomics_path(self, tmp_path):
-        from ct.tools.target import neosubstrate_score
+        from tools.target import neosubstrate_score
         csv_path = tmp_path / "prot.csv"
         data = pd.DataFrame(
             [[-1.5, 0.1, 0.2], [-0.1, -0.2, 0.0]],
@@ -131,7 +131,7 @@ class TestDegronPredict:
 
     @patch("httpx.get")
     def test_high_degradability_zinc_fingers(self, mock_get):
-        from ct.tools.target import degron_predict
+        from tools.target import degron_predict
 
         resp = MagicMock()
         resp.status_code = 200
@@ -151,7 +151,7 @@ class TestDegronPredict:
 
     @patch("httpx.get")
     def test_low_degradability_no_features(self, mock_get):
-        from ct.tools.target import degron_predict
+        from tools.target import degron_predict
 
         resp = MagicMock()
         resp.status_code = 200
@@ -169,7 +169,7 @@ class TestDegronPredict:
 
     @patch("httpx.get")
     def test_score_breakdown_present(self, mock_get):
-        from ct.tools.target import degron_predict
+        from tools.target import degron_predict
 
         resp = MagicMock()
         resp.status_code = 200
@@ -190,7 +190,7 @@ class TestDegronPredict:
 
     @patch("httpx.get")
     def test_uniprot_not_found(self, mock_get):
-        from ct.tools.target import degron_predict
+        from tools.target import degron_predict
 
         resp = MagicMock()
         resp.status_code = 404
@@ -203,7 +203,7 @@ class TestDegronPredict:
     @patch("httpx.get")
     def test_network_error(self, mock_get):
         import httpx as httpx_mod
-        from ct.tools.target import degron_predict
+        from tools.target import degron_predict
 
         mock_get.side_effect = httpx_mod.ConnectError("Connection refused")
 
@@ -213,7 +213,7 @@ class TestDegronPredict:
 
     @patch("httpx.get")
     def test_ubiquitination_sites_boost_score(self, mock_get):
-        from ct.tools.target import degron_predict
+        from tools.target import degron_predict
 
         resp = MagicMock()
         resp.status_code = 200
@@ -230,7 +230,7 @@ class TestDegronPredict:
 
     @patch("httpx.get")
     def test_small_protein_size_bonus(self, mock_get):
-        from ct.tools.target import degron_predict
+        from tools.target import degron_predict
 
         # Small protein
         resp1 = MagicMock()
@@ -262,9 +262,9 @@ class TestCoessentiality:
         df = pd.DataFrame(data, index=lines, columns=genes)
         return df
 
-    @patch("ct.data.loaders.load_crispr")
+    @patch("data.loaders.load_crispr")
     def test_finds_coessential_partners(self, mock_load):
-        from ct.tools.target import coessentiality
+        from tools.target import coessentiality
         mock_load.return_value = self._make_crispr()
 
         result = coessentiality("GENE_0", top_n=5)
@@ -278,9 +278,9 @@ class TestCoessentiality:
         co_genes = [p["gene"] for p in result["co_essential"]]
         assert "GENE_1" in co_genes
 
-    @patch("ct.data.loaders.load_crispr")
+    @patch("data.loaders.load_crispr")
     def test_finds_synthetic_lethal_partners(self, mock_load):
-        from ct.tools.target import coessentiality
+        from tools.target import coessentiality
         mock_load.return_value = self._make_crispr()
 
         result = coessentiality("GENE_0", top_n=5)
@@ -289,18 +289,18 @@ class TestCoessentiality:
         sl_genes = [p["gene"] for p in result["synthetic_lethal"]]
         assert "GENE_2" in sl_genes
 
-    @patch("ct.data.loaders.load_crispr")
+    @patch("data.loaders.load_crispr")
     def test_gene_not_found(self, mock_load):
-        from ct.tools.target import coessentiality
+        from tools.target import coessentiality
         mock_load.return_value = self._make_crispr()
 
         result = coessentiality("NONEXISTENT_GENE")
 
         assert "error" in result
 
-    @patch("ct.data.loaders.load_crispr")
+    @patch("data.loaders.load_crispr")
     def test_correlation_fields(self, mock_load):
-        from ct.tools.target import coessentiality
+        from tools.target import coessentiality
         mock_load.return_value = self._make_crispr()
 
         result = coessentiality("GENE_0", top_n=3)
@@ -319,7 +319,7 @@ class TestDiseaseAssociation:
     @patch("httpx.post")
     @patch("httpx.get")
     def test_parses_datasource_scores_with_schema_id_field(self, mock_get, mock_post):
-        from ct.tools.target import disease_association
+        from tools.target import disease_association
 
         ens_resp = MagicMock()
         ens_resp.status_code = 200
@@ -367,7 +367,7 @@ class TestDiseaseAssociation:
     @patch("httpx.post")
     @patch("httpx.get")
     def test_handles_no_associations_above_threshold(self, mock_get, mock_post):
-        from ct.tools.target import disease_association
+        from tools.target import disease_association
 
         ens_resp = MagicMock()
         ens_resp.status_code = 200

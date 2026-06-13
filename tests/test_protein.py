@@ -12,25 +12,25 @@ class TestProteinEmbed:
     """Tests for protein.embed."""
 
     def test_empty_sequence_returns_error(self):
-        from ct.tools.protein import embed
+        from tools.protein import embed
         result = embed(sequence="")
         assert "error" in result
 
     def test_invalid_characters_returns_error(self):
-        from ct.tools.protein import embed
+        from tools.protein import embed
         result = embed(sequence="MKTL123!!!")
         assert "error" in result
         assert "invalid" in result["error"].lower() or "Invalid" in result["error"]
 
     def test_too_long_sequence_returns_error(self):
-        from ct.tools.protein import embed
+        from tools.protein import embed
         result = embed(sequence="M" * 3000)
         assert "error" in result
         assert "too long" in result["error"].lower() or "exceeds" in result["error"].lower()
 
     def test_esm_not_installed(self):
         """When torch/esm not installed, returns install instructions."""
-        from ct.tools.protein import embed
+        from tools.protein import embed
 
         # Patch only torch and esm imports inside the function
         original_import = __import__
@@ -84,7 +84,7 @@ class TestProteinEmbed:
         mock_esm.pretrained.esm2_t33_650M_UR50D = MagicMock(return_value=(mock_model, mock_alphabet))
 
         with patch.dict(sys.modules, {"torch": mock_torch, "esm": mock_esm}):
-            from ct.tools.protein import embed
+            from tools.protein import embed
             result = embed(sequence=seq)
 
         assert "summary" in result
@@ -93,7 +93,7 @@ class TestProteinEmbed:
 
     def test_valid_sequence_accepted(self):
         """Valid amino acid sequences should not fail validation."""
-        from ct.tools.protein import embed
+        from tools.protein import embed
 
         original_import = __import__
 
@@ -118,7 +118,7 @@ class TestProteinFunctionPredict:
     @patch("httpx.get")
     def test_gene_search_success(self, mock_get):
         """Query by gene symbol returns function data."""
-        from ct.tools.protein import function_predict
+        from tools.protein import function_predict
 
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -176,7 +176,7 @@ class TestProteinFunctionPredict:
     @patch("httpx.get")
     def test_uniprot_id_direct_lookup(self, mock_get):
         """Query by UniProt ID uses direct endpoint."""
-        from ct.tools.protein import function_predict
+        from tools.protein import function_predict
 
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -202,7 +202,7 @@ class TestProteinFunctionPredict:
     @patch("httpx.get")
     def test_gene_not_found(self, mock_get):
         """Nonexistent gene returns error."""
-        from ct.tools.protein import function_predict
+        from tools.protein import function_predict
 
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -219,7 +219,7 @@ class TestProteinFunctionPredict:
     def test_api_error_handled(self, mock_get):
         """HTTP errors are handled gracefully."""
         import httpx
-        from ct.tools.protein import function_predict
+        from tools.protein import function_predict
 
         mock_get.side_effect = httpx.HTTPError("Connection failed")
 
@@ -236,14 +236,14 @@ class TestProteinDomainAnnotate:
 
     def test_no_gene_or_uniprot_returns_error(self):
         """Must provide either gene or uniprot_id."""
-        from ct.tools.protein import domain_annotate
+        from tools.protein import domain_annotate
         result = domain_annotate()
         assert "error" in result
 
     @patch("httpx.get")
     def test_domain_annotation_success(self, mock_get):
         """Successful domain annotation from InterPro."""
-        from ct.tools.protein import domain_annotate
+        from tools.protein import domain_annotate
 
         # Mock UniProt resolution
         uniprot_response = MagicMock()
@@ -315,7 +315,7 @@ class TestProteinDomainAnnotate:
     @patch("httpx.get")
     def test_direct_uniprot_id(self, mock_get):
         """Can use UniProt ID directly without gene resolution."""
-        from ct.tools.protein import domain_annotate
+        from tools.protein import domain_annotate
 
         interpro_response = MagicMock()
         interpro_response.status_code = 200
@@ -331,7 +331,7 @@ class TestProteinDomainAnnotate:
     @patch("httpx.get")
     def test_gene_not_resolved(self, mock_get):
         """Gene that can't be resolved returns error."""
-        from ct.tools.protein import domain_annotate
+        from tools.protein import domain_annotate
 
         mock_response = MagicMock()
         mock_response.status_code = 200
@@ -346,7 +346,7 @@ class TestProteinDomainAnnotate:
     @patch("httpx.get")
     def test_interpro_204_returns_empty_annotations(self, mock_get):
         """InterPro HTTP 204 should be treated as no domain annotations, not hard failure."""
-        from ct.tools.protein import domain_annotate
+        from tools.protein import domain_annotate
 
         uniprot_response = MagicMock()
         uniprot_response.status_code = 200
@@ -367,7 +367,7 @@ class TestProteinDomainAnnotate:
     @patch("httpx.get")
     def test_non_human_gene_resolution_tries_unrestricted_search(self, mock_get):
         """Non-human-like queries should try unrestricted UniProt search."""
-        from ct.tools.protein import domain_annotate
+        from tools.protein import domain_annotate
 
         uniprot_fail = MagicMock()
         uniprot_fail.status_code = 200
@@ -391,7 +391,7 @@ class TestProteinDomainAnnotate:
     @patch("httpx.get")
     def test_keyword_mode_when_gene_not_resolved(self, mock_get):
         """If no UniProt mapping exists, domain keyword search should still return InterPro hits."""
-        from ct.tools.protein import domain_annotate
+        from tools.protein import domain_annotate
 
         uniprot_fail = MagicMock()
         uniprot_fail.status_code = 200
@@ -432,7 +432,7 @@ class TestProteinDomainAnnotate:
     @patch("httpx.get")
     def test_interpro_accession_mode(self, mock_get):
         """Direct InterPro accession should bypass UniProt resolution."""
-        from ct.tools.protein import domain_annotate
+        from tools.protein import domain_annotate
 
         interpro_resp = MagicMock()
         interpro_resp.status_code = 200

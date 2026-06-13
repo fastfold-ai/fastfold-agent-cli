@@ -8,7 +8,7 @@ import httpx
 class TestPpiAnalysis:
     @patch("httpx.get")
     def test_ppi_analysis_success(self, mock_get):
-        from ct.tools.network import ppi_analysis
+        from tools.network import ppi_analysis
 
         network_resp = MagicMock()
         network_resp.status_code = 200
@@ -55,7 +55,7 @@ class TestPpiAnalysis:
 
     @patch("httpx.get")
     def test_ppi_analysis_api_error(self, mock_get):
-        from ct.tools.network import ppi_analysis
+        from tools.network import ppi_analysis
 
         mock_get.side_effect = httpx.TimeoutException("timeout")
 
@@ -66,7 +66,7 @@ class TestPpiAnalysis:
 
     @patch("httpx.get")
     def test_ppi_analysis_accepts_list_input(self, mock_get):
-        from ct.tools.network import ppi_analysis
+        from tools.network import ppi_analysis
 
         network_resp = MagicMock()
         network_resp.status_code = 200
@@ -100,7 +100,7 @@ class TestPathwayCrosstalk:
     @patch("httpx.get")
     @patch("httpx.post")
     def test_pathway_crosstalk_success(self, mock_post, mock_get):
-        from ct.tools.network import pathway_crosstalk
+        from tools.network import pathway_crosstalk
 
         analysis_resp = MagicMock()
         analysis_resp.status_code = 200
@@ -135,7 +135,7 @@ class TestPathwayCrosstalk:
 
     @patch("httpx.post")
     def test_pathway_crosstalk_api_error(self, mock_post):
-        from ct.tools.network import pathway_crosstalk
+        from tools.network import pathway_crosstalk
 
         mock_post.side_effect = httpx.RequestError("network down")
 
@@ -147,7 +147,7 @@ class TestPathwayCrosstalk:
     @patch("httpx.get")
     @patch("httpx.post")
     def test_pathway_crosstalk_accepts_list_input(self, mock_post, mock_get):
-        from ct.tools.network import pathway_crosstalk
+        from tools.network import pathway_crosstalk
 
         analysis_resp = MagicMock()
         analysis_resp.status_code = 200

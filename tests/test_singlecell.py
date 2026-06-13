@@ -14,8 +14,8 @@ class TestSinglecellCluster:
 
     def test_missing_scanpy_returns_error(self):
         """If scanpy is not installed, return helpful error."""
-        with patch("ct.tools.singlecell._check_scanpy", return_value=None):
-            from ct.tools.singlecell import cluster
+        with patch("tools.singlecell._check_scanpy", return_value=None):
+            from tools.singlecell import cluster
             result = cluster(data_path="test.h5ad")
             assert "error" in result
             assert "scanpy" in result["error"].lower()
@@ -24,8 +24,8 @@ class TestSinglecellCluster:
     def test_unsupported_format_returns_error(self):
         """Unsupported file formats should return an error."""
         mock_sc = MagicMock()
-        with patch("ct.tools.singlecell._check_scanpy", return_value=mock_sc):
-            from ct.tools.singlecell import cluster
+        with patch("tools.singlecell._check_scanpy", return_value=mock_sc):
+            from tools.singlecell import cluster
             result = cluster(data_path="data.txt")
             assert "error" in result
             assert "Unsupported" in result["error"]
@@ -72,8 +72,8 @@ class TestSinglecellCluster:
 
         mock_sc.read_h5ad = MagicMock(return_value=adata)
 
-        with patch("ct.tools.singlecell._check_scanpy", return_value=mock_sc):
-            from ct.tools.singlecell import cluster
+        with patch("tools.singlecell._check_scanpy", return_value=mock_sc):
+            from tools.singlecell import cluster
             result = cluster(data_path="test.h5ad", resolution=0.8, method="leiden")
 
         assert "summary" in result
@@ -126,10 +126,10 @@ class TestSinglecellCluster:
         import sys
         mock_anndata = MagicMock()
         mock_anndata.AnnData = MagicMock(return_value=adata)
-        with patch("ct.tools.singlecell._check_scanpy", return_value=mock_sc), \
+        with patch("tools.singlecell._check_scanpy", return_value=mock_sc), \
              patch("pandas.read_csv", return_value=mock_df), \
              patch.dict(sys.modules, {"anndata": mock_anndata}):
-            from ct.tools.singlecell import cluster
+            from tools.singlecell import cluster
             result = cluster(data_path="data.csv", resolution=1.0)
 
         assert "summary" in result
@@ -143,16 +143,16 @@ class TestSinglecellTrajectory:
     """Tests for singlecell.trajectory."""
 
     def test_missing_scanpy_returns_error(self):
-        with patch("ct.tools.singlecell._check_scanpy", return_value=None):
-            from ct.tools.singlecell import trajectory
+        with patch("tools.singlecell._check_scanpy", return_value=None):
+            from tools.singlecell import trajectory
             result = trajectory(data_path="test.h5ad")
             assert "error" in result
             assert "scanpy" in result["error"].lower()
 
     def test_non_h5ad_returns_error(self):
         mock_sc = MagicMock()
-        with patch("ct.tools.singlecell._check_scanpy", return_value=mock_sc):
-            from ct.tools.singlecell import trajectory
+        with patch("tools.singlecell._check_scanpy", return_value=mock_sc):
+            from tools.singlecell import trajectory
             result = trajectory(data_path="data.csv")
             assert "error" in result
 
@@ -221,8 +221,8 @@ class TestSinglecellTrajectory:
         mock_sc.tl.paga = MagicMock(side_effect=mock_paga)
         mock_sc.tl.dpt = MagicMock(side_effect=mock_dpt)
 
-        with patch("ct.tools.singlecell._check_scanpy", return_value=mock_sc):
-            from ct.tools.singlecell import trajectory
+        with patch("tools.singlecell._check_scanpy", return_value=mock_sc):
+            from tools.singlecell import trajectory
             result = trajectory(data_path="test.h5ad", root_cluster="0")
 
         assert "summary" in result
@@ -251,8 +251,8 @@ class TestSinglecellTrajectory:
 
         mock_sc.read_h5ad = MagicMock(return_value=adata)
 
-        with patch("ct.tools.singlecell._check_scanpy", return_value=mock_sc):
-            from ct.tools.singlecell import trajectory
+        with patch("tools.singlecell._check_scanpy", return_value=mock_sc):
+            from tools.singlecell import trajectory
             result = trajectory(data_path="test.h5ad")
             assert "error" in result
             assert "cluster" in result["error"].lower()
@@ -265,8 +265,8 @@ class TestSinglecellCellTypeAnnotate:
     """Tests for singlecell.cell_type_annotate."""
 
     def test_missing_scanpy_returns_error(self):
-        with patch("ct.tools.singlecell._check_scanpy", return_value=None):
-            from ct.tools.singlecell import cell_type_annotate
+        with patch("tools.singlecell._check_scanpy", return_value=None):
+            from tools.singlecell import cell_type_annotate
             result = cell_type_annotate(data_path="test.h5ad")
             assert "error" in result
             assert "scanpy" in result["error"].lower()
@@ -274,7 +274,7 @@ class TestSinglecellCellTypeAnnotate:
     def test_celltypist_not_installed(self):
         """When celltypist method requested but not installed."""
         # Patch the import inside the function to raise ImportError
-        from ct.tools.singlecell import cell_type_annotate
+        from tools.singlecell import cell_type_annotate
 
         original_import = __builtins__.__import__ if hasattr(__builtins__, '__import__') else __import__
 
@@ -340,8 +340,8 @@ class TestSinglecellCellTypeAnnotate:
 
         mock_sc.read_h5ad = MagicMock(return_value=adata)
 
-        with patch("ct.tools.singlecell._check_scanpy", return_value=mock_sc):
-            from ct.tools.singlecell import cell_type_annotate
+        with patch("tools.singlecell._check_scanpy", return_value=mock_sc):
+            from tools.singlecell import cell_type_annotate
             result = cell_type_annotate(data_path="test.h5ad", reference="immune", method="marker_based")
 
         assert "summary" in result
@@ -373,7 +373,7 @@ class TestSinglecellCellTypeAnnotate:
 
         mock_sc.read_h5ad = MagicMock(return_value=adata)
 
-        with patch("ct.tools.singlecell._check_scanpy", return_value=mock_sc):
-            from ct.tools.singlecell import cell_type_annotate
+        with patch("tools.singlecell._check_scanpy", return_value=mock_sc):
+            from tools.singlecell import cell_type_annotate
             result = cell_type_annotate(data_path="test.h5ad")
             assert "error" in result

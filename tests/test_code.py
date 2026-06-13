@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import patch, MagicMock, PropertyMock
 from pathlib import Path
 
-from ct.models.llm import LLMResponse
+from models.llm import LLMResponse
 
 
 def _make_llm_response(code: str) -> LLMResponse:
@@ -27,9 +27,9 @@ def mock_session(tmp_path):
 
 
 class TestCodeExecute:
-    @patch("ct.agent.sandbox.Sandbox.load_datasets", return_value={})
+    @patch("agent.sandbox.Sandbox.load_datasets", return_value={})
     def test_script_authoring_goal_writes_python_file(self, mock_load, mock_session, tmp_path, monkeypatch):
-        from ct.tools.code import execute
+        from tools.code import execute
 
         monkeypatch.chdir(tmp_path)
         mock_session.get_llm.return_value.chat.return_value = _make_llm_response(
@@ -52,9 +52,9 @@ class TestCodeExecute:
         # Script-authoring path should bypass sandbox dataset loading.
         mock_load.assert_not_called()
 
-    @patch("ct.agent.sandbox.Sandbox.load_datasets", return_value={})
+    @patch("agent.sandbox.Sandbox.load_datasets", return_value={})
     def test_script_authoring_retries_on_syntax_error(self, mock_load, mock_session, tmp_path, monkeypatch):
-        from ct.tools.code import execute
+        from tools.code import execute
 
         monkeypatch.chdir(tmp_path)
         llm = mock_session.get_llm.return_value
@@ -79,9 +79,9 @@ class TestCodeExecute:
         assert llm.chat.call_count == 2
         mock_load.assert_not_called()
 
-    @patch("ct.agent.sandbox.Sandbox.load_datasets", return_value={})
+    @patch("agent.sandbox.Sandbox.load_datasets", return_value={})
     def test_simple_execution(self, mock_load, mock_session):
-        from ct.tools.code import execute
+        from tools.code import execute
 
         mock_session.get_llm.return_value.chat.return_value = _make_llm_response(
             "result = {'summary': 'The answer is 42', 'value': 42}"
@@ -91,9 +91,9 @@ class TestCodeExecute:
         assert "42" in result["summary"]
         assert result.get("error") is None
 
-    @patch("ct.agent.sandbox.Sandbox.load_datasets", return_value={})
+    @patch("agent.sandbox.Sandbox.load_datasets", return_value={})
     def test_retry_on_error(self, mock_load, mock_session):
-        from ct.tools.code import execute
+        from tools.code import execute
 
         llm = mock_session.get_llm.return_value
         # First attempt: bad code. Second attempt: fixed code.
@@ -107,9 +107,9 @@ class TestCodeExecute:
         assert result.get("error") is None
         assert llm.chat.call_count >= 2
 
-    @patch("ct.agent.sandbox.Sandbox.load_datasets", return_value={})
+    @patch("agent.sandbox.Sandbox.load_datasets", return_value={})
     def test_all_retries_exhausted(self, mock_load, mock_session):
-        from ct.tools.code import execute
+        from tools.code import execute
 
         llm = mock_session.get_llm.return_value
         # All attempts fail
@@ -124,14 +124,14 @@ class TestCodeExecute:
         assert result["error"] is not None
 
     def test_no_session_returns_error(self):
-        from ct.tools.code import execute
+        from tools.code import execute
 
         result = execute(goal="anything", _session=None)
         assert "unavailable" in result["summary"].lower()
 
-    @patch("ct.agent.sandbox.Sandbox.load_datasets", return_value={})
+    @patch("agent.sandbox.Sandbox.load_datasets", return_value={})
     def test_with_prior_results(self, mock_load, mock_session):
-        from ct.tools.code import execute
+        from tools.code import execute
 
         mock_session.get_llm.return_value.chat.return_value = _make_llm_response(
             "genes = step_1['genes']\n"
@@ -146,9 +146,9 @@ class TestCodeExecute:
         assert result.get("error") is None
         assert "3" in result["summary"]
 
-    @patch("ct.agent.sandbox.Sandbox.load_datasets", return_value={})
+    @patch("agent.sandbox.Sandbox.load_datasets", return_value={})
     def test_plot_generation(self, mock_load, mock_session):
-        from ct.tools.code import execute
+        from tools.code import execute
 
         mock_session.get_llm.return_value.chat.return_value = _make_llm_response(
             "fig, ax = plt.subplots()\n"
@@ -163,7 +163,7 @@ class TestCodeExecute:
         assert len(result["plots"]) == 1
 
     def test_extracts_code_from_markdown_fences(self):
-        from ct.tools.code import _extract_code
+        from tools.code import _extract_code
 
         raw = "```python\nresult = {'summary': 'ok'}\n```"
         assert _extract_code(raw) == "result = {'summary': 'ok'}"

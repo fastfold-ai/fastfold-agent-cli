@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from ct.agent.loop import AgentLoop  # type: ignore[import-untyped]
+from agent.loop import AgentLoop  # type: ignore[import-untyped]
 
 
 def _mock_session():
@@ -21,8 +21,8 @@ def test_resume_resolves_id_to_session_path():
     fake_traj = MagicMock()
     fake_traj.session_id = "abc12345"
 
-    with patch("ct.agent.loop.Trajectory.resolve_session_path", return_value=fake_path) as mock_resolve, patch(
-        "ct.agent.loop.Trajectory.load", return_value=fake_traj
+    with patch("agent.loop.Trajectory.resolve_session_path", return_value=fake_path) as mock_resolve, patch(
+        "agent.loop.Trajectory.load", return_value=fake_traj
     ) as mock_load:
         AgentLoop.resume(session, " abc12345 ")
 

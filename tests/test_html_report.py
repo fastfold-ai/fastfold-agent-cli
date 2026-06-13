@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from ct.reports.html import markdown_to_html, publish_report, render_html_report
+from reports.html import markdown_to_html, publish_report, render_html_report
 
 
 class TestMarkdownToHtml:
@@ -47,7 +47,7 @@ class TestMarkdownToHtml:
         real_import = __builtins__.__import__ if hasattr(__builtins__, '__import__') else __import__
 
         import importlib
-        import ct.reports.html as html_mod
+        import reports.html as html_mod
 
         original_fn = html_mod.markdown_to_html
 

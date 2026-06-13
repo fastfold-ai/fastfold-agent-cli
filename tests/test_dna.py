@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ct.tools.dna import (
+from tools.dna import (
     reverse_complement,
     translate,
     find_orfs,

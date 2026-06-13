@@ -15,7 +15,7 @@ class TestCellpaintingLookup:
     @patch("httpx.post")
     def test_lookup_by_name(self, mock_post, mock_get):
         """Look up compound by name via PubChem."""
-        from ct.tools.imaging import cellpainting_lookup
+        from tools.imaging import cellpainting_lookup
 
         # PubChem compound lookup
         pubchem_props = MagicMock()
@@ -51,7 +51,7 @@ class TestCellpaintingLookup:
     @patch("httpx.post")
     def test_lookup_by_smiles(self, mock_post, mock_get):
         """Look up compound by SMILES."""
-        from ct.tools.imaging import cellpainting_lookup
+        from tools.imaging import cellpainting_lookup
 
         pubchem_props = MagicMock()
         pubchem_props.status_code = 200
@@ -85,7 +85,7 @@ class TestCellpaintingLookup:
     @patch("httpx.get")
     def test_pubchem_not_found(self, mock_get):
         """Compound not found in PubChem."""
-        from ct.tools.imaging import cellpainting_lookup
+        from tools.imaging import cellpainting_lookup
 
         mock_resp = MagicMock()
         mock_resp.status_code = 404
@@ -101,7 +101,7 @@ class TestCellpaintingLookup:
     def test_api_timeout_handled(self, mock_get):
         """API timeouts are handled gracefully."""
         import httpx
-        from ct.tools.imaging import cellpainting_lookup
+        from tools.imaging import cellpainting_lookup
 
         mock_get.side_effect = httpx.TimeoutException("timeout")
 
@@ -119,7 +119,7 @@ class TestMorphologySimilarity:
 
     def test_identical_compounds(self):
         """Same SMILES should give similarity ~1.0."""
-        from ct.tools.imaging import morphology_similarity
+        from tools.imaging import morphology_similarity
 
         smiles = "CC(=O)OC1=CC=CC=C1C(=O)O"
         result = morphology_similarity(smiles_a=smiles, smiles_b=smiles)
@@ -130,7 +130,7 @@ class TestMorphologySimilarity:
 
     def test_different_compounds(self):
         """Different compounds should have <1.0 similarity."""
-        from ct.tools.imaging import morphology_similarity
+        from tools.imaging import morphology_similarity
 
         aspirin = "CC(=O)OC1=CC=CC=C1C(=O)O"
         caffeine = "CN1C=NC2=C1C(=O)N(C(=O)N2C)C"
@@ -145,7 +145,7 @@ class TestMorphologySimilarity:
 
     def test_invalid_smiles_a(self):
         """Invalid SMILES for compound A returns error."""
-        from ct.tools.imaging import morphology_similarity
+        from tools.imaging import morphology_similarity
 
         result = morphology_similarity(smiles_a="INVALID", smiles_b="CC(=O)O")
 
@@ -153,7 +153,7 @@ class TestMorphologySimilarity:
 
     def test_invalid_smiles_b(self):
         """Invalid SMILES for compound B returns error."""
-        from ct.tools.imaging import morphology_similarity
+        from tools.imaging import morphology_similarity
 
         result = morphology_similarity(smiles_a="CC(=O)O", smiles_b="INVALID")
 
@@ -161,7 +161,7 @@ class TestMorphologySimilarity:
 
     def test_similar_compounds(self):
         """Structurally similar compounds should have high similarity."""
-        from ct.tools.imaging import morphology_similarity
+        from tools.imaging import morphology_similarity
 
         # Lenalidomide and pomalidomide (close analogs)
         lenalidomide = "O=C1CCC(N2C(=O)c3ccccc3C2=O)C(=O)N1"
@@ -175,7 +175,7 @@ class TestMorphologySimilarity:
 
     def test_output_structure(self):
         """Verify all expected fields are present."""
-        from ct.tools.imaging import morphology_similarity
+        from tools.imaging import morphology_similarity
 
         result = morphology_similarity(
             smiles_a="c1ccccc1",
@@ -197,7 +197,7 @@ class TestMorphologySimilarity:
 
     def test_rdkit_not_installed(self):
         """When RDKit not installed, return helpful error."""
-        from ct.tools.imaging import morphology_similarity
+        from tools.imaging import morphology_similarity
 
         original_import = __import__
 

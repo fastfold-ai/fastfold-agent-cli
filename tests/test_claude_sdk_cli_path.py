@@ -7,8 +7,8 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
-from ct.agent import claude_code_cli as ccli
-from ct.agent import runner as runner_mod
+from agent import claude_code_cli as ccli
+from agent import runner as runner_mod
 
 
 def test_claude_sdk_cli_path_unix_no_env_returns_none(monkeypatch):

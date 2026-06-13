@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ct.tools.ops import (
+from tools.ops import (
     notebook_add,
     notebook_delete,
     notebook_get,

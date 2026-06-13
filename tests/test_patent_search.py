@@ -9,7 +9,7 @@ class TestPatentSearchLens:
 
     @patch("httpx.post")
     def test_lens_success(self, mock_post):
-        from ct.tools.literature import patent_search
+        from tools.literature import patent_search
 
         resp = MagicMock()
         resp.status_code = 200
@@ -57,7 +57,7 @@ class TestPatentSearchLens:
     @patch("httpx.post")
     def test_lens_failure_falls_through(self, mock_post):
         """If Lens.org fails, should fall through to EPO or PubMed."""
-        from ct.tools.literature import patent_search
+        from tools.literature import patent_search
 
         mock_post.return_value = MagicMock(status_code=401)
 
@@ -89,7 +89,7 @@ class TestPatentSearchEPO:
 
     @patch("httpx.get")
     def test_epo_success(self, mock_get):
-        from ct.tools.literature import patent_search
+        from tools.literature import patent_search
 
         epo_xml = """<?xml version="1.0" encoding="UTF-8"?>
         <ops:world-patent-data xmlns:ops="http://ops.epo.org"
@@ -143,7 +143,7 @@ class TestPatentSearchEPO:
     @patch("httpx.get")
     def test_epo_no_results(self, mock_get):
         """EPO returning 404 should fall through to PubMed."""
-        from ct.tools.literature import patent_search
+        from tools.literature import patent_search
 
         # EPO 404
         epo_resp = MagicMock()
@@ -189,7 +189,7 @@ class TestPatentSearchEPO:
     @patch("httpx.get")
     def test_epo_rate_limited(self, mock_get):
         """EPO 403 should fall through to PubMed."""
-        from ct.tools.literature import patent_search
+        from tools.literature import patent_search
 
         epo_resp = MagicMock()
         epo_resp.status_code = 403
@@ -211,7 +211,7 @@ class TestPatentSearchPubMedFallback:
     @patch("httpx.get")
     def test_pubmed_fallback_adds_patent_terms(self, mock_get):
         """PubMed fallback should add patent-related terms to query."""
-        from ct.tools.literature import patent_search
+        from tools.literature import patent_search
 
         # EPO fails
         epo_resp = MagicMock()
@@ -252,7 +252,7 @@ class TestPatentSearchPubMedFallback:
     @patch("httpx.get")
     def test_pubmed_fallback_no_results(self, mock_get):
         """PubMed fallback with no results."""
-        from ct.tools.literature import patent_search
+        from tools.literature import patent_search
 
         epo_resp = MagicMock()
         epo_resp.status_code = 500
@@ -275,7 +275,7 @@ class TestPatentSearchNoSession:
     @patch("httpx.get")
     def test_no_session_skips_lens(self, mock_get):
         """Without session, should skip Lens.org and try EPO directly."""
-        from ct.tools.literature import patent_search
+        from tools.literature import patent_search
 
         epo_xml = """<?xml version="1.0" encoding="UTF-8"?>
         <ops:world-patent-data xmlns:ops="http://ops.epo.org"

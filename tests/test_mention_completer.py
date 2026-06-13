@@ -3,7 +3,7 @@
 import pytest
 from prompt_toolkit.document import Document
 
-from ct.ui.terminal import (
+from ui.terminal import (
     MentionCompleter,
     MergedCompleter,
     SlashCompleter,

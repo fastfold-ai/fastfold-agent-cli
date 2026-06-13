@@ -5,8 +5,8 @@ from io import StringIO
 import pytest
 from rich.console import Console
 
-from ct.agent.types import Plan, Step
-from ct.ui.terminal import render_plan_preview
+from agent.types import Plan, Step
+from ui.terminal import render_plan_preview
 
 
 def _captured_console():

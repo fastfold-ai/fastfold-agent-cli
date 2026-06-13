@@ -15,7 +15,7 @@ the full research workflow within a single agentic session (up to 30 tool-use tu
 
 ### Key directories:
 ```
-src/ct/
+src/
 ├── agent/          # Runner, MCP server, system prompt, config
 ├── tools/          # All research tools (190+), registered via @registry.register()
 ├── data/           # Data loaders (DepMap, PRISM, L1000, proteomics)
@@ -48,22 +48,22 @@ Rules:
 - Always accept `**kwargs`
 - Always return a dict with a `"summary"` key
 - Use lazy imports for data loaders inside the function body
-- Use `from ct.data.loaders import load_X` pattern
+- Use `from data.loaders import load_X` pattern
 
 ## Commands
 
 ```bash
-ct --version                    # Check version
-ct "your question"              # Single query
-ct                              # Interactive mode
-ct tool list                    # List all tools
-ct config set key value         # Set config
-ct data pull depmap             # Download dataset
-pytest tests/ -v                # Run tests
-pip install -e ".[dev]"         # Install for development
+fastfold --version              # Check version
+fastfold "your question"        # Single query
+fastfold                          # Interactive mode
+fastfold tool list                # List all tools
+fastfold config set key value     # Set config
+fastfold data pull depmap         # Download dataset
+pytest tests/ -v                  # Run tests
+pip install -e ".[dev]"           # Install for development
 ```
 
 ## Testing
 
 Tests use mocked data loaders — never require real datasets.
-Mock pattern: `@patch("ct.tools.module.load_X")` to inject test DataFrames.
+Mock pattern: `@patch("tools.module.load_X")` to inject test DataFrames.

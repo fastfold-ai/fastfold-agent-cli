@@ -14,7 +14,7 @@ mock_census_module.__name__ = "cellxgene_census"
 class TestCellxGeneGeneExpression:
     def test_gene_expression_success(self):
         with patch.dict(sys.modules, {"cellxgene_census": mock_census_module}):
-            from ct.tools.cellxgene import gene_expression
+            from tools.cellxgene import gene_expression
 
             mock_census = MagicMock()
             mock_census_module.open_soma.return_value.__enter__ = MagicMock(return_value=mock_census)
@@ -51,7 +51,7 @@ class TestCellxGeneGeneExpression:
 
     def test_missing_sdk_returns_install_instructions(self):
         """When cellxgene-census not installed, tool returns error dict."""
-        from ct.tools.cellxgene import _check_census_sdk
+        from tools.cellxgene import _check_census_sdk
         with patch("builtins.__import__", side_effect=ImportError("No module")):
             err = _check_census_sdk()
             assert err is not None
@@ -60,7 +60,7 @@ class TestCellxGeneGeneExpression:
 
     def test_invalid_gene_returns_error(self):
         with patch.dict(sys.modules, {"cellxgene_census": mock_census_module}):
-            from ct.tools.cellxgene import gene_expression
+            from tools.cellxgene import gene_expression
 
             mock_census = MagicMock()
             mock_census_module.open_soma.return_value.__enter__ = MagicMock(return_value=mock_census)
@@ -91,7 +91,7 @@ class TestCellxGeneGeneExpression:
 class TestCellxGeneCellTypeMarkers:
     def test_markers_for_t_cell(self):
         with patch.dict(sys.modules, {"cellxgene_census": mock_census_module}):
-            from ct.tools.cellxgene import cell_type_markers
+            from tools.cellxgene import cell_type_markers
 
             mock_census = MagicMock()
             mock_census_module.open_soma.return_value.__enter__ = MagicMock(return_value=mock_census)
@@ -114,7 +114,7 @@ class TestCellxGeneCellTypeMarkers:
 
     def test_cell_type_not_found(self):
         with patch.dict(sys.modules, {"cellxgene_census": mock_census_module}):
-            from ct.tools.cellxgene import cell_type_markers
+            from tools.cellxgene import cell_type_markers
 
             mock_census = MagicMock()
             mock_census_module.open_soma.return_value.__enter__ = MagicMock(return_value=mock_census)
@@ -131,7 +131,7 @@ class TestCellxGeneCellTypeMarkers:
 class TestCellxGeneDatasetSearch:
     def test_search_by_tissue(self):
         with patch.dict(sys.modules, {"cellxgene_census": mock_census_module}):
-            from ct.tools.cellxgene import dataset_search
+            from tools.cellxgene import dataset_search
 
             mock_census = MagicMock()
             mock_census_module.open_soma.return_value.__enter__ = MagicMock(return_value=mock_census)

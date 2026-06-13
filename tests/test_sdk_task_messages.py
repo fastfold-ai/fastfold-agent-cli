@@ -7,7 +7,7 @@ from claude_agent_sdk import ResultMessage, SystemMessage
 from claude_agent_sdk.types import StreamEvent
 from rich.console import Console
 
-from ct.agent.runner import (
+from agent.runner import (
     AgentRunner,
     _extract_task_event,
     _extract_task_output_paths_from_text,
@@ -18,7 +18,7 @@ from ct.agent.runner import (
     _sanitize_notification_text,
     process_messages,
 )
-from ct.ui.traces import TraceRenderer
+from ui.traces import TraceRenderer
 
 
 async def _aiter(items):

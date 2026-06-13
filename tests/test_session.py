@@ -1,8 +1,8 @@
 """Tests for Session: model switching, LLM client management."""
 
 from unittest.mock import MagicMock, patch
-from ct.agent.session import Session
-from ct.agent.config import Config
+from agent.session import Session
+from agent.config import Config
 
 
 class TestModelSwitch:
@@ -97,7 +97,7 @@ class TestSessionBasics:
         })
         session = Session(config=cfg)
 
-        with patch("ct.models.llm.LLMClient") as mock_llm_client:
+        with patch("models.llm.LLMClient") as mock_llm_client:
             session._create_llm()
             _, kwargs = mock_llm_client.call_args
 

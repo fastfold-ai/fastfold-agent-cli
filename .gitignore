@@ -26,16 +26,14 @@ venv/
 # OS
 .DS_Store
 
-# ct runtime
-.ct/
-outputs/
-
-# Test workspace
-cttest/
-
-reports/
+# Test / coverage artifacts
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.pytest_cache/
 exports/
-busco_downloads/
+outputs/
 *.faa
 *.mafft
 *.clipkit.treefile

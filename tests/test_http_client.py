@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
-from ct.tools.http_client import request, request_json
+from tools.http_client import request, request_json
 
 
 class TestHttpClient:
@@ -20,7 +20,7 @@ class TestHttpClient:
         assert data == {"ok": True}
         assert mock_get.call_count == 1
 
-    @patch("ct.tools.http_client.time.sleep", return_value=None)
+    @patch("tools.http_client.time.sleep", return_value=None)
     @patch("httpx.get")
     def test_request_json_retries_on_503(self, mock_get, _sleep):
         transient = MagicMock()

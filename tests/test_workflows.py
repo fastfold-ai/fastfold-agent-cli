@@ -1,8 +1,8 @@
 """Tests for workflow templates."""
 
 import pytest
-from ct.agent.workflows import WORKFLOWS, format_workflows_for_llm
-from ct.tools import registry, ensure_loaded
+from agent.workflows import WORKFLOWS, format_workflows_for_llm
+from tools import registry, ensure_loaded
 
 
 class TestWorkflowDefinitions:

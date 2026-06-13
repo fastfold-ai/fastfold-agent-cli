@@ -5,10 +5,10 @@ from unittest.mock import patch
 
 class TestRepurposingCmapQuery:
     def test_remote_fallback_returns_hits_when_l1000_missing(self):
-        from ct.tools.repurposing import cmap_query
+        from tools.repurposing import cmap_query
 
-        with patch("ct.data.loaders.load_l1000", side_effect=FileNotFoundError("missing")):
-            with patch("ct.tools.repurposing.request_json") as mock_request_json:
+        with patch("data.loaders.load_l1000", side_effect=FileNotFoundError("missing")):
+            with patch("tools.repurposing.request_json") as mock_request_json:
                 mock_request_json.side_effect = [
                     ({"result_id": "abc123"}, None),
                     (
@@ -45,10 +45,10 @@ class TestRepurposingCmapQuery:
         assert result["hits"][0]["compound"] == "drug_x"
         assert "Remote CMap query via L1000FWD" in result["summary"]
 
-    @patch("ct.data.loaders.load_l1000", side_effect=FileNotFoundError("missing"))
-    @patch("ct.tools.repurposing.request_json", return_value=(None, "HTTP 503"))
+    @patch("data.loaders.load_l1000", side_effect=FileNotFoundError("missing"))
+    @patch("tools.repurposing.request_json", return_value=(None, "HTTP 503"))
     def test_marks_data_unavailable_when_remote_fallback_fails(self, _mock_request_json, _mock_l1000):
-        from ct.tools.repurposing import cmap_query
+        from tools.repurposing import cmap_query
 
         result = cmap_query(
             gene_signature={
@@ -70,10 +70,10 @@ class TestRepurposingCmapQuery:
         assert len(result["down_genes"]) == 2
         assert "cannot compute correlations locally" in result["summary"]
 
-    @patch("ct.data.loaders.load_l1000", side_effect=FileNotFoundError("missing"))
-    @patch("ct.tools.repurposing.request_json")
+    @patch("data.loaders.load_l1000", side_effect=FileNotFoundError("missing"))
+    @patch("tools.repurposing.request_json")
     def test_no_remote_call_when_allow_remote_false(self, mock_request_json, _mock_l1000):
-        from ct.tools.repurposing import cmap_query
+        from tools.repurposing import cmap_query
 
         result = cmap_query(
             gene_signature={

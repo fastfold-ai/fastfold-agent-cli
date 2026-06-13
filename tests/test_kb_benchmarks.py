@@ -1,6 +1,6 @@
 """Tests for benchmark suite and release gate."""
 
-from ct.kb.benchmarks import BenchmarkCase, BenchmarkSuite
+from kb.benchmarks import BenchmarkCase, BenchmarkSuite
 
 
 def test_benchmark_suite_run_and_gate():

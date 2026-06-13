@@ -1,6 +1,6 @@
 """Tests for schema drift monitor."""
 
-from ct.kb.schema_monitor import SchemaMonitor
+from kb.schema_monitor import SchemaMonitor
 
 
 def test_schema_monitor_new_then_ok_then_drift(tmp_path):

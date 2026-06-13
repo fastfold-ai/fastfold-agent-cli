@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from ct.agent.trace_store import TraceStore, parse_trace_meta, TRACE_META_MARKER
+from agent.trace_store import TraceStore, parse_trace_meta, TRACE_META_MARKER
 
 
 # ---------------------------------------------------------------------------
@@ -160,7 +160,7 @@ def test_parse_trace_meta_invalid_json():
 
 def test_find_trace_most_recent(tmp_path, monkeypatch):
     """find_trace with no session_id returns most recent."""
-    import ct.agent.trace_store as ts_mod
+    import agent.trace_store as ts_mod
     monkeypatch.setattr(ts_mod, "_sessions_dir", lambda: tmp_path)
 
     # Create two trace files with different mtimes
@@ -175,7 +175,7 @@ def test_find_trace_most_recent(tmp_path, monkeypatch):
 
 def test_find_trace_by_prefix(tmp_path, monkeypatch):
     """find_trace with prefix matches the right file."""
-    import ct.agent.trace_store as ts_mod
+    import agent.trace_store as ts_mod
     monkeypatch.setattr(ts_mod, "_sessions_dir", lambda: tmp_path)
 
     (tmp_path / "abc-123.trace.jsonl").write_text('{"type":"query_start"}\n')

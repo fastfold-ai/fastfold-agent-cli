@@ -52,8 +52,8 @@ MOCK_PROVIDERS = {
 
 @pytest.fixture(autouse=True)
 def mock_providers():
-    with patch("ct.tools.compute._load_providers", return_value=MOCK_PROVIDERS):
-        import ct.tools.compute as compute_mod
+    with patch("tools.compute._load_providers", return_value=MOCK_PROVIDERS):
+        import tools.compute as compute_mod
         compute_mod._providers_data = None
         yield
 
@@ -70,19 +70,19 @@ def mock_compute_config():
         def get(self, key, default=None):
             return self._values.get(key, default)
 
-    with patch("ct.agent.config.Config.load", return_value=_Cfg()):
+    with patch("agent.config.Config.load", return_value=_Cfg()):
         yield
 
 
 class TestListProviders:
     def test_lists_all_providers(self):
-        from ct.tools.compute import list_providers
+        from tools.compute import list_providers
         result = list_providers()
         assert "summary" in result
         assert len(result["providers"]) == 2
 
     def test_has_gpu_info(self):
-        from ct.tools.compute import list_providers
+        from tools.compute import list_providers
         result = list_providers()
         lambda_provider = [p for p in result["providers"] if p["id"] == "lambda"][0]
         assert len(lambda_provider["gpu_types"]) == 3
@@ -93,7 +93,7 @@ class TestListProviders:
 
 class TestEstimateCost:
     def test_basic_estimate(self):
-        from ct.tools.compute import estimate_cost
+        from tools.compute import estimate_cost
         result = estimate_cost(job_type="boltz2", n_samples=1)
         assert "summary" in result
         assert result["estimated_hours"] > 0
@@ -102,36 +102,36 @@ class TestEstimateCost:
         assert result["vram_gb"] >= 40
 
     def test_scaling_with_samples(self):
-        from ct.tools.compute import estimate_cost
+        from tools.compute import estimate_cost
         result_1 = estimate_cost(job_type="boltz2", n_samples=1)
         result_50 = estimate_cost(job_type="boltz2", n_samples=50)
         assert result_50["estimated_cost"] == pytest.approx(result_1["estimated_cost"] * 50, rel=0.01)
         assert result_50["estimated_hours"] == pytest.approx(result_1["estimated_hours"] * 50, rel=0.01)
 
     def test_specific_provider(self):
-        from ct.tools.compute import estimate_cost
+        from tools.compute import estimate_cost
         result = estimate_cost(job_type="boltz2", provider="lambda")
         assert result["provider"] == "lambda"
 
     def test_specific_gpu_and_provider(self):
-        from ct.tools.compute import estimate_cost
+        from tools.compute import estimate_cost
         result = estimate_cost(job_type="boltz2", gpu_type="H100_80GB", provider="lambda")
         assert result["gpu"] == "H100_80GB"
         assert result["price_per_hour"] == 2.49
 
     def test_unknown_job_type(self):
-        from ct.tools.compute import estimate_cost
+        from tools.compute import estimate_cost
         result = estimate_cost(job_type="nonexistent")
         assert "error" in result
 
     def test_insufficient_vram(self):
-        from ct.tools.compute import estimate_cost
+        from tools.compute import estimate_cost
         # boltz2 requires 40GB, RTX4090 only has 24GB
         result = estimate_cost(job_type="boltz2", gpu_type="RTX4090_24GB", provider="runpod")
         assert "error" in result
 
     def test_selects_cheapest_gpu(self):
-        from ct.tools.compute import estimate_cost
+        from tools.compute import estimate_cost
         # For boltz2 (40GB req), cheapest is RunPod A100 at $1.19/hr
         result = estimate_cost(job_type="boltz2")
         assert result["price_per_hour"] == 1.19
@@ -140,7 +140,7 @@ class TestEstimateCost:
 
 class TestSubmitJob:
     def test_submit_dry_run(self):
-        from ct.tools.compute import submit_job
+        from tools.compute import submit_job
         result = submit_job(
             job_type="boltz2",
             params={"n_samples": 5, "input_file": "complexes.csv"},
@@ -152,7 +152,7 @@ class TestSubmitJob:
         assert "job_payload" in result
 
     def test_submit_unknown_job(self):
-        from ct.tools.compute import submit_job
+        from tools.compute import submit_job
         result = submit_job(job_type="nonexistent", dry_run=True)
         assert "error" in result
 
@@ -164,7 +164,7 @@ class TestSubmitJob:
         mock_resp.raise_for_status.return_value = None
         mock_post.return_value = mock_resp
 
-        from ct.tools.compute import submit_job
+        from tools.compute import submit_job
         result = submit_job(
             job_type="boltz2",
             params={"n_samples": 1},
@@ -174,7 +174,7 @@ class TestSubmitJob:
         assert result["job_id"] == "job-12345"
         assert "summary" in result
 
-    @patch("ct.tools.compute.time.sleep", return_value=None)
+    @patch("tools.compute.time.sleep", return_value=None)
     @patch("httpx.post")
     def test_submit_retries_on_transient_http_status(self, mock_post, _sleep):
         transient = MagicMock()
@@ -188,7 +188,7 @@ class TestSubmitJob:
 
         mock_post.side_effect = [transient, ok]
 
-        from ct.tools.compute import submit_job
+        from tools.compute import submit_job
         result = submit_job(
             job_type="boltz2",
             params={"n_samples": 1},
@@ -206,7 +206,7 @@ class TestSubmitJob:
         mock_resp.raise_for_status.return_value = None
         mock_post.return_value = mock_resp
 
-        from ct.tools.compute import submit_job
+        from tools.compute import submit_job
         result = submit_job(
             job_type="boltz2",
             params={"n_samples": 1},
@@ -230,7 +230,7 @@ class TestJobStatus:
         mock_resp.raise_for_status.return_value = None
         mock_get.return_value = mock_resp
 
-        from ct.tools.compute import job_status
+        from tools.compute import job_status
         result = job_status(job_id="job-12345", provider="lambda")
         assert "summary" in result
         assert result["status"] == "running"
@@ -238,6 +238,6 @@ class TestJobStatus:
 
     @patch("httpx.get")
     def test_job_status_unknown_provider(self, mock_get):
-        from ct.tools.compute import job_status
+        from tools.compute import job_status
         result = job_status(job_id="job-12345", provider="nonexistent")
         assert "error" in result

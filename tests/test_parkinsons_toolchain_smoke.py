@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from ct.tools.clinical import trial_search
-from ct.tools.genomics import gwas_lookup
-from ct.tools.literature import pubmed_search
-from ct.tools.target import druggability, expression_profile
+from tools.clinical import trial_search
+from tools.genomics import gwas_lookup
+from tools.literature import pubmed_search
+from tools.target import druggability, expression_profile
 
 
 class _Resp:

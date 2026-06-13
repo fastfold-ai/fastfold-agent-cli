@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from ct.tools.parity import (
+from tools.parity import (
     mygene_lookup,
     mydisease_lookup,
     myvariant_lookup,
@@ -31,7 +31,7 @@ def test_mygene_lookup_success():
             }
         ]
     }
-    with patch("ct.tools.parity.request_json", return_value=(payload, None)):
+    with patch("tools.parity.request_json", return_value=(payload, None)):
         result = mygene_lookup("TP53")
 
     assert result["count"] == 1
@@ -47,7 +47,7 @@ def test_mygene_lookup_species_phrase_normalization():
         assert params["species"] == "6183"
         return payload, None
 
-    with patch("ct.tools.parity.request_json", side_effect=_fake_request_json):
+    with patch("tools.parity.request_json", side_effect=_fake_request_json):
         result = mygene_lookup("SCP/TAPS", species="Schistosoma mansoni genes")
 
     assert result["species"] == "6183"
@@ -59,14 +59,14 @@ def test_mydisease_lookup_missing_query():
 
 
 def test_myvariant_lookup_api_error():
-    with patch("ct.tools.parity.request_json", return_value=(None, "boom")):
+    with patch("tools.parity.request_json", return_value=(None, "boom")):
         result = myvariant_lookup("rs1")
     assert result["error"] == "api_error"
 
 
 def test_mytaxon_lookup_success():
     payload = {"hits": [{"_id": 9606, "scientific_name": "Homo sapiens", "rank": "species", "_score": 1.2}]}
-    with patch("ct.tools.parity.request_json", return_value=(payload, None)):
+    with patch("tools.parity.request_json", return_value=(payload, None)):
         result = mytaxon_lookup("human")
     assert result["count"] == 1
     assert result["hits"][0]["taxid"] == 9606
@@ -86,7 +86,7 @@ def test_mychem_lookup_success():
             }
         ]
     }
-    with patch("ct.tools.parity.request_json", return_value=(payload, None)):
+    with patch("tools.parity.request_json", return_value=(payload, None)):
         result = mychem_lookup("aspirin")
     assert result["count"] == 1
     assert result["hits"][0]["chembl_id"] == "CHEMBL25"
@@ -106,7 +106,7 @@ def test_pdbe_search_success():
             ]
         }
     }
-    with patch("ct.tools.parity.request_json", return_value=(payload, None)):
+    with patch("tools.parity.request_json", return_value=(payload, None)):
         result = pdbe_search("p53")
     assert result["count"] == 1
     assert result["entries"][0]["pdb_id"] == "1TUP"
@@ -114,7 +114,7 @@ def test_pdbe_search_success():
 
 def test_reactome_pathway_search_success():
     payload = [{"stId": "R-HSA-123", "name": "DNA Repair", "species": "Homo sapiens", "type": "Pathway"}]
-    with patch("ct.tools.parity.request_json", return_value=(payload, None)):
+    with patch("tools.parity.request_json", return_value=(payload, None)):
         result = reactome_pathway_search("DNA repair")
     assert result["count"] == 1
     assert result["pathways"][0]["st_id"] == "R-HSA-123"
@@ -148,8 +148,8 @@ def test_preprint_search_both_sources():
   </entry>
 </feed>"""
 
-    with patch("ct.tools.parity.request_json", return_value=(epmc_payload, None)), patch(
-        "ct.tools.parity.request", return_value=(_Resp(), None)
+    with patch("tools.parity.request_json", return_value=(epmc_payload, None)), patch(
+        "tools.parity.request", return_value=(_Resp(), None)
     ):
         result = preprint_search("AML", source="both", max_results=5)
 
