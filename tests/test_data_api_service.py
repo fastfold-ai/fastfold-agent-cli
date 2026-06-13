@@ -32,11 +32,11 @@ def _set_data_root(monkeypatch):
     monkeypatch.setenv("CT_DATA_ROOT", DATA_ROOT)
     # Patch the module-level DATA_ROOT that was already imported
     from pathlib import Path
-    import ct.api.config as config_mod
-    import ct.api.engine as engine_mod
+    import api.config as config_mod
+    import api.engine as engine_mod
     monkeypatch.setattr(config_mod, "DATA_ROOT", Path(DATA_ROOT))
     # Re-create the engine with the correct root
-    from ct.api import app as app_mod
+    from api import app as app_mod
     app_mod.engine = engine_mod.QueryEngine(data_root=Path(DATA_ROOT))
 
 
@@ -44,7 +44,7 @@ def _set_data_root(monkeypatch):
 def client():
     """FastAPI TestClient backed by real data."""
     from fastapi.testclient import TestClient
-    from ct.api.app import app
+    from api.app import app
     return TestClient(app)
 
 
@@ -227,7 +227,7 @@ class TestEngineDirectly:
     @pytest.fixture
     def engine(self):
         from pathlib import Path
-        from ct.api.engine import QueryEngine
+        from api.engine import QueryEngine
         return QueryEngine(data_root=Path(DATA_ROOT))
 
     def test_sample_columns(self, engine):

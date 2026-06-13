@@ -7,9 +7,9 @@ import httpx
 
 class TestRemoteDataQuery:
     @patch("httpx.post")
-    @patch("ct.tools.remote_data._get_endpoint", return_value="http://localhost:8000")
+    @patch("tools.remote_data._get_endpoint", return_value="http://localhost:8000")
     def test_query_success(self, mock_endpoint, mock_post):
-        from ct.tools.remote_data import query
+        from tools.remote_data import query
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -31,26 +31,26 @@ class TestRemoteDataQuery:
         assert "gene" in result["columns"]
 
     def test_no_endpoint_configured(self):
-        from ct.tools.remote_data import query
+        from tools.remote_data import query
 
-        with patch("ct.tools.remote_data._get_endpoint", return_value=None):
+        with patch("tools.remote_data._get_endpoint", return_value=None):
             result = query(dataset="perturbatlas")
             assert "error" in result
             assert "not configured" in result["error"].lower()
 
     @patch("httpx.post", side_effect=httpx.ConnectError("Connection refused"))
-    @patch("ct.tools.remote_data._get_endpoint", return_value="http://localhost:8000")
+    @patch("tools.remote_data._get_endpoint", return_value="http://localhost:8000")
     def test_api_unreachable(self, mock_endpoint, mock_post):
-        from ct.tools.remote_data import query
+        from tools.remote_data import query
 
         result = query(dataset="perturbatlas", gene="TP53")
         assert "error" in result
         assert "unreachable" in result["summary"].lower()
 
     @patch("httpx.post")
-    @patch("ct.tools.remote_data._get_endpoint", return_value="http://localhost:8000")
+    @patch("tools.remote_data._get_endpoint", return_value="http://localhost:8000")
     def test_dataset_not_found(self, mock_endpoint, mock_post):
-        from ct.tools.remote_data import query
+        from tools.remote_data import query
 
         mock_resp = MagicMock()
         mock_resp.status_code = 404
@@ -61,9 +61,9 @@ class TestRemoteDataQuery:
         assert "not found" in result["error"].lower()
 
     @patch("httpx.post")
-    @patch("ct.tools.remote_data._get_endpoint", return_value="http://localhost:8000")
+    @patch("tools.remote_data._get_endpoint", return_value="http://localhost:8000")
     def test_query_with_compound_filter(self, mock_endpoint, mock_post):
-        from ct.tools.remote_data import query
+        from tools.remote_data import query
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -81,9 +81,9 @@ class TestRemoteDataQuery:
 
 class TestRemoteDataListDatasets:
     @patch("httpx.get")
-    @patch("ct.tools.remote_data._get_endpoint", return_value="http://localhost:8000")
+    @patch("tools.remote_data._get_endpoint", return_value="http://localhost:8000")
     def test_list_success(self, mock_endpoint, mock_get):
-        from ct.tools.remote_data import list_datasets
+        from tools.remote_data import list_datasets
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -102,16 +102,16 @@ class TestRemoteDataListDatasets:
         assert "perturbatlas" in result["summary"]
 
     def test_no_endpoint_configured(self):
-        from ct.tools.remote_data import list_datasets
+        from tools.remote_data import list_datasets
 
-        with patch("ct.tools.remote_data._get_endpoint", return_value=None):
+        with patch("tools.remote_data._get_endpoint", return_value=None):
             result = list_datasets()
             assert "error" in result
 
     @patch("httpx.get", side_effect=httpx.ConnectError("Connection refused"))
-    @patch("ct.tools.remote_data._get_endpoint", return_value="http://localhost:8000")
+    @patch("tools.remote_data._get_endpoint", return_value="http://localhost:8000")
     def test_api_unreachable(self, mock_endpoint, mock_get):
-        from ct.tools.remote_data import list_datasets
+        from tools.remote_data import list_datasets
 
         result = list_datasets()
         assert "error" in result

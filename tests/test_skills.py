@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from ct.agent import skills as skills_mod
+from agent import skills as skills_mod
 
 
 @pytest.fixture(autouse=True)
@@ -153,14 +153,14 @@ def test_build_skills_prompt_rewrites_script_paths_absolute(tmp_path, monkeypatc
 
 # ─── Agent tool: skills.manage ─────────────────────────────────────────────
 def test_skills_manage_tool_registered():
-    from ct.tools import registry, ensure_loaded
+    from tools import registry, ensure_loaded
 
     ensure_loaded()
     assert registry.get_tool("skills.manage") is not None
 
 
 def test_skills_manage_install_blocked_without_flag(monkeypatch):
-    from ct.tools.skills import manage
+    from tools.skills import manage
 
     session = MagicMock()
     session.config.get.return_value = False
@@ -170,7 +170,7 @@ def test_skills_manage_install_blocked_without_flag(monkeypatch):
 
 
 def test_skills_manage_find_uses_discover(monkeypatch):
-    from ct.tools import skills as skills_tool
+    from tools import skills as skills_tool
 
     monkeypatch.setattr(
         skills_mod,
@@ -183,7 +183,7 @@ def test_skills_manage_find_uses_discover(monkeypatch):
 
 
 def test_skills_manage_install_allowed_calls_install(monkeypatch):
-    from ct.tools.skills import manage
+    from tools.skills import manage
 
     called = {}
 
@@ -202,7 +202,7 @@ def test_skills_manage_install_allowed_calls_install(monkeypatch):
 # ─── CLI ───────────────────────────────────────────────────────────────────
 def test_cli_skill_add_local(tmp_path, monkeypatch):
     from typer.testing import CliRunner
-    from ct.cli import app
+    from cli import app
 
     src = tmp_path / "src"
     _write_skill(src, "cli-skill", "CLI installed skill")
@@ -216,7 +216,7 @@ def test_cli_skill_add_local(tmp_path, monkeypatch):
 
 def test_cli_skill_singular_alias_still_works(tmp_path, monkeypatch):
     from typer.testing import CliRunner
-    from ct.cli import app
+    from cli import app
 
     src = tmp_path / "src"
     _write_skill(src, "legacy-skill", "Legacy alias skill")
@@ -230,7 +230,7 @@ def test_cli_skill_singular_alias_still_works(tmp_path, monkeypatch):
 
 def test_cli_add_skill_alias(tmp_path, monkeypatch):
     from typer.testing import CliRunner
-    from ct.cli import app
+    from cli import app
 
     src = tmp_path / "src"
     _write_skill(src, "alias-skill", "Alias installed skill")
@@ -306,7 +306,7 @@ def test_install_skill_prefer_npx_falls_back_to_git(monkeypatch, tmp_path):
 
 
 def test_setup_prompt_install_skills_with_explicit_arg(monkeypatch):
-    from ct import cli
+    import cli
 
     installed = []
     monkeypatch.setattr(cli, "_install_skill_sources", lambda sources: installed.extend(sources))
@@ -315,7 +315,7 @@ def test_setup_prompt_install_skills_with_explicit_arg(monkeypatch):
 
 
 def test_setup_prompt_install_skills_skip(monkeypatch):
-    from ct import cli
+    import cli
 
     called = {"discover": False}
     monkeypatch.setattr(skills_mod, "discover_skills", lambda *a, **k: called.__setitem__("discover", True) or [])
@@ -324,16 +324,16 @@ def test_setup_prompt_install_skills_skip(monkeypatch):
 
 
 def test_setup_install_skill_sources_batches_npx_by_repo(monkeypatch):
-    from ct import cli
+    import cli
 
-    monkeypatch.setattr("ct.agent.skills._npx_available", lambda: True)
+    monkeypatch.setattr("agent.skills._npx_available", lambda: True)
     calls = []
 
     def fake_npx_add(target, skill_names=None, whole=False):
         calls.append((target, tuple(skill_names or ()), whole))
         return {"ok": True, "summary": f"installed {target}", "via": "npx"}
 
-    monkeypatch.setattr("ct.agent.skills.npx_add", fake_npx_add)
+    monkeypatch.setattr("agent.skills.npx_add", fake_npx_add)
     cli._install_skill_sources([
         "fastfold-ai/skills@skills/fold",
         "fastfold-ai/skills@skills/protein_design_boltzgen",
@@ -414,10 +414,10 @@ def test_upgrade_skills_runs_npx_update(monkeypatch, tmp_path):
 
 def test_cli_skill_upgrade(monkeypatch):
     from typer.testing import CliRunner
-    from ct.cli import app
+    from cli import app
 
     monkeypatch.setattr(
-        "ct.agent.skills.upgrade_skills",
+        "agent.skills.upgrade_skills",
         lambda include_catalog=True, include_npx=True: {"added": ["x"], "updated": ["y"], "npx_synced": 0, "failed": [], "summary": "ok"},
     )
     runner = CliRunner()
@@ -454,12 +454,12 @@ def test_remove_all_skills_clears_global_and_project(monkeypatch, tmp_path):
 
 def test_cli_skill_delete_all_requires_confirmation(monkeypatch):
     from typer.testing import CliRunner
-    from ct.cli import app
+    from cli import app
 
-    monkeypatch.setattr("ct.agent.skills.user_installed_skill_names", lambda *a, **k: ["fold", "boltz"])
+    monkeypatch.setattr("agent.skills.user_installed_skill_names", lambda *a, **k: ["fold", "boltz"])
     called = {"removed": False}
     monkeypatch.setattr(
-        "ct.agent.skills.remove_all_skills",
+        "agent.skills.remove_all_skills",
         lambda *a, **k: called.__setitem__("removed", True) or {"ok": True, "removed": ["fold", "boltz"], "summary": "Removed 2 skill(s)."},
     )
     runner = CliRunner()
@@ -474,7 +474,7 @@ def test_cli_skill_delete_all_requires_confirmation(monkeypatch):
 
 
 def test_provider_label_for_source():
-    from ct.cli import _provider_label_for_source
+    from cli import _provider_label_for_source
 
     assert _provider_label_for_source("fastfold-ai/skills@skills/fold") == "Fastfold"
     assert _provider_label_for_source("anthropics/life-sciences") == "Anthropic"
@@ -493,7 +493,7 @@ def test_suggested_skill_sources_present():
 
 
 def test_setup_select_suggested_sources_inline(monkeypatch):
-    from ct import cli
+    import cli
 
     # Non-tty -> inline numbered prompt; pick 'all'
     monkeypatch.setattr("builtins.input", lambda _: "all")
@@ -504,7 +504,7 @@ def test_setup_select_suggested_sources_inline(monkeypatch):
 
 
 def test_terminal_add_skill_invokes_install(monkeypatch):
-    from ct.ui.terminal import InteractiveTerminal
+    from ui.terminal import InteractiveTerminal
 
     t = InteractiveTerminal.__new__(InteractiveTerminal)
     t.console = MagicMock()

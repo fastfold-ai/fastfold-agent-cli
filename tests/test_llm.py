@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import MagicMock, patch
-from ct.models.llm import (
+from models.llm import (
     LLMClient,
     LLMResponse,
     MODEL_PRICING,

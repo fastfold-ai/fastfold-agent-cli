@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import MagicMock, patch
-from ct.tools.claude import reason, compare, summarize, code, _build_context_section
+from tools.claude import reason, compare, summarize, code, _build_context_section
 
 
 @pytest.fixture

@@ -10,18 +10,18 @@ import os
 
 import pytest
 
-from ct.tools.clinical import (
+from tools.clinical import (
     competitive_landscape,
     endpoint_benchmark,
     trial_design_benchmark,
     trial_search,
 )
-from ct.tools.data_api import opentargets_search, uniprot_lookup
-from ct.tools.genomics import coloc, gwas_lookup
-from ct.tools.intel import pipeline_watch
-from ct.tools.literature import openalex_search, pubmed_search
-from ct.tools.target import disease_association, druggability, expression_profile
-from ct.tools.translational import biomarker_readiness
+from tools.data_api import opentargets_search, uniprot_lookup
+from tools.genomics import coloc, gwas_lookup
+from tools.intel import pipeline_watch
+from tools.literature import openalex_search, pubmed_search
+from tools.target import disease_association, druggability, expression_profile
+from tools.translational import biomarker_readiness
 
 
 _RUN_SMOKE = os.environ.get("CT_RUN_API_SMOKE", "").strip().lower() in {"1", "true", "yes"}

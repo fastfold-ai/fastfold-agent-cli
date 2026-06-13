@@ -5,7 +5,7 @@ from io import StringIO
 import pytest
 from rich.console import Console
 
-from ct.ui.traces import TraceRenderer, format_args, truncate_output
+from ui.traces import TraceRenderer, format_args, truncate_output
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 """Tests for canonical knowledge substrate."""
 
-from ct.kb.substrate import KnowledgeSubstrate
+from kb.substrate import KnowledgeSubstrate
 
 
 def test_upsert_entity_normalizes_gene(tmp_path):

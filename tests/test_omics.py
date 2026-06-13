@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ct.tools.omics import (
+from tools.omics import (
     _downloads_dir,
     _max_download_mb,
     _stream_download,
@@ -46,7 +46,7 @@ from ct.tools.omics import (
 @pytest.fixture
 def tmp_downloads(tmp_path):
     """Patch _downloads_dir to use a temp directory."""
-    with patch("ct.tools.omics._downloads_dir", return_value=tmp_path):
+    with patch("tools.omics._downloads_dir", return_value=tmp_path):
         yield tmp_path
 
 
@@ -58,7 +58,7 @@ def mock_config():
         "data.downloads_dir": None,
         "data.max_download_mb": 500,
     }.get(key, default)
-    with patch("ct.agent.config.Config.load", return_value=mock_cfg):
+    with patch("agent.config.Config.load", return_value=mock_cfg):
         yield mock_cfg
 
 
@@ -93,7 +93,7 @@ class TestMaxDownloadMb:
 
 
 class TestStreamDownload:
-    @patch("ct.tools.omics._max_download_mb", return_value=1)
+    @patch("tools.omics._max_download_mb", return_value=1)
     def test_size_cap_from_content_length(self, mock_max, tmp_path):
         """Content-Length header exceeding limit returns error before download."""
         import httpx
@@ -112,7 +112,7 @@ class TestStreamDownload:
             assert path is None
             assert "exceeds limit" in error
 
-    @patch("ct.tools.omics._max_download_mb", return_value=500)
+    @patch("tools.omics._max_download_mb", return_value=500)
     def test_successful_download(self, mock_max, tmp_path):
         """Successful download writes file and renames."""
         mock_resp = MagicMock()
@@ -142,7 +142,7 @@ class TestGeoSearch:
         assert "error" in result
         assert "summary" in result
 
-    @patch("ct.tools.omics.request_json")
+    @patch("tools.omics.request_json")
     def test_valid_search(self, mock_rj):
         mock_rj.side_effect = [
             # esearch response
@@ -171,7 +171,7 @@ class TestGeoSearch:
         assert result["datasets"][0]["accession"] == "GSE12345"
         assert "summary" in result
 
-    @patch("ct.tools.omics.request_json")
+    @patch("tools.omics.request_json")
     def test_organism_filter(self, mock_rj):
         mock_rj.side_effect = [
             ({"esearchresult": {"idlist": []}}, None),
@@ -183,7 +183,7 @@ class TestGeoSearch:
         params = call_args[1].get("params") or call_args[0][2] if len(call_args[0]) > 2 else call_args[1].get("params", {})
         assert "Mus musculus" in str(params)
 
-    @patch("ct.tools.omics.request_json")
+    @patch("tools.omics.request_json")
     def test_study_type_filter(self, mock_rj):
         mock_rj.side_effect = [
             ({"esearchresult": {"idlist": []}}, None),
@@ -192,14 +192,14 @@ class TestGeoSearch:
         assert result["count"] == 0
         assert "summary" in result
 
-    @patch("ct.tools.omics.request_json")
+    @patch("tools.omics.request_json")
     def test_api_error(self, mock_rj):
         mock_rj.return_value = (None, "Connection timeout")
         result = geo_search("TP53")
         assert "error" in result
         assert "summary" in result
 
-    @patch("ct.tools.omics.request_json")
+    @patch("tools.omics.request_json")
     def test_empty_results(self, mock_rj):
         mock_rj.return_value = ({"esearchresult": {"idlist": []}}, None)
         result = geo_search("xyznonexistent")
@@ -223,7 +223,7 @@ class TestGeoFetch:
         result = geo_fetch("")
         assert "error" in result
 
-    @patch("ct.tools.omics._stream_download")
+    @patch("tools.omics._stream_download")
     def test_valid_matrix_download(self, mock_dl, tmp_downloads):
         dest = tmp_downloads / "geo" / "GSE12345" / "GSE12345_series_matrix.txt.gz"
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -235,20 +235,20 @@ class TestGeoFetch:
         assert result["accession"] == "GSE12345"
         assert "summary" in result
 
-    @patch("ct.tools.omics._stream_download")
+    @patch("tools.omics._stream_download")
     def test_download_failure(self, mock_dl, tmp_downloads):
         mock_dl.return_value = (None, "HTTP 404")
         result = geo_fetch("GSE99999", file_type="matrix")
         assert "error" in result
         assert "summary" in result
 
-    @patch("ct.tools.omics.request")
+    @patch("tools.omics.request")
     def test_supplementary_listing(self, mock_req, tmp_downloads):
         mock_resp = MagicMock()
         mock_resp.text = '<a href="GSE12345_data.csv.gz">GSE12345_data.csv.gz</a>'
         mock_req.return_value = (mock_resp, None)
 
-        with patch("ct.tools.omics._stream_download") as mock_dl:
+        with patch("tools.omics._stream_download") as mock_dl:
             dest = tmp_downloads / "geo" / "GSE12345" / "GSE12345_data.csv.gz"
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(b"data")
@@ -274,7 +274,7 @@ class TestCellxgeneSearch:
         result = cellxgene_search("")
         assert "error" in result
 
-    @patch("ct.tools.omics.request_json")
+    @patch("tools.omics.request_json")
     def test_valid_search(self, mock_rj):
         mock_rj.return_value = (
             [
@@ -302,7 +302,7 @@ class TestCellxgeneSearch:
         assert result["datasets"][0]["dataset_id"] == "ds-1"
         assert "summary" in result
 
-    @patch("ct.tools.omics.request_json")
+    @patch("tools.omics.request_json")
     def test_tissue_filter(self, mock_rj):
         mock_rj.return_value = (
             [
@@ -338,14 +338,14 @@ class TestCellxgeneSearch:
         assert result["count"] == 1
         assert result["datasets"][0]["dataset_id"] == "ds-2"
 
-    @patch("ct.tools.omics.request_json")
+    @patch("tools.omics.request_json")
     def test_empty_results(self, mock_rj):
         mock_rj.return_value = ([], None)
         result = cellxgene_search("nonexistent12345")
         assert result["count"] == 0
         assert "summary" in result
 
-    @patch("ct.tools.omics.request_json")
+    @patch("tools.omics.request_json")
     def test_api_error(self, mock_rj):
         mock_rj.return_value = (None, "Connection error")
         result = cellxgene_search("AML")
@@ -363,8 +363,8 @@ class TestCellxgeneFetch:
         result = cellxgene_fetch("")
         assert "error" in result
 
-    @patch("ct.tools.omics._stream_download")
-    @patch("ct.tools.omics.request_json")
+    @patch("tools.omics._stream_download")
+    @patch("tools.omics.request_json")
     def test_valid_fetch(self, mock_rj, mock_dl, tmp_downloads):
         mock_rj.return_value = (
             [
@@ -386,14 +386,14 @@ class TestCellxgeneFetch:
         assert result["dataset_id"] == "ds-1"
         assert "summary" in result
 
-    @patch("ct.tools.omics.request_json")
+    @patch("tools.omics.request_json")
     def test_no_assets(self, mock_rj):
         mock_rj.return_value = ([], None)
         result = cellxgene_fetch("ds-nonexistent")
         assert "error" in result
         assert "summary" in result
 
-    @patch("ct.tools.omics.request_json")
+    @patch("tools.omics.request_json")
     def test_asset_lookup_error(self, mock_rj):
         mock_rj.return_value = (None, "HTTP 404")
         result = cellxgene_fetch("ds-bad")
@@ -416,7 +416,7 @@ class TestTcgaSearch:
         assert "error" in result
         assert "summary" in result
 
-    @patch("ct.tools.omics.request_json")
+    @patch("tools.omics.request_json")
     def test_valid_search(self, mock_rj):
         mock_rj.return_value = (
             {
@@ -449,14 +449,14 @@ class TestTcgaSearch:
         assert result["projects"][0]["count_method"] == "project_summary_data_category"
         assert "summary" in result
 
-    @patch("ct.tools.omics.request_json")
+    @patch("tools.omics.request_json")
     def test_api_error(self, mock_rj):
         mock_rj.return_value = (None, "Timeout")
         result = tcga_search("BRCA")
         assert "error" in result
         assert "summary" in result
 
-    @patch("ct.tools.omics.request_json")
+    @patch("tools.omics.request_json")
     def test_no_results(self, mock_rj):
         mock_rj.return_value = ({"data": {"hits": []}}, None)
         result = tcga_search("nonexistent_cancer")
@@ -474,7 +474,7 @@ class TestTcgaFetch:
         result = tcga_fetch()
         assert "error" in result
 
-    @patch("ct.tools.omics._stream_download")
+    @patch("tools.omics._stream_download")
     def test_fetch_by_file_id(self, mock_dl, tmp_downloads):
         dest = tmp_downloads / "tcga" / "abc123" / "abc123.gz"
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -485,8 +485,8 @@ class TestTcgaFetch:
         assert "path" in result
         assert "summary" in result
 
-    @patch("ct.tools.omics._stream_download")
-    @patch("ct.tools.omics.request_json")
+    @patch("tools.omics._stream_download")
+    @patch("tools.omics.request_json")
     def test_fetch_by_project_id(self, mock_rj, mock_dl, tmp_downloads):
         mock_rj.return_value = (
             {
@@ -547,7 +547,7 @@ class TestDatasetInfo:
     def test_h5ad_without_scanpy(self, tmp_path):
         h5ad_file = tmp_path / "test.h5ad"
         h5ad_file.write_bytes(b"fake h5ad")
-        with patch("ct.tools.omics._check_scanpy", return_value=None):
+        with patch("tools.omics._check_scanpy", return_value=None):
             result = dataset_info(str(h5ad_file))
             assert "scanpy" in result.get("error", "") or "scanpy" in result.get("summary", "")
 
@@ -570,7 +570,7 @@ class TestDatasetInfo:
         mock_sc = MagicMock()
         mock_sc.read_h5ad.return_value = mock_adata
 
-        with patch("ct.tools.omics._check_scanpy", return_value=mock_sc):
+        with patch("tools.omics._check_scanpy", return_value=mock_sc):
             result = dataset_info(str(h5ad_file))
             assert result["n_cells"] == 5000
             assert result["n_genes"] == 20000
@@ -931,7 +931,7 @@ class TestSpatialCluster:
     def test_no_scanpy(self, tmp_path):
         f = tmp_path / "test.h5ad"
         f.write_bytes(b"fake")
-        with patch("ct.tools.omics._check_scanpy", return_value=None):
+        with patch("tools.omics._check_scanpy", return_value=None):
             result = spatial_cluster(str(f))
             assert "error" in result
             assert "scanpy" in result["error"].lower()
@@ -950,7 +950,7 @@ class TestSpatialAutocorrelation:
     def test_no_scanpy(self, tmp_path):
         f = tmp_path / "test.h5ad"
         f.write_bytes(b"fake")
-        with patch("ct.tools.omics._check_scanpy", return_value=None):
+        with patch("tools.omics._check_scanpy", return_value=None):
             result = spatial_autocorrelation(str(f))
             assert "error" in result
 
@@ -1109,7 +1109,7 @@ class TestDeseq2:
         path, samples = _make_count_matrix(tmp_path)
         meta_path = _make_metadata(tmp_path, samples)
 
-        with patch("ct.tools.omics._check_pydeseq2", return_value=False):
+        with patch("tools.omics._check_pydeseq2", return_value=False):
             result = deseq2(str(path), metadata_path=str(meta_path))
             assert "method" in result
             assert "Mann-Whitney" in result["method"]
@@ -1123,7 +1123,7 @@ class TestDeseq2:
         """Without metadata, auto-generates control/treatment split."""
         path, samples = _make_count_matrix(tmp_path)
 
-        with patch("ct.tools.omics._check_pydeseq2", return_value=False):
+        with patch("tools.omics._check_pydeseq2", return_value=False):
             result = deseq2(str(path), infer_metadata=True)
             assert result["n_genes_tested"] == 100
             assert result["contrast"] == "treatment vs control"
@@ -1166,15 +1166,15 @@ class TestDeseq2:
 
 class TestMultiomicsIntegrate:
     def test_no_muon(self):
-        with patch("ct.tools.omics._check_muon", return_value=None):
+        with patch("tools.omics._check_muon", return_value=None):
             result = multiomics_integrate(paths="a.h5ad,b.h5ad", modality_names="rna,atac")
             assert "error" in result
             assert "muon" in result["error"].lower()
 
     def test_no_scanpy(self):
         mock_mu = MagicMock()
-        with patch("ct.tools.omics._check_muon", return_value=mock_mu):
-            with patch("ct.tools.omics._check_scanpy", return_value=None):
+        with patch("tools.omics._check_muon", return_value=mock_mu):
+            with patch("tools.omics._check_scanpy", return_value=None):
                 result = multiomics_integrate(paths="a.h5ad,b.h5ad", modality_names="rna,atac")
                 assert "error" in result
                 assert "scanpy" in result["error"].lower()
@@ -1182,8 +1182,8 @@ class TestMultiomicsIntegrate:
     def test_too_few_paths(self):
         mock_mu = MagicMock()
         mock_sc = MagicMock()
-        with patch("ct.tools.omics._check_muon", return_value=mock_mu):
-            with patch("ct.tools.omics._check_scanpy", return_value=mock_sc):
+        with patch("tools.omics._check_muon", return_value=mock_mu):
+            with patch("tools.omics._check_scanpy", return_value=mock_sc):
                 result = multiomics_integrate(paths="only_one.h5ad")
                 assert "error" in result
                 assert "2" in result["error"]
@@ -1191,8 +1191,8 @@ class TestMultiomicsIntegrate:
     def test_mismatched_names_and_paths(self):
         mock_mu = MagicMock()
         mock_sc = MagicMock()
-        with patch("ct.tools.omics._check_muon", return_value=mock_mu):
-            with patch("ct.tools.omics._check_scanpy", return_value=mock_sc):
+        with patch("tools.omics._check_muon", return_value=mock_mu):
+            with patch("tools.omics._check_scanpy", return_value=mock_sc):
                 result = multiomics_integrate(
                     paths="a.h5ad,b.h5ad",
                     modality_names="rna,atac,protein",
@@ -1202,8 +1202,8 @@ class TestMultiomicsIntegrate:
     def test_file_not_found(self, tmp_path):
         mock_mu = MagicMock()
         mock_sc = MagicMock()
-        with patch("ct.tools.omics._check_muon", return_value=mock_mu):
-            with patch("ct.tools.omics._check_scanpy", return_value=mock_sc):
+        with patch("tools.omics._check_muon", return_value=mock_mu):
+            with patch("tools.omics._check_scanpy", return_value=mock_sc):
                 result = multiomics_integrate(
                     paths="/nonexistent/a.h5ad,/nonexistent/b.h5ad",
                     modality_names="rna,atac",
@@ -1214,8 +1214,8 @@ class TestMultiomicsIntegrate:
         """If no modality_names given, auto-generates modality_0, modality_1."""
         mock_mu = MagicMock()
         mock_sc = MagicMock()
-        with patch("ct.tools.omics._check_muon", return_value=mock_mu):
-            with patch("ct.tools.omics._check_scanpy", return_value=mock_sc):
+        with patch("tools.omics._check_muon", return_value=mock_mu):
+            with patch("tools.omics._check_scanpy", return_value=mock_sc):
                 # Still fails on missing files, but tests the auto-naming path
                 result = multiomics_integrate(paths="/no/a.h5ad,/no/b.h5ad")
                 assert "error" in result  # file not found
@@ -1237,8 +1237,8 @@ class TestMethylationCluster:
         """Without scanpy or episcanpy, should fall back to sklearn KMeans."""
         path, _ = _make_beta_matrix(tmp_path, n_sites=50, n_samples=20)
 
-        with patch("ct.tools.omics._check_episcanpy", return_value=None):
-            with patch("ct.tools.omics._check_scanpy", return_value=None):
+        with patch("tools.omics._check_episcanpy", return_value=None):
+            with patch("tools.omics._check_scanpy", return_value=None):
                 result = methylation_cluster(str(path))
                 assert "method" in result
                 assert "sklearn" in result["method"]
@@ -1251,8 +1251,8 @@ class TestMethylationCluster:
         """h5ad without scanpy or episcanpy should error."""
         f = tmp_path / "test.h5ad"
         f.write_bytes(b"fake")
-        with patch("ct.tools.omics._check_episcanpy", return_value=None):
-            with patch("ct.tools.omics._check_scanpy", return_value=None):
+        with patch("tools.omics._check_episcanpy", return_value=None):
+            with patch("tools.omics._check_scanpy", return_value=None):
                 result = methylation_cluster(str(f))
                 assert "error" in result
                 assert "scanpy" in result["error"].lower() or "episcanpy" in result["error"].lower()
@@ -1261,8 +1261,8 @@ class TestMethylationCluster:
         """CSV input: sites as rows, samples as cols — should transpose for clustering."""
         path, _ = _make_beta_matrix(tmp_path, n_sites=30, n_samples=10)
 
-        with patch("ct.tools.omics._check_episcanpy", return_value=None):
-            with patch("ct.tools.omics._check_scanpy", return_value=None):
+        with patch("tools.omics._check_episcanpy", return_value=None):
+            with patch("tools.omics._check_scanpy", return_value=None):
                 result = methylation_cluster(str(path))
                 # After transpose: 10 samples (obs) x 30 features (var)
                 assert result["n_samples"] == 10

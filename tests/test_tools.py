@@ -10,9 +10,9 @@ from unittest.mock import patch, MagicMock
 # ─── Safety tools ─────────────────────────────────────────────
 
 class TestSafetyAntitargetProfile:
-    @patch("ct.data.loaders.load_proteomics")
+    @patch("data.loaders.load_proteomics")
     def test_single_compound_clean(self, mock_prot):
-        from ct.tools.safety import antitarget_profile
+        from tools.safety import antitarget_profile
 
         mock_prot.return_value = pd.DataFrame(
             {"cpd_A": [0.1, -0.2, 0.3, 0.0]},
@@ -22,9 +22,9 @@ class TestSafetyAntitargetProfile:
         assert result["profiles"][0]["n_antitargets"] == 0
         assert result["profiles"][0]["safety_penalty"] == 0.0
 
-    @patch("ct.data.loaders.load_proteomics")
+    @patch("data.loaders.load_proteomics")
     def test_single_compound_hits_tumor_suppressor(self, mock_prot):
-        from ct.tools.safety import antitarget_profile
+        from tools.safety import antitarget_profile
 
         mock_prot.return_value = pd.DataFrame(
             {"cpd_A": [-0.8, -0.6, 0.1]},
@@ -35,9 +35,9 @@ class TestSafetyAntitargetProfile:
         assert profile["n_tumor_suppressors"] == 2
         assert profile["safety_penalty"] == 6.0  # 3.0 per TSG
 
-    @patch("ct.data.loaders.load_proteomics")
+    @patch("data.loaders.load_proteomics")
     def test_teratogenic_hit_highest_penalty(self, mock_prot):
-        from ct.tools.safety import antitarget_profile
+        from tools.safety import antitarget_profile
 
         mock_prot.return_value = pd.DataFrame(
             {"cpd_A": [-1.0]},
@@ -49,10 +49,10 @@ class TestSafetyAntitargetProfile:
 
 
 class TestSafetyClassify:
-    @patch("ct.data.loaders.load_prism")
-    @patch("ct.data.loaders.load_proteomics")
+    @patch("data.loaders.load_prism")
+    @patch("data.loaders.load_proteomics")
     def test_safe_compound(self, mock_prot, mock_prism):
-        from ct.tools.safety import classify
+        from tools.safety import classify
 
         mock_prot.return_value = pd.DataFrame(
             {"cpd_A": [0.1, 0.2]},
@@ -67,10 +67,10 @@ class TestSafetyClassify:
         result = classify(compound_id="cpd_A")
         assert result["classifications"][0]["classification"] == "SAFE"
 
-    @patch("ct.data.loaders.load_prism")
-    @patch("ct.data.loaders.load_proteomics")
+    @patch("data.loaders.load_prism")
+    @patch("data.loaders.load_proteomics")
     def test_dangerous_compound(self, mock_prot, mock_prism):
-        from ct.tools.safety import classify
+        from tools.safety import classify
 
         mock_prot.return_value = pd.DataFrame(
             {"cpd_A": [-1.0]},
@@ -87,9 +87,9 @@ class TestSafetyClassify:
 
 
 class TestSall4Risk:
-    @patch("ct.data.loaders.load_proteomics")
+    @patch("data.loaders.load_proteomics")
     def test_high_risk(self, mock_prot):
-        from ct.tools.safety import sall4_risk
+        from tools.safety import sall4_risk
 
         mock_prot.return_value = pd.DataFrame(
             {"cpd_A": [-1.2, -0.3]},
@@ -99,9 +99,9 @@ class TestSall4Risk:
         assert result["assessments"][0]["risk_level"] == "HIGH"
         assert "thalidomide" in result["assessments"][0]["risk_detail"].lower()
 
-    @patch("ct.data.loaders.load_proteomics")
+    @patch("data.loaders.load_proteomics")
     def test_minimal_risk(self, mock_prot):
-        from ct.tools.safety import sall4_risk
+        from tools.safety import sall4_risk
 
         mock_prot.return_value = pd.DataFrame(
             {"cpd_A": [0.1]},
@@ -110,9 +110,9 @@ class TestSall4Risk:
         result = sall4_risk(compound_id="cpd_A")
         assert result["assessments"][0]["risk_level"] == "MINIMAL"
 
-    @patch("ct.data.loaders.load_proteomics")
+    @patch("data.loaders.load_proteomics")
     def test_no_sall_in_data(self, mock_prot):
-        from ct.tools.safety import sall4_risk
+        from tools.safety import sall4_risk
 
         mock_prot.return_value = pd.DataFrame(
             {"cpd_A": [0.1]},
@@ -123,9 +123,9 @@ class TestSall4Risk:
 
 
 class TestSafetyFaersSignalScan:
-    @patch("ct.tools.safety.request_json")
+    @patch("tools.safety.request_json")
     def test_top_events_signal_scan(self, mock_request_json):
-        from ct.tools.safety import faers_signal_scan
+        from tools.safety import faers_signal_scan
 
         def _mock_json(method, url, params=None, **kwargs):
             search = (params or {}).get("search", "")
@@ -175,9 +175,9 @@ class TestSafetyFaersSignalScan:
         assert result["signals"][0]["prr"] > 2.0
         assert "summary" in result
 
-    @patch("ct.tools.safety.request_json")
+    @patch("tools.safety.request_json")
     def test_specific_event_scan(self, mock_request_json):
-        from ct.tools.safety import faers_signal_scan
+        from tools.safety import faers_signal_scan
 
         def _mock_json(method, url, params=None, **kwargs):
             search = (params or {}).get("search", "")
@@ -204,9 +204,9 @@ class TestSafetyFaersSignalScan:
 
 
 class TestSafetyLabelRiskExtract:
-    @patch("ct.tools.safety.request_json")
+    @patch("tools.safety.request_json")
     def test_extracts_key_label_sections(self, mock_request_json):
-        from ct.tools.safety import label_risk_extract
+        from tools.safety import label_risk_extract
 
         mock_request_json.return_value = (
             {
@@ -236,9 +236,9 @@ class TestSafetyLabelRiskExtract:
         assert "boxed_warning" in label["risk_flags"]
         assert "severe hepatotoxicity" in label["sections"]["boxed_warning"].lower()
 
-    @patch("ct.tools.safety.request_json")
+    @patch("tools.safety.request_json")
     def test_no_labels_found(self, mock_request_json):
-        from ct.tools.safety import label_risk_extract
+        from tools.safety import label_risk_extract
 
         mock_request_json.return_value = ({"results": []}, None)
         result = label_risk_extract(drug_name="MissingDrug")
@@ -250,11 +250,11 @@ class TestSafetyLabelRiskExtract:
 # ─── Combination tools ────────────────────────────────────────
 
 class TestSynergyPredict:
-    @patch("ct.data.loaders.load_model_metadata")
-    @patch("ct.data.loaders.load_prism")
-    @patch("ct.data.loaders.load_l1000")
+    @patch("data.loaders.load_model_metadata")
+    @patch("data.loaders.load_prism")
+    @patch("data.loaders.load_l1000")
     def test_basic_synergy(self, mock_l1000, mock_prism, mock_model):
-        from ct.tools.combination import synergy_predict
+        from tools.combination import synergy_predict
 
         # L1000: rows=compounds, cols=genes. Anti-correlated pair.
         mock_l1000.return_value = pd.DataFrame(
@@ -278,9 +278,9 @@ class TestSynergyPredict:
 
 
 class TestSyntheticLethality:
-    @patch("ct.data.loaders.load_crispr")
+    @patch("data.loaders.load_crispr")
     def test_basic_sl(self, mock_crispr):
-        from ct.tools.combination import synthetic_lethality
+        from tools.combination import synthetic_lethality
 
         # Need 50+ rows (cell lines) to pass the min-cell-lines filter.
         # Create anti-correlated genes.
@@ -301,10 +301,10 @@ class TestSyntheticLethality:
 # ─── Clinical tools ───────────────────────────────────────────
 
 class TestIndicationMap:
-    @patch("ct.data.loaders.load_model_metadata")
-    @patch("ct.data.loaders.load_prism")
+    @patch("data.loaders.load_model_metadata")
+    @patch("data.loaders.load_prism")
     def test_basic_mapping(self, mock_prism, mock_model):
-        from ct.tools.clinical import indication_map
+        from tools.clinical import indication_map
 
         mock_prism.return_value = pd.DataFrame({
             "pert_name": ["cpd_A"] * 10,
@@ -322,9 +322,9 @@ class TestIndicationMap:
 
 
 class TestTrialDesignBenchmark:
-    @patch("ct.tools.clinical.request_json")
+    @patch("tools.clinical.request_json")
     def test_benchmark_aggregates_design_features(self, mock_request_json):
-        from ct.tools.clinical import trial_design_benchmark
+        from tools.clinical import trial_design_benchmark
 
         mock_request_json.return_value = (
             {
@@ -409,9 +409,9 @@ class TestTrialDesignBenchmark:
         assert len(result["top_primary_endpoints"]) >= 1
         assert "summary" in result
 
-    @patch("ct.tools.clinical.request_json")
+    @patch("tools.clinical.request_json")
     def test_phase_filter(self, mock_request_json):
-        from ct.tools.clinical import trial_design_benchmark
+        from tools.clinical import trial_design_benchmark
 
         mock_request_json.return_value = (
             {
@@ -456,7 +456,7 @@ class TestTrialDesignBenchmark:
 class TestPubmedSearch:
     @patch("httpx.get")
     def test_successful_search(self, mock_get):
-        from ct.tools.literature import pubmed_search
+        from tools.literature import pubmed_search
 
         # Mock ESearch response
         search_response = MagicMock()
@@ -490,7 +490,7 @@ class TestPubmedSearch:
 
     @patch("httpx.get")
     def test_no_results(self, mock_get):
-        from ct.tools.literature import pubmed_search
+        from tools.literature import pubmed_search
 
         resp = MagicMock()
         resp.json.return_value = {"esearchresult": {"count": "0", "idlist": []}}
@@ -503,9 +503,9 @@ class TestPubmedSearch:
 
 
 class TestChemblQuery:
-    @patch("ct.tools.literature.request_json")
+    @patch("tools.literature.request_json")
     def test_accepts_compound_alias_for_query_type(self, mock_request_json):
-        from ct.tools.literature import chembl_query
+        from tools.literature import chembl_query
 
         mock_request_json.return_value = (
             {
@@ -533,7 +533,7 @@ class TestChemblQuery:
 class TestExpressionProfile:
     @patch("httpx.get")
     def test_gtex_and_hpa_success(self, mock_get):
-        from ct.tools.target import expression_profile
+        from tools.target import expression_profile
 
         # Mock 1: GTEx gene reference API
         gtex_ref_resp = MagicMock()
@@ -588,7 +588,7 @@ class TestExpressionProfile:
 
     @patch("httpx.get")
     def test_gtex_gene_not_found(self, mock_get):
-        from ct.tools.target import expression_profile
+        from tools.target import expression_profile
 
         # GTEx gene reference returns empty
         gtex_ref_resp = MagicMock()
@@ -607,7 +607,7 @@ class TestExpressionProfile:
 
     @patch("httpx.get")
     def test_tau_specificity(self, mock_get):
-        from ct.tools.target import expression_profile
+        from tools.target import expression_profile
 
         # Mock GTEx with one tissue much higher than rest → high tau
         gtex_ref_resp = MagicMock()
@@ -640,7 +640,7 @@ class TestExpressionProfile:
 
     @patch("httpx.get")
     def test_expression_profile_alias_fallback_gba1_to_gba(self, mock_get):
-        from ct.tools.target import expression_profile
+        from tools.target import expression_profile
 
         gtex_ref_gba1 = MagicMock()
         gtex_ref_gba1.status_code = 200
@@ -696,9 +696,9 @@ class TestExpressionProfile:
 # ─── Expression diff_expression ──────────────────────────────
 
 class TestDiffExpression:
-    @patch("ct.data.loaders.load_l1000")
+    @patch("data.loaders.load_l1000")
     def test_single_gene(self, mock_l1000):
-        from ct.tools.expression import diff_expression
+        from tools.expression import diff_expression
 
         # 8 samples, 4 per group — enough for clear separation
         mock_l1000.return_value = pd.DataFrame(
@@ -726,9 +726,9 @@ class TestDiffExpression:
         assert row["direction"] == "up_in_A"
         assert row["p_value"] < 0.05  # Should be significant with clear separation
 
-    @patch("ct.data.loaders.load_l1000")
+    @patch("data.loaders.load_l1000")
     def test_all_genes_with_fdr(self, mock_l1000):
-        from ct.tools.expression import diff_expression
+        from tools.expression import diff_expression
 
         np.random.seed(42)
         n_a, n_b = 5, 5
@@ -753,9 +753,9 @@ class TestDiffExpression:
         # GENE1 should be most significant
         assert result["results"][0]["gene"] == "GENE1"
 
-    @patch("ct.data.loaders.load_l1000")
+    @patch("data.loaders.load_l1000")
     def test_missing_groups(self, mock_l1000):
-        from ct.tools.expression import diff_expression
+        from tools.expression import diff_expression
 
         mock_l1000.return_value = pd.DataFrame(
             {"GENE1": [1.0, 2.0]}, index=["A1", "A2"]
@@ -765,14 +765,14 @@ class TestDiffExpression:
         assert "error" in result
 
     def test_no_groups_provided(self):
-        from ct.tools.expression import diff_expression
+        from tools.expression import diff_expression
 
         result = diff_expression(gene="GENE1")
         assert "error" in result
 
-    @patch("ct.data.loaders.load_l1000")
+    @patch("data.loaders.load_l1000")
     def test_gene_not_found(self, mock_l1000):
-        from ct.tools.expression import diff_expression
+        from tools.expression import diff_expression
 
         mock_l1000.return_value = pd.DataFrame(
             {"GENE1": [1.0, 2.0, 0.5, 0.3]},
@@ -785,11 +785,11 @@ class TestDiffExpression:
 # ─── Biomarker panel_select ──────────────────────────────────
 
 class TestBiomarkerPanelSelect:
-    @patch("ct.data.loaders.load_model_metadata")
-    @patch("ct.data.loaders.load_mutations")
-    @patch("ct.data.loaders.load_prism")
+    @patch("data.loaders.load_model_metadata")
+    @patch("data.loaders.load_mutations")
+    @patch("data.loaders.load_prism")
     def test_mutual_info_method(self, mock_prism, mock_mutations, mock_model):
-        from ct.tools.biomarker import panel_select
+        from tools.biomarker import panel_select
 
         np.random.seed(42)
         n_cells = 40
@@ -842,11 +842,11 @@ class TestBiomarkerPanelSelect:
         biomarker_genes = [b["gene"] for b in result["biomarkers"]]
         assert "BRAF" in biomarker_genes, f"BRAF not in top biomarkers: {biomarker_genes}"
 
-    @patch("ct.data.loaders.load_model_metadata")
-    @patch("ct.data.loaders.load_mutations")
-    @patch("ct.data.loaders.load_prism")
+    @patch("data.loaders.load_model_metadata")
+    @patch("data.loaders.load_mutations")
+    @patch("data.loaders.load_prism")
     def test_random_forest_method(self, mock_prism, mock_mutations, mock_model):
-        from ct.tools.biomarker import panel_select
+        from tools.biomarker import panel_select
 
         np.random.seed(42)
         n_cells = 30
@@ -879,11 +879,11 @@ class TestBiomarkerPanelSelect:
         assert len(result["biomarkers"]) <= 3
         assert result.get("cv_auc") is not None or result.get("cv_auc") is None  # May or may not compute
 
-    @patch("ct.data.loaders.load_model_metadata")
-    @patch("ct.data.loaders.load_mutations")
-    @patch("ct.data.loaders.load_prism")
+    @patch("data.loaders.load_model_metadata")
+    @patch("data.loaders.load_mutations")
+    @patch("data.loaders.load_prism")
     def test_lasso_method(self, mock_prism, mock_mutations, mock_model):
-        from ct.tools.biomarker import panel_select
+        from tools.biomarker import panel_select
 
         np.random.seed(42)
         n_cells = 30
@@ -916,16 +916,16 @@ class TestBiomarkerPanelSelect:
 
     def test_invalid_method(self):
         """Test that invalid method returns error without calling loaders."""
-        from ct.tools.biomarker import panel_select
+        from tools.biomarker import panel_select
 
         result = panel_select(compound_id="cpd_Z", method="invalid_method")
         assert "error" in result
 
-    @patch("ct.data.loaders.load_model_metadata")
-    @patch("ct.data.loaders.load_mutations")
-    @patch("ct.data.loaders.load_prism")
+    @patch("data.loaders.load_model_metadata")
+    @patch("data.loaders.load_mutations")
+    @patch("data.loaders.load_prism")
     def test_compound_not_found(self, mock_prism, mock_mutations, mock_model):
-        from ct.tools.biomarker import panel_select
+        from tools.biomarker import panel_select
 
         mock_prism.return_value = pd.DataFrame({
             "pert_name": ["other_cpd"],
@@ -943,9 +943,9 @@ class TestBiomarkerPanelSelect:
 # ─── Genomics GWAS / coloc ───────────────────────────────────
 
 class TestGenomicsGwasLookup:
-    @patch("ct.tools.genomics.request_json")
+    @patch("tools.genomics.request_json")
     def test_requires_non_empty_gene(self, mock_request_json):
-        from ct.tools.genomics import gwas_lookup
+        from tools.genomics import gwas_lookup
 
         result = gwas_lookup(gene="", trait="obesity")
         assert "error" in result
@@ -958,7 +958,7 @@ class TestGenomicsColoc:
     @patch("httpx.post")
     @patch("httpx.get")
     def test_coloc_with_results(self, mock_get, mock_post):
-        from ct.tools.genomics import coloc
+        from tools.genomics import coloc
 
         # Mock Ensembl gene lookup
         ens_resp = MagicMock()
@@ -1050,7 +1050,7 @@ class TestGenomicsColoc:
     @patch("httpx.post")
     @patch("httpx.get")
     def test_coloc_no_results(self, mock_get, mock_post):
-        from ct.tools.genomics import coloc
+        from tools.genomics import coloc
 
         ens_resp = MagicMock()
         ens_resp.status_code = 200
@@ -1080,7 +1080,7 @@ class TestGenomicsColoc:
 
     @patch("httpx.get")
     def test_coloc_gene_not_found(self, mock_get):
-        from ct.tools.genomics import coloc
+        from tools.genomics import coloc
 
         ens_resp = MagicMock()
         ens_resp.status_code = 404
@@ -1093,7 +1093,7 @@ class TestGenomicsColoc:
     @patch("httpx.post")
     @patch("httpx.get")
     def test_coloc_study_filter(self, mock_get, mock_post):
-        from ct.tools.genomics import coloc
+        from tools.genomics import coloc
 
         ens_resp = MagicMock()
         ens_resp.status_code = 200
@@ -1161,32 +1161,32 @@ class TestGenomicsColoc:
 class TestProteomicsGracefulDegradation:
     """Test that proteomics-dependent tools gracefully degrade when data is missing."""
 
-    @patch("ct.data.loaders.load_proteomics", side_effect=FileNotFoundError)
+    @patch("data.loaders.load_proteomics", side_effect=FileNotFoundError)
     def test_antitarget_profile_no_proteomics(self, mock_load):
-        from ct.tools.safety import antitarget_profile
+        from tools.safety import antitarget_profile
         result = antitarget_profile(compound_id="test")
         assert "error" in result
         assert "summary" in result
         assert "not available" in result["summary"].lower()
 
-    @patch("ct.data.loaders.load_proteomics", side_effect=FileNotFoundError)
+    @patch("data.loaders.load_proteomics", side_effect=FileNotFoundError)
     def test_classify_no_proteomics(self, mock_load):
-        from ct.tools.safety import classify
+        from tools.safety import classify
         result = classify(compound_id="test")
         assert "error" in result
         assert "summary" in result
 
-    @patch("ct.data.loaders.load_proteomics", side_effect=FileNotFoundError)
+    @patch("data.loaders.load_proteomics", side_effect=FileNotFoundError)
     def test_sall4_risk_no_proteomics(self, mock_load):
-        from ct.tools.safety import sall4_risk
+        from tools.safety import sall4_risk
         result = sall4_risk(compound_id="test")
         assert "error" in result
         assert "summary" in result
         assert "not available" in result["summary"].lower()
 
-    @patch("ct.data.loaders.load_proteomics", side_effect=FileNotFoundError)
+    @patch("data.loaders.load_proteomics", side_effect=FileNotFoundError)
     def test_neosubstrate_score_no_proteomics(self, mock_load):
-        from ct.tools.target import neosubstrate_score
+        from tools.target import neosubstrate_score
         result = neosubstrate_score()
         assert "error" in result
         assert "summary" in result
@@ -1195,7 +1195,7 @@ class TestProteomicsGracefulDegradation:
     @patch("httpx.post")
     @patch("httpx.get")
     def test_coloc_current_ot_schema(self, mock_get, mock_post):
-        from ct.tools.genomics import coloc
+        from tools.genomics import coloc
 
         ens_resp = MagicMock()
         ens_resp.status_code = 200
@@ -1308,7 +1308,7 @@ class TestProteomicsGracefulDegradation:
     @patch("httpx.post")
     @patch("httpx.get")
     def test_coloc_alias_fallback_gba1_to_gba_after_ot_400(self, mock_get, mock_post):
-        from ct.tools.genomics import coloc
+        from tools.genomics import coloc
 
         def get_router(url, **kwargs):
             resp = MagicMock()
@@ -1421,7 +1421,7 @@ class TestProteomicsGracefulDegradation:
     @patch("httpx.post")
     @patch("httpx.get")
     def test_coloc_returns_unavailable_when_ot_query_fails_for_valid_gene(self, mock_get, mock_post):
-        from ct.tools.genomics import coloc
+        from tools.genomics import coloc
 
         ens_resp = MagicMock()
         ens_resp.status_code = 200
@@ -1446,7 +1446,7 @@ class TestProteomicsGracefulDegradation:
     @patch("httpx.post")
     @patch("httpx.get")
     def test_coloc_keeps_primary_symbol_without_generic_trailing_digit_alias(self, mock_get, mock_post):
-        from ct.tools.genomics import coloc
+        from tools.genomics import coloc
 
         def get_router(url, **kwargs):
             del kwargs
@@ -1478,7 +1478,7 @@ class TestProteomicsGracefulDegradation:
 
 class TestRegulatoryCdiscLint:
     def test_valid_ae_dataset(self, tmp_path):
-        from ct.tools.regulatory import cdisc_lint
+        from tools.regulatory import cdisc_lint
 
         df = pd.DataFrame(
             {
@@ -1502,7 +1502,7 @@ class TestRegulatoryCdiscLint:
         assert result["quality_score"] >= 90
 
     def test_catches_missing_required_and_invalid_dates(self, tmp_path):
-        from ct.tools.regulatory import cdisc_lint
+        from tools.regulatory import cdisc_lint
 
         df = pd.DataFrame(
             {
@@ -1527,7 +1527,7 @@ class TestRegulatoryCdiscLint:
 
 class TestRegulatoryDefineXmlLint:
     def test_valid_define_xml(self, tmp_path):
-        from ct.tools.regulatory import define_xml_lint
+        from tools.regulatory import define_xml_lint
 
         xml = """<?xml version="1.0" encoding="UTF-8"?>
 <ODM xmlns="http://www.cdisc.org/ns/odm/v1.3"
@@ -1565,7 +1565,7 @@ class TestRegulatoryDefineXmlLint:
         assert result["counts"]["itemgroupdef"] == 1
 
     def test_invalid_references(self, tmp_path):
-        from ct.tools.regulatory import define_xml_lint
+        from tools.regulatory import define_xml_lint
 
         xml = """<?xml version="1.0" encoding="UTF-8"?>
 <ODM xmlns="http://www.cdisc.org/ns/odm/v1.3"
@@ -1600,7 +1600,7 @@ class TestRegulatoryDefineXmlLint:
 
 class TestPkNcaBasic:
     def test_nca_basic_core_metrics(self):
-        from ct.tools.pk import nca_basic
+        from tools.pk import nca_basic
 
         result = nca_basic(
             times=[0, 1, 2, 4, 8, 12],
@@ -1619,13 +1619,13 @@ class TestPkNcaBasic:
         assert result["clearance"] is not None and result["clearance"] > 0
 
     def test_nca_basic_length_mismatch(self):
-        from ct.tools.pk import nca_basic
+        from tools.pk import nca_basic
 
         result = nca_basic(times=[0, 1, 2], concentrations=[1, 2])
         assert result["error"] == "length_mismatch"
 
     def test_nca_basic_terminal_warning_when_insufficient_positive_points(self):
-        from ct.tools.pk import nca_basic
+        from tools.pk import nca_basic
 
         result = nca_basic(
             times=[0, 1, 2, 4],
@@ -1643,7 +1643,7 @@ class TestPkNcaBasic:
 
 class TestRegulatorySubmissionPackageCheck:
     def test_submission_package_check_passes_minimal_package(self, tmp_path):
-        from ct.tools.regulatory import submission_package_check
+        from tools.regulatory import submission_package_check
 
         package = tmp_path / "pkg"
         package.mkdir(parents=True, exist_ok=True)
@@ -1683,9 +1683,9 @@ class TestRegulatorySubmissionPackageCheck:
 # ─── Clinical endpoint benchmarking ────────────────────────────
 
 class TestClinicalEndpointBenchmark:
-    @patch("ct.tools.clinical.trial_design_benchmark")
+    @patch("tools.clinical.trial_design_benchmark")
     def test_endpoint_benchmark_family_counts(self, mock_benchmark):
-        from ct.tools.clinical import endpoint_benchmark
+        from tools.clinical import endpoint_benchmark
 
         mock_benchmark.return_value = {
             "trials": [
@@ -1708,11 +1708,11 @@ class TestClinicalEndpointBenchmark:
 # ─── Intel tools ───────────────────────────────────────────────
 
 class TestIntelPipelineWatch:
-    @patch("ct.tools.literature.openalex_search")
-    @patch("ct.tools.literature.pubmed_search")
-    @patch("ct.tools.clinical.trial_search")
+    @patch("tools.literature.openalex_search")
+    @patch("tools.literature.pubmed_search")
+    @patch("tools.clinical.trial_search")
     def test_pipeline_watch_success(self, mock_trial_search, mock_pubmed, mock_openalex):
-        from ct.tools.intel import pipeline_watch
+        from tools.intel import pipeline_watch
 
         mock_trial_search.return_value = {
             "total_count": 12,
@@ -1737,10 +1737,10 @@ class TestIntelPipelineWatch:
 
 
 class TestIntelCompetitorSnapshot:
-    @patch("ct.tools.clinical.trial_design_benchmark")
-    @patch("ct.tools.clinical.competitive_landscape")
+    @patch("tools.clinical.trial_design_benchmark")
+    @patch("tools.clinical.competitive_landscape")
     def test_competitor_snapshot_success(self, mock_landscape, mock_benchmark):
-        from ct.tools.intel import competitor_snapshot
+        from tools.intel import competitor_snapshot
 
         mock_landscape.return_value = {
             "trials": {
@@ -1769,11 +1769,11 @@ class TestIntelCompetitorSnapshot:
 # ─── Translational tools ───────────────────────────────────────
 
 class TestTranslationalBiomarkerReadiness:
-    @patch("ct.tools.literature.openalex_search")
-    @patch("ct.tools.literature.pubmed_search")
-    @patch("ct.tools.clinical.trial_search")
+    @patch("tools.literature.openalex_search")
+    @patch("tools.literature.pubmed_search")
+    @patch("tools.clinical.trial_search")
     def test_biomarker_readiness_scoring(self, mock_trial_search, mock_pubmed, mock_openalex):
-        from ct.tools.translational import biomarker_readiness
+        from tools.translational import biomarker_readiness
 
         mock_trial_search.return_value = {
             "total_count": 9,
@@ -1795,7 +1795,7 @@ class TestTranslationalBiomarkerReadiness:
 
 class TestReportPharmaBrief:
     def test_pharma_brief_writes_markdown_and_html(self, tmp_path):
-        from ct.tools.report import pharma_brief
+        from tools.report import pharma_brief
 
         class _Cfg:
             def get(self, key, default=None):

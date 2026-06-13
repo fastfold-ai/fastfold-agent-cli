@@ -3,8 +3,8 @@
 import json
 import pytest
 from pathlib import Path
-from ct.agent.trajectory import Trajectory, Turn  # type: ignore[import-untyped]
-from ct.agent.types import Step, Plan  # type: ignore[import-untyped]
+from agent.trajectory import Trajectory, Turn  # type: ignore[import-untyped]
+from agent.types import Step, Plan  # type: ignore[import-untyped]
 
 
 class TestTrajectory:

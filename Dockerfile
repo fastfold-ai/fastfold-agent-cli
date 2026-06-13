@@ -10,13 +10,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends gcc && \
 COPY pyproject.toml README.md ./
 COPY src/ src/
 
-# Install with configurable extras (default: biology)
-ARG EXTRAS="biology"
-RUN pip install --no-cache-dir -e ".[$EXTRAS]"
+# Install the full project (all optional dependencies)
+RUN pip install --no-cache-dir -e ".[all]"
 
-# Create data directory for persistent downloads
-RUN mkdir -p /root/.ct/data
+# Persistent config, sessions, skills, and downloaded datasets
+RUN mkdir -p /root/.fastfold-cli/data
 
-VOLUME /root/.ct/data
+VOLUME /root/.fastfold-cli
 
-ENTRYPOINT ["ct"]
+ENTRYPOINT ["fastfold"]

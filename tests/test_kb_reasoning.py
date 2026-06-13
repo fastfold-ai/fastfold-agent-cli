@@ -1,7 +1,7 @@
 """Tests for evidence ranking and contradiction detection."""
 
-from ct.kb.reasoning import EvidenceReasoner
-from ct.kb.substrate import KnowledgeSubstrate
+from kb.reasoning import EvidenceReasoner
+from kb.substrate import KnowledgeSubstrate
 
 
 def test_detect_contradictions(tmp_path):

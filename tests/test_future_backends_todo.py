@@ -4,7 +4,7 @@ These backends are tracked in docs/model_backends_todo.md and must not appear
 as registered tools until implementation/runtime gates are complete.
 """
 
-from ct.tools import ensure_loaded, registry
+from tools import ensure_loaded, registry
 
 
 def test_future_backend_tools_not_registered_yet():

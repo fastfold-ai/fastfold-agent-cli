@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 
-from ct.agent import runner
+from agent import runner
 
 
 def test_windows_should_inline_system_prompt_auto_threshold(monkeypatch):

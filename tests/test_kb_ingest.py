@@ -2,8 +2,8 @@
 
 import json
 
-from ct.kb.ingest import KnowledgeIngestionPipeline
-from ct.kb.substrate import KnowledgeSubstrate
+from kb.ingest import KnowledgeIngestionPipeline
+from kb.substrate import KnowledgeSubstrate
 
 
 def test_ingest_evidence_store(tmp_path):
@@ -47,7 +47,7 @@ def test_ingest_pubmed_with_mock(monkeypatch, tmp_path):
             ],
         }
 
-    monkeypatch.setattr("ct.tools.literature.pubmed_search", fake_pubmed_search)
+    monkeypatch.setattr("tools.literature.pubmed_search", fake_pubmed_search)
 
     substrate = KnowledgeSubstrate(path=tmp_path / "substrate.json")
     pipeline = KnowledgeIngestionPipeline(
@@ -72,7 +72,7 @@ def test_ingest_opentargets_with_mock(monkeypatch, tmp_path):
             ],
         }
 
-    monkeypatch.setattr("ct.tools.data_api.opentargets_search", fake_ot_search)
+    monkeypatch.setattr("tools.data_api.opentargets_search", fake_ot_search)
 
     substrate = KnowledgeSubstrate(path=tmp_path / "substrate.json")
     pipeline = KnowledgeIngestionPipeline(

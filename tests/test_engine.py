@@ -15,7 +15,7 @@ pytestmark = pytest.mark.skipif(not HAS_DUCKDB, reason="duckdb not installed")
 
 class TestQueryEngine:
     def test_query_parquet_file(self, tmp_path):
-        from ct.api.engine import QueryEngine
+        from api.engine import QueryEngine
 
         # Write a small parquet file
         df = pd.DataFrame({
@@ -34,7 +34,7 @@ class TestQueryEngine:
     def test_query_csv_gz_file(self, tmp_path):
         import gzip
 
-        from ct.api.engine import QueryEngine
+        from api.engine import QueryEngine
 
         # Write a CSV.gz file
         csv_content = "gene,lfc,pvalue\nTP53,-1.5,0.001\nBRCA1,-0.8,0.01\n"
@@ -48,7 +48,7 @@ class TestQueryEngine:
         assert result[0]["gene"] == "TP53"
 
     def test_query_with_filters(self, tmp_path):
-        from ct.api.engine import QueryEngine
+        from api.engine import QueryEngine
 
         df = pd.DataFrame({
             "gene": ["TP53", "BRCA1", "EGFR", "TP53"],
@@ -63,7 +63,7 @@ class TestQueryEngine:
         assert all(r["gene"] == "TP53" for r in result)
 
     def test_query_limit(self, tmp_path):
-        from ct.api.engine import QueryEngine
+        from api.engine import QueryEngine
 
         df = pd.DataFrame({
             "gene": [f"GENE{i}" for i in range(100)],
@@ -76,7 +76,7 @@ class TestQueryEngine:
         assert len(result) == 5
 
     def test_query_column_selection(self, tmp_path):
-        from ct.api.engine import QueryEngine
+        from api.engine import QueryEngine
 
         df = pd.DataFrame({
             "gene": ["TP53", "BRCA1"],
@@ -92,14 +92,14 @@ class TestQueryEngine:
         assert set(result[0].keys()) == {"gene", "lfc"}
 
     def test_nonexistent_file_raises(self, tmp_path):
-        from ct.api.engine import QueryEngine
+        from api.engine import QueryEngine
 
         engine = QueryEngine(data_root=tmp_path)
         with pytest.raises(FileNotFoundError):
             engine.query_parquet("nonexistent.parquet")
 
     def test_count(self, tmp_path):
-        from ct.api.engine import QueryEngine
+        from api.engine import QueryEngine
 
         df = pd.DataFrame({
             "gene": ["TP53", "BRCA1", "TP53"],
@@ -112,7 +112,7 @@ class TestQueryEngine:
         assert engine.count("test.parquet", filters={"gene": "TP53"}) == 2
 
     def test_query_with_list_filter(self, tmp_path):
-        from ct.api.engine import QueryEngine
+        from api.engine import QueryEngine
 
         df = pd.DataFrame({
             "gene": ["TP53", "BRCA1", "EGFR", "MYC"],

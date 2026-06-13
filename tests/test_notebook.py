@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import nbformat
 
-from ct.reports.notebook import trace_to_notebook, save_notebook
+from reports.notebook import trace_to_notebook, save_notebook
 
 
 def _write_trace(path: Path, events: list[dict]):

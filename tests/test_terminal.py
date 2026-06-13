@@ -7,7 +7,7 @@ from prompt_toolkit.document import Document
 from prompt_toolkit.completion import CompleteEvent
 from rich.markdown import Markdown
 from rich.table import Table
-from ct.ui.terminal import (  # type: ignore[import-untyped]
+from ui.terminal import (  # type: ignore[import-untyped]
     _extract_llm_suggestions,
     extract_mentions,
     build_mention_context,
@@ -45,7 +45,7 @@ class TestTerminalMethods:
     @pytest.fixture
     def terminal(self):
         """Create a terminal with mocked session."""
-        with patch("ct.ui.terminal.InteractiveTerminal.__init__", return_value=None):
+        with patch("ui.terminal.InteractiveTerminal.__init__", return_value=None):
             t = InteractiveTerminal.__new__(InteractiveTerminal)
             t.session = MagicMock()
             t.session.verbose = False
@@ -375,7 +375,7 @@ class TestTerminalMethods:
 
     def test_export_with_trajectory(self, terminal, tmp_path):
         """Export should write a markdown file."""
-        from ct.agent.trajectory import Turn, Trajectory  # type: ignore[import-untyped]
+        from agent.trajectory import Turn, Trajectory  # type: ignore[import-untyped]
         terminal.agent = MagicMock()
         terminal.agent.trajectory = Trajectory()
         terminal.agent.trajectory.turns = [
@@ -384,7 +384,7 @@ class TestTerminalMethods:
                  timestamp=0),
         ]
         with patch("pathlib.Path.home", return_value=tmp_path), patch(
-            "ct.ui.terminal.Path.cwd", return_value=tmp_path
+            "ui.terminal.Path.cwd", return_value=tmp_path
         ):
             terminal._export_session()
             exports = list((tmp_path / "exports").glob("*.md"))
@@ -435,7 +435,7 @@ class TestTerminalMethods:
         assert any("BRCA1" in s for s in terminal._suggestions)
 
     def test_compact_context_calls_llm_chat_with_messages(self, terminal):
-        from ct.agent.trajectory import Trajectory, Turn
+        from agent.trajectory import Trajectory, Turn
 
         terminal.agent = MagicMock()
         trajectory = Trajectory()
@@ -469,7 +469,7 @@ class TestTerminalMethods:
         result.summary = "summary"
         result.merged_plan = MagicMock()
 
-        with patch("ct.agent.orchestrator.ResearchOrchestrator") as mock_orchestrator:
+        with patch("agent.orchestrator.ResearchOrchestrator") as mock_orchestrator:
             mock_orchestrator.return_value.run.return_value = result
             terminal._run_orchestrated("query", {}, 2)
 
@@ -487,8 +487,8 @@ class TestTerminalMethods:
         case.description = "desc"
         case.compound = "lenalidomide"
 
-        with patch("ct.agent.case_studies.CASE_STUDIES", {"demo": case}), patch(
-            "ct.agent.case_studies.run_case_study",
+        with patch("agent.case_studies.CASE_STUDIES", {"demo": case}), patch(
+            "agent.case_studies.run_case_study",
             return_value=result,
         ):
             terminal._handle_case_study_command("/case-study demo", {})
@@ -516,7 +516,7 @@ class TestTerminalMethods:
                 "updated_at": 1500,
             },
         ]
-        with patch("ct.agent.trajectory.Trajectory.list_sessions", return_value=sessions), patch(
+        with patch("agent.trajectory.Trajectory.list_sessions", return_value=sessions), patch(
             "time.time", return_value=2002
         ):
             terminal._list_sessions()
@@ -541,7 +541,7 @@ class TestTerminalMethods:
                 "updated_at": 2000,
             },
         ]
-        with patch("ct.agent.trajectory.Trajectory.list_sessions", return_value=sessions), patch(
+        with patch("agent.trajectory.Trajectory.list_sessions", return_value=sessions), patch(
             "time.time", return_value=2002
         ):
             terminal._list_sessions()
@@ -560,8 +560,8 @@ class TestTerminalMethods:
             {"session_id": "abc12345"},
             {"session_id": "xyz98765"},
         ]
-        with patch("ct.agent.trajectory.Trajectory.list_sessions", return_value=sessions), patch(
-            "ct.agent.loop.AgentLoop.resume"
+        with patch("agent.trajectory.Trajectory.list_sessions", return_value=sessions), patch(
+            "agent.loop.AgentLoop.resume"
         ) as mock_resume:
             terminal._resume_session("abc")
         mock_resume.assert_called_once()
@@ -574,8 +574,8 @@ class TestTerminalMethods:
         ]
         terminal.agent = MagicMock()
         terminal.agent.trajectory.session_id = "other999"
-        with patch("ct.agent.trajectory.Trajectory.list_sessions", return_value=sessions), patch(
-            "ct.agent.trajectory.Trajectory.delete_session",
+        with patch("agent.trajectory.Trajectory.list_sessions", return_value=sessions), patch(
+            "agent.trajectory.Trajectory.delete_session",
             return_value={"session_id": "abc12345", "session_deleted": True, "trace_deleted": True},
         ) as mock_delete:
             terminal._delete_session("abc")
@@ -587,10 +587,10 @@ class TestTerminalMethods:
         terminal.agent.trajectory.session_id = "abc12345"
         new_loop = MagicMock()
         new_loop.trajectory.session_id = "new11111"
-        with patch("ct.agent.trajectory.Trajectory.list_sessions", return_value=sessions), patch(
-            "ct.agent.trajectory.Trajectory.delete_session",
+        with patch("agent.trajectory.Trajectory.list_sessions", return_value=sessions), patch(
+            "agent.trajectory.Trajectory.delete_session",
             return_value={"session_id": "abc12345", "session_deleted": True, "trace_deleted": False},
-        ), patch("ct.agent.loop.AgentLoop", return_value=new_loop):
+        ), patch("agent.loop.AgentLoop", return_value=new_loop):
             terminal._delete_session("abc12345")
         assert terminal.agent is new_loop
 
@@ -610,8 +610,8 @@ class TestTerminalMethods:
 
         new_loop = MagicMock()
         new_loop.trajectory.session_id = "new12345"
-        with patch("ct.agent.loop.AgentLoop", return_value=new_loop), patch(
-            "ct.cli.print_banner"
+        with patch("agent.loop.AgentLoop", return_value=new_loop), patch(
+            "cli.print_banner"
         ) as mock_print_banner:
             terminal._new_session()
 
@@ -739,7 +739,7 @@ class TestTerminalMethods:
         assert terminal._session_sdk_models == {"gpt-5.5"}
 
     def test_run_upgrade_uses_shared_cli_upgrade_flow(self, terminal):
-        with patch("ct.cli.execute_upgrade", return_value=True) as mock_exec:
+        with patch("cli.execute_upgrade", return_value=True) as mock_exec:
             terminal._run_upgrade()
         mock_exec.assert_called_once_with(console_obj=terminal.console, cfg=terminal.session.config)
 

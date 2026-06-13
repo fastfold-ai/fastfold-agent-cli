@@ -86,9 +86,9 @@ MOCK_PROVIDERS = {
 
 
 class TestAlphaFoldFetch:
-    @patch("ct.tools.structure.request")
+    @patch("tools.structure.request")
     def test_downloads_structure(self, mock_get, tmp_path):
-        from ct.tools.structure import alphafold_fetch
+        from tools.structure import alphafold_fetch
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -96,16 +96,16 @@ class TestAlphaFoldFetch:
         mock_get.return_value = (mock_resp, None)
 
         cache_dir = tmp_path / ".fastfold-cli" / "cache" / "alphafold"
-        with patch("ct.tools.structure.Path.home", return_value=tmp_path):
+        with patch("tools.structure.Path.home", return_value=tmp_path):
             result = alphafold_fetch("P04637")
 
         assert "summary" in result
         assert "P04637" in result["summary"]
         assert result["cached"] is False
 
-    @patch("ct.tools.structure.request")
+    @patch("tools.structure.request")
     def test_returns_cached(self, mock_get, tmp_path):
-        from ct.tools.structure import alphafold_fetch
+        from tools.structure import alphafold_fetch
 
         # Pre-create cached file
         cache_dir = tmp_path / ".fastfold-cli" / "cache" / "alphafold"
@@ -113,21 +113,21 @@ class TestAlphaFoldFetch:
         cached_file = cache_dir / "AF-P04637-F1-model_v4.pdb"
         cached_file.write_text("HEADER CACHED PDB\n")
 
-        with patch("ct.tools.structure.Path.home", return_value=tmp_path):
+        with patch("tools.structure.Path.home", return_value=tmp_path):
             result = alphafold_fetch("P04637")
 
         assert result["cached"] is True
         mock_get.assert_not_called()
 
-    @patch("ct.tools.structure.request")
+    @patch("tools.structure.request")
     def test_not_found(self, mock_get, tmp_path):
-        from ct.tools.structure import alphafold_fetch
+        from tools.structure import alphafold_fetch
 
         mock_resp = MagicMock()
         mock_resp.status_code = 404
         mock_get.return_value = (mock_resp, None)
 
-        with patch("ct.tools.structure.Path.home", return_value=tmp_path):
+        with patch("tools.structure.Path.home", return_value=tmp_path):
             result = alphafold_fetch("INVALID_ID")
 
         assert "error" in result
@@ -135,9 +135,9 @@ class TestAlphaFoldFetch:
 
 class TestTernaryPredict:
     def test_missing_ternarypred(self, tmp_path):
-        from ct.tools.structure import ternary_predict
+        from tools.structure import ternary_predict
 
-        with patch("ct.tools.structure.TERNARYPRED_DIR", tmp_path):
+        with patch("tools.structure.TERNARYPRED_DIR", tmp_path):
             result = ternary_predict("CCO", "/tmp/target.pdb", "CRBN")
 
         assert "error" in result
@@ -146,9 +146,9 @@ class TestTernaryPredict:
 
 class TestBatchScreen:
     def test_missing_ternarypred(self, tmp_path):
-        from ct.tools.structure import batch_screen
+        from tools.structure import batch_screen
 
-        with patch("ct.tools.structure.TERNARYPRED_DIR", tmp_path):
+        with patch("tools.structure.TERNARYPRED_DIR", tmp_path):
             result = batch_screen("/tmp/compounds.csv", "/tmp/targets.csv")
 
         assert "error" in result
@@ -160,7 +160,7 @@ class TestCompound3d:
         reason="RDKit not installed",
     )
     def test_valid_smiles(self, tmp_path):
-        from ct.tools.structure import compound_3d
+        from tools.structure import compound_3d
 
         result = compound_3d("CCO", output_path=str(tmp_path / "ethanol.sdf"))
 
@@ -173,7 +173,7 @@ class TestCompound3d:
         reason="RDKit not installed",
     )
     def test_invalid_smiles(self):
-        from ct.tools.structure import compound_3d
+        from tools.structure import compound_3d
 
         result = compound_3d("NOT_A_SMILES_STRING_AT_ALL")
         assert "error" in result
@@ -185,7 +185,7 @@ class TestCompound3d:
 class TestDock:
     @pytest.mark.skipif(not _rdkit_available(), reason="RDKit not installed")
     def test_invalid_method(self, tmp_path):
-        from ct.tools.structure import dock
+        from tools.structure import dock
 
         pdb = _write_mini_pdb(tmp_path)
         result = dock("CCO", str(pdb), method="invalid_method")
@@ -194,11 +194,11 @@ class TestDock:
 
     @pytest.mark.skipif(not _rdkit_available(), reason="RDKit not installed")
     def test_invalid_smiles(self, tmp_path):
-        from ct.tools.structure import dock
+        from tools.structure import dock
 
         pdb = _write_mini_pdb(tmp_path)
         # vina not installed => tries _prepare_ligand_pdbqt which fails on bad SMILES
-        with patch("ct.tools.structure.subprocess") as mock_sub:
+        with patch("tools.structure.subprocess") as mock_sub:
             mock_sub.run.side_effect = FileNotFoundError()
             result = dock("NOT_A_SMILES", str(pdb), method="vina")
         assert "error" in result
@@ -206,19 +206,19 @@ class TestDock:
     @pytest.mark.skipif(not _rdkit_available(), reason="RDKit not installed")
     def test_target_pdb_not_found(self, tmp_path):
         """When target is neither a file nor a valid UniProt ID, should error."""
-        from ct.tools.structure import dock
+        from tools.structure import dock
 
-        with patch("ct.tools.structure.alphafold_fetch") as mock_af:
+        with patch("tools.structure.alphafold_fetch") as mock_af:
             mock_af.return_value = {"error": "not found"}
             result = dock("CCO", "/nonexistent/file.pdb", method="vina")
         assert "error" in result
 
     @pytest.mark.skipif(not _rdkit_available(), reason="RDKit not installed")
-    @patch("ct.tools.compute._load_providers", return_value=MOCK_PROVIDERS)
+    @patch("tools.compute._load_providers", return_value=MOCK_PROVIDERS)
     def test_diffdock_submits_cloud_job(self, mock_prov, tmp_path):
         """DiffDock should always submit as a cloud job."""
-        from ct.tools.structure import dock
-        import ct.tools.compute as compute_mod
+        from tools.structure import dock
+        import tools.compute as compute_mod
         compute_mod._providers_data = None
 
         pdb = _write_mini_pdb(tmp_path)
@@ -228,16 +228,16 @@ class TestDock:
         assert "job" in result
 
     @pytest.mark.skipif(not _rdkit_available(), reason="RDKit not installed")
-    @patch("ct.tools.compute._load_providers", return_value=MOCK_PROVIDERS)
+    @patch("tools.compute._load_providers", return_value=MOCK_PROVIDERS)
     def test_vina_not_installed_submits_cloud(self, mock_prov, tmp_path):
         """When vina binary not found, should fall back to cloud submission."""
-        from ct.tools.structure import dock
-        import ct.tools.compute as compute_mod
+        from tools.structure import dock
+        import tools.compute as compute_mod
         compute_mod._providers_data = None
 
         pdb = _write_mini_pdb(tmp_path)
         # Patch subprocess.run so vina --version check fails
-        with patch("ct.tools.structure.subprocess") as mock_sub:
+        with patch("tools.structure.subprocess") as mock_sub:
             mock_sub.run.side_effect = FileNotFoundError()
             mock_sub.TimeoutExpired = type("TimeoutExpired", (Exception,), {})
             result = dock("CCO", str(pdb), method="vina", dry_run=True)
@@ -249,7 +249,7 @@ class TestDock:
     @pytest.mark.skipif(not _rdkit_available(), reason="RDKit not installed")
     def test_vina_local_run(self, tmp_path):
         """When vina binary is found, should run locally and parse output."""
-        from ct.tools.structure import dock
+        from tools.structure import dock
 
         pdb = _write_mini_pdb(tmp_path)
 
@@ -261,7 +261,7 @@ mode |   affinity | dist from best mode
    2       -7.9      1.234      2.345
    3       -7.5      2.000      3.456
 """
-        with patch("ct.tools.structure.subprocess") as mock_sub:
+        with patch("tools.structure.subprocess") as mock_sub:
             # First call: obabel (in _prepare_ligand_pdbqt) — fails so fallback writes PDBQT directly
             obabel_result = MagicMock()
             obabel_result.returncode = 1
@@ -287,10 +287,10 @@ mode |   affinity | dist from best mode
 # ─── MD Simulation ──────────────────────────────────────────────
 
 class TestMdSimulate:
-    @patch("ct.tools.compute._load_providers", return_value=MOCK_PROVIDERS)
+    @patch("tools.compute._load_providers", return_value=MOCK_PROVIDERS)
     def test_basic_submission(self, mock_prov, tmp_path):
-        from ct.tools.structure import md_simulate
-        import ct.tools.compute as compute_mod
+        from tools.structure import md_simulate
+        import tools.compute as compute_mod
         compute_mod._providers_data = None
 
         pdb = _write_mini_pdb(tmp_path)
@@ -303,10 +303,10 @@ class TestMdSimulate:
         assert result["config"]["forcefield"] == "amber14"
         assert "job" in result
 
-    @patch("ct.tools.compute._load_providers", return_value=MOCK_PROVIDERS)
+    @patch("tools.compute._load_providers", return_value=MOCK_PROVIDERS)
     def test_custom_forcefield(self, mock_prov, tmp_path):
-        from ct.tools.structure import md_simulate
-        import ct.tools.compute as compute_mod
+        from tools.structure import md_simulate
+        import tools.compute as compute_mod
         compute_mod._providers_data = None
 
         pdb = _write_mini_pdb(tmp_path)
@@ -316,21 +316,21 @@ class TestMdSimulate:
         assert result["config"]["temperature_k"] == 310.0
 
     def test_invalid_forcefield(self, tmp_path):
-        from ct.tools.structure import md_simulate
+        from tools.structure import md_simulate
 
         pdb = _write_mini_pdb(tmp_path)
         result = md_simulate(str(pdb), forcefield="invalid_ff")
         assert "error" in result
 
     def test_negative_duration(self, tmp_path):
-        from ct.tools.structure import md_simulate
+        from tools.structure import md_simulate
 
         pdb = _write_mini_pdb(tmp_path)
         result = md_simulate(str(pdb), duration_ns=-1.0)
         assert "error" in result
 
     def test_pdb_not_found(self):
-        from ct.tools.structure import md_simulate
+        from tools.structure import md_simulate
 
         result = md_simulate("/nonexistent/protein.pdb")
         assert "error" in result
@@ -340,10 +340,10 @@ class TestMdSimulate:
 
 class TestFep:
     @pytest.mark.skipif(not _rdkit_available(), reason="RDKit not installed")
-    @patch("ct.tools.compute._load_providers", return_value=MOCK_PROVIDERS)
+    @patch("tools.compute._load_providers", return_value=MOCK_PROVIDERS)
     def test_basic_submission(self, mock_prov, tmp_path):
-        from ct.tools.structure import fep
-        import ct.tools.compute as compute_mod
+        from tools.structure import fep
+        import tools.compute as compute_mod
         compute_mod._providers_data = None
 
         pdb = _write_mini_pdb(tmp_path)
@@ -357,7 +357,7 @@ class TestFep:
 
     @pytest.mark.skipif(not _rdkit_available(), reason="RDKit not installed")
     def test_invalid_smiles_a(self, tmp_path):
-        from ct.tools.structure import fep
+        from tools.structure import fep
 
         pdb = _write_mini_pdb(tmp_path)
         result = fep("INVALID", "CCO", str(pdb))
@@ -365,7 +365,7 @@ class TestFep:
 
     @pytest.mark.skipif(not _rdkit_available(), reason="RDKit not installed")
     def test_invalid_smiles_b(self, tmp_path):
-        from ct.tools.structure import fep
+        from tools.structure import fep
 
         pdb = _write_mini_pdb(tmp_path)
         result = fep("CCO", "INVALID", str(pdb))
@@ -373,7 +373,7 @@ class TestFep:
 
     @pytest.mark.skipif(not _rdkit_available(), reason="RDKit not installed")
     def test_invalid_method(self, tmp_path):
-        from ct.tools.structure import fep
+        from tools.structure import fep
 
         pdb = _write_mini_pdb(tmp_path)
         result = fep("CCO", "CCCO", str(pdb), method="invalid")
@@ -381,9 +381,9 @@ class TestFep:
 
     @pytest.mark.skipif(not _rdkit_available(), reason="RDKit not installed")
     def test_target_not_found(self):
-        from ct.tools.structure import fep
+        from tools.structure import fep
 
-        with patch("ct.tools.structure.alphafold_fetch") as mock_af:
+        with patch("tools.structure.alphafold_fetch") as mock_af:
             mock_af.return_value = {"error": "not found"}
             result = fep("CCO", "CCCO", "/nonexistent/target.pdb")
         assert "error" in result
@@ -393,7 +393,7 @@ class TestFep:
 
 class TestBindingSite:
     def test_geometric_detection(self, tmp_path):
-        from ct.tools.structure import binding_site
+        from tools.structure import binding_site
 
         pdb = _write_mini_pdb(tmp_path)
         result = binding_site(str(pdb), method="geometric")
@@ -403,7 +403,7 @@ class TestBindingSite:
         assert "pockets" in result
 
     def test_invalid_method(self, tmp_path):
-        from ct.tools.structure import binding_site
+        from tools.structure import binding_site
 
         pdb = _write_mini_pdb(tmp_path)
         result = binding_site(str(pdb), method="invalid_method")
@@ -411,10 +411,10 @@ class TestBindingSite:
 
     def test_target_resolution_from_uniprot(self, tmp_path):
         """When given a UniProt ID instead of file path, should resolve via AlphaFold."""
-        from ct.tools.structure import binding_site
+        from tools.structure import binding_site
 
         pdb = _write_mini_pdb(tmp_path)
-        with patch("ct.tools.structure.alphafold_fetch") as mock_af:
+        with patch("tools.structure.alphafold_fetch") as mock_af:
             mock_af.return_value = {"path": str(pdb)}
             result = binding_site("P04637", method="geometric")
 
@@ -423,7 +423,7 @@ class TestBindingSite:
 
     def test_fpocket_fallback_to_geometric(self, tmp_path):
         """When fpocket is not installed, should fall back to geometric."""
-        from ct.tools.structure import binding_site
+        from tools.structure import binding_site
 
         pdb = _write_mini_pdb(tmp_path)
         # fpocket won't be installed in test env
@@ -435,7 +435,7 @@ class TestBindingSite:
 
     def test_fpocket_runs_when_installed(self, tmp_path):
         """When fpocket is installed and succeeds, should parse its output."""
-        from ct.tools.structure import binding_site
+        from tools.structure import binding_site
 
         pdb = _write_mini_pdb(tmp_path)
         protein_name = pdb.stem
@@ -453,7 +453,7 @@ class TestBindingSite:
             "Volume : 215.0\n"
         )
 
-        with patch("ct.tools.structure.subprocess") as mock_sub:
+        with patch("tools.structure.subprocess") as mock_sub:
             mock_proc = MagicMock()
             mock_proc.returncode = 0
             mock_sub.run.return_value = mock_proc
@@ -470,7 +470,7 @@ class TestBindingSite:
 
 class TestResolvePdb:
     def test_existing_file(self, tmp_path):
-        from ct.tools.structure import _resolve_pdb
+        from tools.structure import _resolve_pdb
 
         pdb = _write_mini_pdb(tmp_path)
         result = _resolve_pdb(str(pdb))
@@ -478,18 +478,18 @@ class TestResolvePdb:
         assert result["path"] == str(pdb)
 
     def test_uniprot_id_success(self, tmp_path):
-        from ct.tools.structure import _resolve_pdb
+        from tools.structure import _resolve_pdb
 
         pdb = _write_mini_pdb(tmp_path)
-        with patch("ct.tools.structure.alphafold_fetch") as mock_af:
+        with patch("tools.structure.alphafold_fetch") as mock_af:
             mock_af.return_value = {"path": str(pdb)}
             result = _resolve_pdb("P04637")
         assert "path" in result
 
     def test_uniprot_id_failure(self):
-        from ct.tools.structure import _resolve_pdb
+        from tools.structure import _resolve_pdb
 
-        with patch("ct.tools.structure.alphafold_fetch") as mock_af:
+        with patch("tools.structure.alphafold_fetch") as mock_af:
             mock_af.return_value = {"error": "not found"}
             result = _resolve_pdb("INVALID")
         assert "error" in result
@@ -497,7 +497,7 @@ class TestResolvePdb:
 
 class TestDetectSearchBox:
     def test_computes_box(self, tmp_path):
-        from ct.tools.structure import _detect_search_box
+        from tools.structure import _detect_search_box
 
         pdb = _write_mini_pdb(tmp_path)
         box = _detect_search_box(str(pdb))
@@ -509,7 +509,7 @@ class TestDetectSearchBox:
         assert box["size_z"] > 0
 
     def test_empty_pdb(self, tmp_path):
-        from ct.tools.structure import _detect_search_box
+        from tools.structure import _detect_search_box
 
         empty = tmp_path / "empty.pdb"
         empty.write_text("HEADER EMPTY\nEND\n")
@@ -519,7 +519,7 @@ class TestDetectSearchBox:
 
 class TestGeometricPocketDetection:
     def test_detects_pockets(self, tmp_path):
-        from ct.tools.structure import _geometric_pocket_detection
+        from tools.structure import _geometric_pocket_detection
 
         pdb = _write_mini_pdb(tmp_path)
         pockets = _geometric_pocket_detection(str(pdb), min_residues=2, distance_cutoff=15.0)
@@ -533,7 +533,7 @@ class TestGeometricPocketDetection:
             assert "druggability_score" in p
 
     def test_empty_pdb(self, tmp_path):
-        from ct.tools.structure import _geometric_pocket_detection
+        from tools.structure import _geometric_pocket_detection
 
         empty = tmp_path / "empty.pdb"
         empty.write_text("HEADER EMPTY\nEND\n")

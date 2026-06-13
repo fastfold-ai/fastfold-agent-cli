@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import patch, MagicMock
-from ct.tools.shell import shell_run, _is_blocked
+from tools.shell import shell_run, _is_blocked
 
 
 class TestIsBlocked:
@@ -55,7 +55,7 @@ class TestShellRun:
 
     def test_timeout_cap(self):
         """Timeout should be capped at 300s."""
-        with patch("ct.tools.shell.subprocess.run") as mock_run:
+        with patch("tools.shell.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
                 returncode=0, stdout="ok", stderr=""
             )

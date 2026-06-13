@@ -114,7 +114,7 @@ def main():
 
     # Auto-configure ct
     try:
-        from ct.agent.config import Config
+        from agent.config import Config
         cfg = Config.load()
         cfg.set("data.l1000", str(args.output))
         cfg.save()

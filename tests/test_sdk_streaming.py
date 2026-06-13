@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 import pytest
 from rich.console import Console
 
-from ct.ui.traces import TraceRenderer
+from ui.traces import TraceRenderer
 
 
 # ---------------------------------------------------------------------------

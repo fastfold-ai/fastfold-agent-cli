@@ -2,8 +2,8 @@
 
 import inspect
 import pytest
-import ct.tools as tools_mod
-from ct.tools import ToolRegistry, Tool, registry, ensure_loaded
+import tools as tools_mod
+from tools import ToolRegistry, Tool, registry, ensure_loaded
 
 
 class TestToolDataclass:
@@ -335,7 +335,7 @@ class TestToolModuleLoading:
 
         def fake_import_module(name):
             calls.append(name)
-            if name == "ct.tools.b":
+            if name == "tools.b":
                 raise ImportError("simulated missing optional dependency")
             return object()
 
@@ -346,5 +346,5 @@ class TestToolModuleLoading:
 
         tools_mod.ensure_loaded()
 
-        assert calls == ["ct.tools.a", "ct.tools.b", "ct.tools.c"]
+        assert calls == ["tools.a", "tools.b", "tools.c"]
         assert tools_mod.tool_load_errors().get("b", "").startswith("simulated missing optional dependency")

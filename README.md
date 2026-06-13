@@ -75,6 +75,17 @@ uv tool install "fastfold-agent-cli[all]" --python 3.10
 
 </details>
 
+**Docker:**
+
+```bash
+git clone https://github.com/fastfold-ai/fastfold-agent-cli.git
+cd fastfold-agent-cli
+docker compose build
+```
+
+```bash
+docker compose run --rm fastfold
+```
 
 ### Authentication
 
@@ -409,7 +420,7 @@ pytest tests/ -v       # verbose
 pytest tests/test_cli.py::test_name   # a single test
 ```
 
-Adding a new tool? Tools live in `src/ct/tools/` and register with the `@registry.register(...)` decorator. Each tool's name prefix must match its category, it should accept `**kwargs`, and it must return a dict with a `"summary"` key. Use lazy imports for data loaders inside the function body. See `CLAUDE.md` for the full tool pattern and conventions.
+Adding a new tool? Tools live in `src/tools/` and register with the `@registry.register(...)` decorator. Each tool's name prefix must match its category, it should accept `**kwargs`, and it must return a dict with a `"summary"` key. Use lazy imports for data loaders inside the function body. See `CLAUDE.md` for the full tool pattern and conventions.
 
 A few guidelines:
 

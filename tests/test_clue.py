@@ -11,9 +11,9 @@ import pandas as pd
 
 
 class TestClueConnectivityQuery:
-    @patch("ct.tools.clue._load_profiles")
+    @patch("tools.clue._load_profiles")
     def test_signature_query_success(self, mock_load_profiles):
-        from ct.tools.clue import connectivity_query
+        from tools.clue import connectivity_query
 
         mock_profiles = pd.DataFrame(
             {
@@ -36,20 +36,20 @@ class TestClueConnectivityQuery:
         assert "top_mimickers" in result or "n_compounds_scored" in result
 
     def test_invalid_gene_list(self):
-        from ct.tools.clue import connectivity_query
+        from tools.clue import connectivity_query
 
         result = connectivity_query(gene_list=None)
         assert "error" in result
 
     def test_empty_gene_list(self):
-        from ct.tools.clue import connectivity_query
+        from tools.clue import connectivity_query
 
         result = connectivity_query(gene_list={"up": [], "down": []})
         assert "error" in result
 
     def test_get_clue_key_exists(self):
         """_get_clue_key function exists for API fallback compatibility."""
-        from ct.tools.clue import _get_clue_key
+        from tools.clue import _get_clue_key
 
         # Returns None when no key configured (local data doesn't need it)
         result = _get_clue_key()
@@ -57,10 +57,10 @@ class TestClueConnectivityQuery:
 
 
 class TestClueCompoundSignature:
-    @patch("ct.tools.clue._load_profiles")
-    @patch("ct.tools.clue._load_pert_metadata")
+    @patch("tools.clue._load_profiles")
+    @patch("tools.clue._load_pert_metadata")
     def test_known_compound(self, mock_load_metadata, mock_load_profiles):
-        from ct.tools.clue import compound_signature
+        from tools.clue import compound_signature
 
         mock_profiles = pd.DataFrame(
             {"TP53": [1.5], "CDKN1A": [1.0], "MYC": [-1.2], "CCND1": [-0.8]},
@@ -76,22 +76,22 @@ class TestClueCompoundSignature:
         assert "up_genes" in result or "error" not in result
 
     def test_unknown_compound(self):
-        from ct.tools.clue import compound_signature
+        from tools.clue import compound_signature
 
         result = compound_signature(compound="nonexistent_compound_xyz_12345")
         assert "error" in result or "not found" in result.get("summary", "").lower()
 
     def test_missing_api_key_still_works_locally(self):
         """Local data implementation works without API key."""
-        from ct.tools.clue import compound_signature
+        from tools.clue import compound_signature
 
         mock_profiles = pd.DataFrame(
             {"TP53": [1.5], "CDKN1A": [1.0], "MYC": [-1.2], "CCND1": [-0.8]},
             index=["vorinostat"],
         )
-        with patch("ct.tools.clue._get_clue_key", return_value=None), patch(
-            "ct.tools.clue._load_profiles", return_value=mock_profiles
-        ), patch("ct.tools.clue._load_pert_metadata", return_value=pd.DataFrame()):
+        with patch("tools.clue._get_clue_key", return_value=None), patch(
+            "tools.clue._load_profiles", return_value=mock_profiles
+        ), patch("tools.clue._load_pert_metadata", return_value=pd.DataFrame()):
             result = compound_signature(compound="vorinostat")
             # Should succeed with local data even without API key
             assert "summary" in result

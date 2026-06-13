@@ -26,16 +26,9 @@ venv/
 # OS
 .DS_Store
 
-# ct runtime
-.ct/
-outputs/
-
 # Test workspace
-cttest/
-
-reports/
 exports/
-busco_downloads/
+outputs/
 *.faa
 *.mafft
 *.clipkit.treefile

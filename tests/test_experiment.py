@@ -1,7 +1,7 @@
 """Tests for experiment design tools."""
 
 import pytest
-from ct.tools.experiment import (
+from tools.experiment import (
     list_assays,
     design_assay,
     estimate_timeline,

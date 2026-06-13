@@ -6,9 +6,9 @@ from unittest.mock import patch
 import pytest
 from typer.testing import CliRunner
 
-from ct.agent.config import Config
-from ct.agent.trace import TraceLogger
-from ct.cli import (
+from agent.config import Config
+from agent.trace import TraceLogger
+from cli import (
     app,
     _parse_provider_list,
     _prompt_setup_providers,
@@ -49,16 +49,16 @@ def test_parse_provider_list_invalid_raises():
 
 
 def test_prompt_setup_providers_inline_accepts_aliases(monkeypatch):
-    monkeypatch.setattr("ct.cli.sys.stdin.isatty", lambda: False)
-    monkeypatch.setattr("ct.cli.sys.stdout.isatty", lambda: False)
+    monkeypatch.setattr("cli.sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("cli.sys.stdout.isatty", lambda: False)
     monkeypatch.setattr("builtins.input", lambda _: "o a")
     selected = _prompt_setup_providers("openai")
     assert selected == ["anthropic", "openai"]
 
 
 def test_prompt_setup_providers_inline_requires_explicit_selection(monkeypatch):
-    monkeypatch.setattr("ct.cli.sys.stdin.isatty", lambda: False)
-    monkeypatch.setattr("ct.cli.sys.stdout.isatty", lambda: False)
+    monkeypatch.setattr("cli.sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("cli.sys.stdout.isatty", lambda: False)
     answers = iter(["", "o"])
     monkeypatch.setattr("builtins.input", lambda _: next(answers))
     selected = _prompt_setup_providers("openai")
@@ -76,8 +76,8 @@ def test_prompt_setup_providers_interactive_arrow_space_mode(monkeypatch):
         captured["kwargs"] = kwargs
         return _FakePrompt()
 
-    monkeypatch.setattr("ct.cli.sys.stdin.isatty", lambda: True)
-    monkeypatch.setattr("ct.cli.sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("cli.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("cli.sys.stdout.isatty", lambda: True)
     monkeypatch.setattr("questionary.checkbox", _fake_checkbox)
 
     selected = _prompt_setup_providers("openai")
@@ -90,13 +90,13 @@ def test_prompt_setup_providers_interactive_arrow_space_mode(monkeypatch):
 
 def test_setup_cmd_direct_call_handles_typer_option_defaults(monkeypatch):
     cfg = Config(data={})
-    monkeypatch.setattr("ct.agent.config.Config.load", lambda: cfg)
-    monkeypatch.setattr("ct.cli._prompt_setup_providers", lambda default: ["anthropic"])
+    monkeypatch.setattr("agent.config.Config.load", lambda: cfg)
+    monkeypatch.setattr("cli._prompt_setup_providers", lambda default: ["anthropic"])
     monkeypatch.setattr(
-        "ct.cli._resolve_provider_key",
+        "cli._resolve_provider_key",
         lambda cfg, provider, cli_key=None, openai_base_url=None, compatible_backend=None: "sk-ant-api03-test",
     )
-    monkeypatch.setattr("ct.cli._prompt_fastfold_cloud_api_key", lambda cfg, cli_key: None)
+    monkeypatch.setattr("cli._prompt_fastfold_cloud_api_key", lambda cfg, cli_key: None)
 
     setup_cmd()
     assert cfg.get("llm.provider") == "anthropic"
@@ -105,24 +105,24 @@ def test_setup_cmd_direct_call_handles_typer_option_defaults(monkeypatch):
 
 def test_setup_cmd_openai_compatible_persists_backend(monkeypatch):
     cfg = Config(data={})
-    monkeypatch.setattr("ct.agent.config.Config.load", lambda: cfg)
-    monkeypatch.setattr("ct.cli._prompt_setup_providers", lambda default: ["openai_compatible"])
+    monkeypatch.setattr("agent.config.Config.load", lambda: cfg)
+    monkeypatch.setattr("cli._prompt_setup_providers", lambda default: ["openai_compatible"])
     monkeypatch.setattr(
-        "ct.cli._resolve_openai_compatible_endpoint",
+        "cli._resolve_openai_compatible_endpoint",
         lambda cfg, cli_base_url=None, cli_backend=None: ("http://localhost:8888/v1", "unsloth"),
     )
     monkeypatch.setattr(
-        "ct.cli._resolve_provider_key",
+        "cli._resolve_provider_key",
         lambda cfg, provider, cli_key=None, openai_base_url=None, compatible_backend=None: "sk-unsloth-test",
     )
     monkeypatch.setattr(
-        "ct.cli._prompt_compatible_model_for_setup",
+        "cli._prompt_compatible_model_for_setup",
         lambda cfg, base_url, backend, api_key=None: "gpt-oss:20b",
     )
-    monkeypatch.setattr("ct.cli._prompt_fastfold_cloud_api_key", lambda cfg, cli_key: None)
-    monkeypatch.setattr("ct.agent.doctor.run_checks", lambda cfg: [])
-    monkeypatch.setattr("ct.agent.doctor.to_table", lambda checks: "")
-    monkeypatch.setattr("ct.agent.doctor.has_errors", lambda checks: False)
+    monkeypatch.setattr("cli._prompt_fastfold_cloud_api_key", lambda cfg, cli_key: None)
+    monkeypatch.setattr("agent.doctor.run_checks", lambda cfg: [])
+    monkeypatch.setattr("agent.doctor.to_table", lambda checks: "")
+    monkeypatch.setattr("agent.doctor.has_errors", lambda checks: False)
 
     setup_cmd(provider="openai_compatible")
     assert cfg.get("llm.provider") == "openai"
@@ -150,8 +150,8 @@ def test_resolve_openai_base_url_cli_openai_default_returns_none():
 
 
 def test_prompt_openai_endpoint_mode_fallback_compatible(monkeypatch):
-    monkeypatch.setattr("ct.cli.sys.stdin.isatty", lambda: False)
-    monkeypatch.setattr("ct.cli.sys.stdout.isatty", lambda: False)
+    monkeypatch.setattr("cli.sys.stdin.isatty", lambda: False)
+    monkeypatch.setattr("cli.sys.stdout.isatty", lambda: False)
     monkeypatch.setattr("builtins.input", lambda _: "k")
     assert _prompt_openai_endpoint_mode(default_mode="cloud") == "compatible"
 
@@ -168,13 +168,13 @@ def test_prompt_openai_compatible_backend_numeric_selection(monkeypatch):
 
 def test_resolve_openai_base_url_interactive_cloud_mode_returns_none(monkeypatch):
     cfg = Config(data={})
-    monkeypatch.setattr("ct.cli._prompt_openai_endpoint_mode", lambda default_mode="cloud": "cloud")
+    monkeypatch.setattr("cli._prompt_openai_endpoint_mode", lambda default_mode="cloud": "cloud")
     assert _resolve_openai_base_url(cfg, cli_base_url=None) is None
 
 
 def test_resolve_openai_compatible_endpoint_unsloth_default(monkeypatch):
     cfg = Config(data={})
-    monkeypatch.setattr("ct.cli._prompt_openai_compatible_backend", lambda default_backend="ollama": "unsloth")
+    monkeypatch.setattr("cli._prompt_openai_compatible_backend", lambda default_backend="ollama": "unsloth")
     monkeypatch.setattr("builtins.input", lambda _: "")
     base_url, backend = _resolve_openai_compatible_endpoint(cfg, cli_base_url=None, cli_backend=None)
     assert backend == "unsloth"
@@ -184,7 +184,7 @@ def test_resolve_openai_compatible_endpoint_unsloth_default(monkeypatch):
 def test_prompt_compatible_model_for_setup_uses_discovered_selection(monkeypatch):
     cfg = Config(data={"llm.model": "llama3.1"})
     monkeypatch.setattr(
-        "ct.cli._fetch_compatible_models_for_setup",
+        "cli._fetch_compatible_models_for_setup",
         lambda base_url, backend, api_key=None: ["gemma4:12b", "gpt-oss:20b"],
     )
     monkeypatch.setattr("builtins.input", lambda _: "2")
@@ -200,7 +200,7 @@ def test_prompt_compatible_model_for_setup_uses_discovered_selection(monkeypatch
 def test_prompt_compatible_model_for_setup_allows_manual_entry(monkeypatch):
     cfg = Config(data={"llm.model": "llama3.1"})
     monkeypatch.setattr(
-        "ct.cli._fetch_compatible_models_for_setup",
+        "cli._fetch_compatible_models_for_setup",
         lambda base_url, backend, api_key=None: ["gemma4:12b"],
     )
     answers = iter(["2", "qwen3.6:27b"])
@@ -216,7 +216,7 @@ def test_prompt_compatible_model_for_setup_allows_manual_entry(monkeypatch):
 
 def test_resolve_provider_key_openai_compatible_defaults_to_ollama(monkeypatch):
     cfg = Config(data={})
-    monkeypatch.setattr("ct.cli._prompt_openai_api_key_with_default", lambda default_key="ollama": default_key)
+    monkeypatch.setattr("cli._prompt_openai_api_key_with_default", lambda default_key="ollama": default_key)
     key = _resolve_provider_key(
         cfg,
         provider="openai",
@@ -229,8 +229,8 @@ def test_resolve_provider_key_openai_compatible_defaults_to_ollama(monkeypatch):
 
 def test_resolve_provider_key_openai_compatible_unsloth_uses_compatible_prompt(monkeypatch):
     cfg = Config(data={})
-    monkeypatch.setattr("ct.cli._prompt_openai_compatible_api_key", lambda backend="other": "sk-unsloth-new")
-    monkeypatch.setattr("ct.cli._prompt_openai_api_key", lambda: "sk-openai-should-not-be-used")
+    monkeypatch.setattr("cli._prompt_openai_compatible_api_key", lambda backend="other": "sk-unsloth-new")
+    monkeypatch.setattr("cli._prompt_openai_api_key", lambda: "sk-openai-should-not-be-used")
     key = _resolve_provider_key(
         cfg,
         provider="openai_compatible",
@@ -247,8 +247,8 @@ def test_setup_provider_runtime_id_maps_compatible_to_openai():
 
 
 def test_keys_subcommand_not_treated_as_query():
-    with patch("ct.cli.run_query") as mock_run_query, patch(
-        "ct.agent.config.Config.load", return_value=Config(data={})
+    with patch("cli.run_query") as mock_run_query, patch(
+        "agent.config.Config.load", return_value=Config(data={})
     ):
         result = runner.invoke(app, ["keys"])
 
@@ -258,8 +258,8 @@ def test_keys_subcommand_not_treated_as_query():
 
 
 def test_doctor_subcommand_not_treated_as_query():
-    with patch("ct.cli.run_query") as mock_run_query, patch(
-        "ct.agent.config.Config.load", return_value=Config(data={"llm.api_key": "x"})
+    with patch("cli.run_query") as mock_run_query, patch(
+        "agent.config.Config.load", return_value=Config(data={"llm.api_key": "x"})
     ):
         result = runner.invoke(app, ["doctor"])
 
@@ -269,8 +269,8 @@ def test_doctor_subcommand_not_treated_as_query():
 
 
 def test_query_mode_uses_remaining_args_as_query():
-    with patch("ct.cli.run_query") as mock_run_query, patch(
-        "ct.cli.run_interactive"
+    with patch("cli.run_query") as mock_run_query, patch(
+        "cli.run_interactive"
     ) as mock_run_interactive:
         result = runner.invoke(app, ["run", "profile", "TP53", "in", "AML"])
 
@@ -282,8 +282,8 @@ def test_query_mode_uses_remaining_args_as_query():
 
 
 def test_no_args_enters_interactive_mode():
-    with patch("ct.cli.run_query") as mock_run_query, patch(
-        "ct.cli.run_interactive"
+    with patch("cli.run_query") as mock_run_query, patch(
+        "cli.run_interactive"
     ) as mock_run_interactive:
         result = runner.invoke(app, ["run"])
 
@@ -299,10 +299,10 @@ def test_entry_routes_plain_invocation_to_hidden_run(monkeypatch):
         called["args"] = args
         called["prog_name"] = prog_name
 
-    monkeypatch.setattr("ct.cli.app", fake_app)
+    monkeypatch.setattr("cli.app", fake_app)
     monkeypatch.setattr("sys.argv", ["ct", "profile", "TP53"])
 
-    from ct.cli import entry
+    from cli import entry
 
     entry()
 
@@ -317,10 +317,10 @@ def test_entry_preserves_explicit_subcommand(monkeypatch):
         called["args"] = args
         called["prog_name"] = prog_name
 
-    monkeypatch.setattr("ct.cli.app", fake_app)
+    monkeypatch.setattr("cli.app", fake_app)
     monkeypatch.setattr("sys.argv", ["ct", "config", "show"])
 
-    from ct.cli import entry
+    from cli import entry
 
     entry()
 
@@ -335,10 +335,10 @@ def test_entry_preserves_trace_subcommand(monkeypatch):
         called["args"] = args
         called["prog_name"] = prog_name
 
-    monkeypatch.setattr("ct.cli.app", fake_app)
+    monkeypatch.setattr("cli.app", fake_app)
     monkeypatch.setattr("sys.argv", ["ct", "trace", "diagnose"])
 
-    from ct.cli import entry
+    from cli import entry
 
     entry()
 
@@ -353,10 +353,10 @@ def test_entry_preserves_upgrade_subcommand(monkeypatch):
         called["args"] = args
         called["prog_name"] = prog_name
 
-    monkeypatch.setattr("ct.cli.app", fake_app)
+    monkeypatch.setattr("cli.app", fake_app)
     monkeypatch.setattr("sys.argv", ["ct", "upgrade"])
 
-    from ct.cli import entry
+    from cli import entry
 
     entry()
 
@@ -371,10 +371,10 @@ def test_entry_routes_top_level_resume_flag_to_hidden_run(monkeypatch):
         called["args"] = args
         called["prog_name"] = prog_name
 
-    monkeypatch.setattr("ct.cli.app", fake_app)
+    monkeypatch.setattr("cli.app", fake_app)
     monkeypatch.setattr("sys.argv", ["ct", "--resume", "d0b0571d"])
 
-    from ct.cli import entry
+    from cli import entry
 
     entry()
 
@@ -392,7 +392,7 @@ def test_resolve_upgrade_flavor_uses_persisted_value():
 
 def test_resolve_upgrade_flavor_falls_back_to_os_and_persists(monkeypatch):
     cfg = Config(data={})
-    monkeypatch.setattr("ct.cli.os.name", "posix", raising=False)
+    monkeypatch.setattr("cli.os.name", "posix", raising=False)
     with patch.object(cfg, "save") as mock_save:
         flavor = resolve_upgrade_flavor(cfg=cfg, persist=True)
     assert flavor == "all"
@@ -420,19 +420,19 @@ def test_is_newer_version_semver():
 
 
 def test_get_upgrade_available_version_returns_latest_when_newer():
-    with patch("ct.cli.fetch_pypi_latest_version", return_value="0.0.99"):
+    with patch("cli.fetch_pypi_latest_version", return_value="0.0.99"):
         assert get_upgrade_available_version("0.0.43") == "0.0.99"
 
 
 def test_get_upgrade_available_version_returns_none_when_not_newer():
-    with patch("ct.cli.fetch_pypi_latest_version", return_value="0.0.43"):
+    with patch("cli.fetch_pypi_latest_version", return_value="0.0.43"):
         assert get_upgrade_available_version("0.0.43") is None
 
 
 def test_upgrade_subcommand_invokes_execute_upgrade():
     cfg = Config(data={})
-    with patch("ct.agent.config.Config.load", return_value=cfg), patch(
-        "ct.cli.execute_upgrade", return_value=True
+    with patch("agent.config.Config.load", return_value=cfg), patch(
+        "cli.execute_upgrade", return_value=True
     ) as mock_exec:
         result = runner.invoke(app, ["upgrade"])
     assert result.exit_code == 0
@@ -441,7 +441,7 @@ def test_upgrade_subcommand_invokes_execute_upgrade():
 
 def test_config_set_agent_profile_applies_preset():
     cfg = Config(data={})
-    with patch("ct.agent.config.Config.load", return_value=cfg), patch.object(
+    with patch("agent.config.Config.load", return_value=cfg), patch.object(
         cfg, "save"
     ) as mock_save:
         result = runner.invoke(app, ["config", "set", "agent.profile", "enterprise"])
@@ -455,7 +455,7 @@ def test_config_set_agent_profile_applies_preset():
 
 def test_config_set_agent_profile_rejects_invalid_value():
     cfg = Config(data={})
-    with patch("ct.agent.config.Config.load", return_value=cfg), patch.object(
+    with patch("agent.config.Config.load", return_value=cfg), patch.object(
         cfg, "save"
     ) as mock_save:
         result = runner.invoke(app, ["config", "set", "agent.profile", "invalid"])
@@ -467,7 +467,7 @@ def test_config_set_agent_profile_rejects_invalid_value():
 
 def test_config_set_openai_key_rejects_invalid_format():
     cfg = Config(data={})
-    with patch("ct.agent.config.Config.load", return_value=cfg), patch.object(
+    with patch("agent.config.Config.load", return_value=cfg), patch.object(
         cfg, "save"
     ) as mock_save:
         result = runner.invoke(app, ["config", "set", "llm.openai_api_key", "bad-key"])
@@ -479,7 +479,7 @@ def test_config_set_openai_key_rejects_invalid_format():
 
 def test_config_unset_removes_value():
     cfg = Config(data={"llm.openai_api_key": "sk-proj-AbCdEf1234567890xyz"})
-    with patch("ct.agent.config.Config.load", return_value=cfg), patch.object(
+    with patch("agent.config.Config.load", return_value=cfg), patch.object(
         cfg, "save"
     ) as mock_save:
         result = runner.invoke(app, ["config", "unset", "llm.openai_api_key"])
@@ -498,7 +498,7 @@ def test_knowledge_status_command():
         "n_evidence": 5,
         "entity_types": {"gene": 2, "disease": 1},
     }
-    with patch("ct.kb.substrate.KnowledgeSubstrate") as mock_cls:
+    with patch("kb.substrate.KnowledgeSubstrate") as mock_cls:
         mock_cls.return_value.summary.return_value = fake_summary
         result = runner.invoke(app, ["knowledge", "status"])
     assert result.exit_code == 0
@@ -507,7 +507,7 @@ def test_knowledge_status_command():
 
 
 def test_knowledge_ingest_error_exits_nonzero():
-    with patch("ct.kb.ingest.KnowledgeIngestionPipeline") as mock_pipeline:
+    with patch("kb.ingest.KnowledgeIngestionPipeline") as mock_pipeline:
         mock_pipeline.return_value.ingest.return_value = {"error": "boom"}
         result = runner.invoke(app, ["knowledge", "ingest", "evidence_store"])
     assert result.exit_code == 2
@@ -529,7 +529,7 @@ def test_knowledge_benchmark_strict_failure_exits_nonzero():
                 "message": "failed",
             }
 
-    with patch("ct.kb.benchmarks.BenchmarkSuite.load", return_value=FakeSuite()):
+    with patch("kb.benchmarks.BenchmarkSuite.load", return_value=FakeSuite()):
         result = runner.invoke(app, ["knowledge", "benchmark", "--strict"])
     assert result.exit_code == 2
 
@@ -627,11 +627,11 @@ def test_release_check_passes_with_no_tests_no_trace():
                 "message": "passed",
             }
 
-    with patch("ct.agent.config.Config.load", return_value=cfg), patch(
-        "ct.agent.doctor.run_checks", return_value=[]
-    ), patch("ct.agent.doctor.has_errors", return_value=False), patch(
-        "ct.agent.doctor.to_table", return_value="doctor ok"
-    ), patch("ct.kb.benchmarks.BenchmarkSuite.load", return_value=FakeSuite()):
+    with patch("agent.config.Config.load", return_value=cfg), patch(
+        "agent.doctor.run_checks", return_value=[]
+    ), patch("agent.doctor.has_errors", return_value=False), patch(
+        "agent.doctor.to_table", return_value="doctor ok"
+    ), patch("kb.benchmarks.BenchmarkSuite.load", return_value=FakeSuite()):
         result = runner.invoke(app, ["release-check", "--no-tests", "--no-trace"])
 
     assert result.exit_code == 0
@@ -657,12 +657,12 @@ def test_release_check_fails_when_pytest_step_fails():
             }
 
     fail_proc = subprocess.CompletedProcess(args=["pytest"], returncode=1, stdout="boom", stderr="")
-    with patch("ct.agent.config.Config.load", return_value=cfg), patch(
-        "ct.agent.doctor.run_checks", return_value=[]
-    ), patch("ct.agent.doctor.has_errors", return_value=False), patch(
-        "ct.agent.doctor.to_table", return_value="doctor ok"
-    ), patch("ct.kb.benchmarks.BenchmarkSuite.load", return_value=FakeSuite()), patch(
-        "ct.cli.subprocess.run", return_value=fail_proc
+    with patch("agent.config.Config.load", return_value=cfg), patch(
+        "agent.doctor.run_checks", return_value=[]
+    ), patch("agent.doctor.has_errors", return_value=False), patch(
+        "agent.doctor.to_table", return_value="doctor ok"
+    ), patch("kb.benchmarks.BenchmarkSuite.load", return_value=FakeSuite()), patch(
+        "cli.subprocess.run", return_value=fail_proc
     ):
         result = runner.invoke(app, ["release-check", "--no-trace"])
 
@@ -694,11 +694,11 @@ def test_release_check_fails_on_trace_integrity_issues(tmp_path):
     trace_path = tmp_path / "bad-trace.trace.jsonl"
     trace.save(trace_path)
 
-    with patch("ct.agent.config.Config.load", return_value=cfg), patch(
-        "ct.agent.doctor.run_checks", return_value=[]
-    ), patch("ct.agent.doctor.has_errors", return_value=False), patch(
-        "ct.agent.doctor.to_table", return_value="doctor ok"
-    ), patch("ct.kb.benchmarks.BenchmarkSuite.load", return_value=FakeSuite()):
+    with patch("agent.config.Config.load", return_value=cfg), patch(
+        "agent.doctor.run_checks", return_value=[]
+    ), patch("agent.doctor.has_errors", return_value=False), patch(
+        "agent.doctor.to_table", return_value="doctor ok"
+    ), patch("kb.benchmarks.BenchmarkSuite.load", return_value=FakeSuite()):
         result = runner.invoke(
             app,
             ["release-check", "--no-tests", "--trace-path", str(trace_path)],
@@ -710,10 +710,10 @@ def test_release_check_fails_on_trace_integrity_issues(tmp_path):
 
 def test_release_check_pharma_policy_fails_without_profile():
     cfg = Config(data={"llm.api_key": "x", "agent.profile": "research"})
-    with patch("ct.agent.config.Config.load", return_value=cfg), patch(
-        "ct.agent.doctor.run_checks", return_value=[]
-    ), patch("ct.agent.doctor.has_errors", return_value=False), patch(
-        "ct.agent.doctor.to_table", return_value="doctor ok"
+    with patch("agent.config.Config.load", return_value=cfg), patch(
+        "agent.doctor.run_checks", return_value=[]
+    ), patch("agent.doctor.has_errors", return_value=False), patch(
+        "agent.doctor.to_table", return_value="doctor ok"
     ):
         result = runner.invoke(
             app,
@@ -735,10 +735,10 @@ def test_release_check_pharma_policy_passes():
             "agent.enable_claude_code_tool": False,
         }
     )
-    with patch("ct.agent.config.Config.load", return_value=cfg), patch(
-        "ct.agent.doctor.run_checks", return_value=[]
-    ), patch("ct.agent.doctor.has_errors", return_value=False), patch(
-        "ct.agent.doctor.to_table", return_value="doctor ok"
+    with patch("agent.config.Config.load", return_value=cfg), patch(
+        "agent.doctor.run_checks", return_value=[]
+    ), patch("agent.doctor.has_errors", return_value=False), patch(
+        "agent.doctor.to_table", return_value="doctor ok"
     ):
         result = runner.invoke(
             app,

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import re
 
-from ct.agent.knowledge import KNOWLEDGE_PRIMER
-from ct.tools import ensure_loaded, registry
+from agent.knowledge import KNOWLEDGE_PRIMER
+from tools import ensure_loaded, registry
 
 
 def _claimed_tools_from_primer(primer: str) -> set[str]:

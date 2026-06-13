@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 @pytest.fixture
 def sandbox(tmp_path):
-    from ct.agent.sandbox import Sandbox
+    from agent.sandbox import Sandbox
     return Sandbox(timeout=5, output_dir=tmp_path)
 
 

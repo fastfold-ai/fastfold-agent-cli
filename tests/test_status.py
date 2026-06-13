@@ -5,7 +5,7 @@ import io
 import pytest
 from rich.console import Console
 
-from ct.ui.status import DNA_HELIX_FRAMES, ThinkingStatus, _ThinkingRenderable
+from ui.status import DNA_HELIX_FRAMES, ThinkingStatus, _ThinkingRenderable
 
 
 # ------------------------------------------------------------------
@@ -95,7 +95,7 @@ class TestThinkingRenderable:
     def test_default_spinner_is_benzene(self):
         """Default spinner should be benzene_breathing, not DNA helix."""
         r = _ThinkingRenderable(["Testing"])
-        from ct.ui.status import SPINNERS
+        from ui.status import SPINNERS
         assert r.frames == SPINNERS["benzene_breathing"]["frames"]
 
     def test_dna_spinner_when_requested(self):
@@ -104,5 +104,5 @@ class TestThinkingRenderable:
 
     def test_spinner_interval(self):
         r = _ThinkingRenderable(["Testing"])
-        from ct.ui.status import SPINNERS
+        from ui.status import SPINNERS
         assert r.interval_ms == SPINNERS["benzene_breathing"]["interval_ms"]

@@ -11,7 +11,7 @@ class TestRetrosynthesisHeuristic:
 
     def test_amide_disconnection(self):
         """Aspirin-like amide should find amide bond disconnection."""
-        from ct.tools.chemistry import retrosynthesis
+        from tools.chemistry import retrosynthesis
 
         # Acetaminophen (paracetamol) — has an amide bond
         result = retrosynthesis(smiles="CC(=O)Nc1ccc(O)cc1", max_steps=3)
@@ -25,7 +25,7 @@ class TestRetrosynthesisHeuristic:
 
     def test_ester_disconnection(self):
         """Ethyl acetate — has an ester bond."""
-        from ct.tools.chemistry import retrosynthesis
+        from tools.chemistry import retrosynthesis
 
         result = retrosynthesis(smiles="CCOC(C)=O", max_steps=3)
 
@@ -36,7 +36,7 @@ class TestRetrosynthesisHeuristic:
 
     def test_biaryl_suzuki(self):
         """Biphenyl — should find Suzuki coupling disconnection."""
-        from ct.tools.chemistry import retrosynthesis
+        from tools.chemistry import retrosynthesis
 
         result = retrosynthesis(smiles="c1ccc(-c2ccccc2)cc1", max_steps=3)
 
@@ -47,7 +47,7 @@ class TestRetrosynthesisHeuristic:
 
     def test_invalid_smiles(self):
         """Invalid SMILES should return error."""
-        from ct.tools.chemistry import retrosynthesis
+        from tools.chemistry import retrosynthesis
 
         result = retrosynthesis(smiles="INVALID_SMILES_XYZ")
 
@@ -55,7 +55,7 @@ class TestRetrosynthesisHeuristic:
 
     def test_simple_alkane_no_disconnections(self):
         """Methane — no disconnections possible."""
-        from ct.tools.chemistry import retrosynthesis
+        from tools.chemistry import retrosynthesis
 
         result = retrosynthesis(smiles="C", max_steps=3)
 
@@ -64,7 +64,7 @@ class TestRetrosynthesisHeuristic:
 
     def test_complex_molecule_multiple_disconnections(self):
         """Lenalidomide — complex molecule with multiple disconnectable bonds."""
-        from ct.tools.chemistry import retrosynthesis
+        from tools.chemistry import retrosynthesis
 
         # Lenalidomide SMILES
         result = retrosynthesis(
@@ -79,7 +79,7 @@ class TestRetrosynthesisHeuristic:
 
     def test_brics_fragments_present(self):
         """BRICS decomposition should appear for decomposable molecules."""
-        from ct.tools.chemistry import retrosynthesis
+        from tools.chemistry import retrosynthesis
 
         # A molecule with BRICS-decomposable bonds
         result = retrosynthesis(smiles="CC(=O)Nc1ccc(O)cc1", max_steps=3)
@@ -88,7 +88,7 @@ class TestRetrosynthesisHeuristic:
 
     def test_routes_sorted_by_steps(self):
         """Routes should be sorted by number of steps (shortest first)."""
-        from ct.tools.chemistry import retrosynthesis
+        from tools.chemistry import retrosynthesis
 
         result = retrosynthesis(smiles="CC(=O)Nc1ccc(O)cc1", max_steps=3)
 
@@ -103,7 +103,7 @@ class TestRetrosynthesisIBMRXN:
     @patch("httpx.get")
     @patch("httpx.post")
     def test_ibm_rxn_success(self, mock_post, mock_get):
-        from ct.tools.chemistry import retrosynthesis
+        from tools.chemistry import retrosynthesis
 
         # Mock POST: submit prediction
         post_resp = MagicMock()
@@ -148,7 +148,7 @@ class TestRetrosynthesisIBMRXN:
     @patch("httpx.post")
     def test_ibm_rxn_failure_falls_back(self, mock_post):
         """If IBM RXN fails, should fall back to heuristic."""
-        from ct.tools.chemistry import retrosynthesis
+        from tools.chemistry import retrosynthesis
 
         mock_post.side_effect = Exception("Connection refused")
 
@@ -166,7 +166,7 @@ class TestRetrosynthesisIBMRXN:
 
     def test_no_api_key_uses_heuristic(self):
         """Without API key, should use heuristic directly."""
-        from ct.tools.chemistry import retrosynthesis
+        from tools.chemistry import retrosynthesis
 
         result = retrosynthesis(smiles="CC(=O)Nc1ccccc1", max_steps=3)
 
@@ -180,7 +180,7 @@ class TestPharmacophore:
 
     def test_basic_common_features(self):
         """Test common feature detection across a simple set."""
-        from ct.tools.chemistry import pharmacophore
+        from tools.chemistry import pharmacophore
 
         # Three compounds with HBA and aromatic features
         smiles_list = [
@@ -203,7 +203,7 @@ class TestPharmacophore:
 
     def test_feature_distribution(self):
         """Feature distribution should have entries for all feature types."""
-        from ct.tools.chemistry import pharmacophore
+        from tools.chemistry import pharmacophore
 
         smiles_list = [
             "CC(=O)Nc1ccc(O)cc1",  # acetaminophen
@@ -222,7 +222,7 @@ class TestPharmacophore:
 
     def test_per_molecule_features(self):
         """Per-molecule features should be present for each compound."""
-        from ct.tools.chemistry import pharmacophore
+        from tools.chemistry import pharmacophore
 
         smiles_list = ["c1ccccc1", "c1ccncc1", "c1ccoc1"]
 
@@ -236,7 +236,7 @@ class TestPharmacophore:
 
     def test_consensus_score_range(self):
         """Consensus score should be between 0 and 1."""
-        from ct.tools.chemistry import pharmacophore
+        from tools.chemistry import pharmacophore
 
         smiles_list = [
             "c1ccccc1O",
@@ -249,28 +249,28 @@ class TestPharmacophore:
 
     def test_too_few_compounds(self):
         """Should error with fewer than 2 compounds."""
-        from ct.tools.chemistry import pharmacophore
+        from tools.chemistry import pharmacophore
 
         result = pharmacophore(smiles_list=["c1ccccc1"])
         assert "error" in result
 
     def test_empty_list(self):
         """Should error with empty list."""
-        from ct.tools.chemistry import pharmacophore
+        from tools.chemistry import pharmacophore
 
         result = pharmacophore(smiles_list=[])
         assert "error" in result
 
     def test_none_list(self):
         """Should error with None."""
-        from ct.tools.chemistry import pharmacophore
+        from tools.chemistry import pharmacophore
 
         result = pharmacophore(smiles_list=None)
         assert "error" in result
 
     def test_invalid_smiles_in_list(self):
         """Invalid SMILES should be reported but not crash."""
-        from ct.tools.chemistry import pharmacophore
+        from tools.chemistry import pharmacophore
 
         smiles_list = [
             "c1ccccc1O",
@@ -288,14 +288,14 @@ class TestPharmacophore:
 
     def test_all_invalid_smiles(self):
         """All invalid SMILES should error."""
-        from ct.tools.chemistry import pharmacophore
+        from tools.chemistry import pharmacophore
 
         result = pharmacophore(smiles_list=["INVALID1", "INVALID2", "INVALID3"])
         assert "error" in result
 
     def test_identical_compounds_high_consensus(self):
         """Identical compounds should give perfect consensus."""
-        from ct.tools.chemistry import pharmacophore
+        from tools.chemistry import pharmacophore
 
         smiles_list = [
             "c1ccccc1O",
@@ -310,7 +310,7 @@ class TestPharmacophore:
 
     def test_diverse_compounds_lower_consensus(self):
         """Very different compounds should have lower consensus."""
-        from ct.tools.chemistry import pharmacophore
+        from tools.chemistry import pharmacophore
 
         smiles_list = [
             "CCCCCCCCCC",            # decane: just hydrophobic

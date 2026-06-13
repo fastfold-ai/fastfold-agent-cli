@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
-from ct.agent import config as config_mod
-from ct.agent.config import Config, _validate_config
+from agent import config as config_mod
+from agent.config import Config, _validate_config
 
 
 def test_load_invalid_json_does_not_crash(monkeypatch, tmp_path):
@@ -370,7 +370,7 @@ def test_load_migrates_legacy_home_output_dir(tmp_path, monkeypatch):
     cfg_path.write_text(json.dumps({"sandbox.output_dir": legacy}), encoding="utf-8")
     monkeypatch.setattr(config_mod, "CONFIG_FILE", cfg_path)
 
-    with patch("ct.agent.config.Path.cwd", return_value=tmp_path):
+    with patch("agent.config.Path.cwd", return_value=tmp_path):
         cfg = Config.load()
 
     assert cfg.get("sandbox.output_dir") == str(tmp_path / "outputs")
@@ -468,7 +468,7 @@ class TestValidateConfig:
         cfg_path = tmp_path / "config.json"
         cfg_path.write_text(json.dumps({"agent.max_iterations": -1}))
         monkeypatch.setattr(config_mod, "CONFIG_FILE", cfg_path)
-        with patch("ct.agent.config.logger") as mock_logger:
+        with patch("agent.config.logger") as mock_logger:
             Config.load()
             # Should have logged at least one warning about negative max_iterations
             assert mock_logger.warning.called

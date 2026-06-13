@@ -4,7 +4,7 @@ import pytest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
-from ct.data.downloader import (
+from data.downloader import (
     DATASETS, DOWNLOAD_TIMEOUT, download_dataset, download_all,
     dataset_status, _download_file,
 )
@@ -102,14 +102,14 @@ class TestDownloadFile:
 
 
 class TestDownloadDataset:
-    @patch("ct.data.downloader.Config")
+    @patch("data.downloader.Config")
     def test_unknown_dataset(self, mock_config, capsys):
         download_dataset("nonexistent_dataset")
         captured = capsys.readouterr()
         assert "Unknown dataset" in captured.out or True  # Rich output may not capture
 
-    @patch("ct.data.downloader._download_file")
-    @patch("ct.data.downloader.Config")
+    @patch("data.downloader._download_file")
+    @patch("data.downloader.Config")
     def test_auto_download_calls_download(self, mock_config, mock_dl, tmp_path):
         mock_cfg = MagicMock()
         mock_cfg.get.return_value = str(tmp_path)
@@ -121,8 +121,8 @@ class TestDownloadDataset:
         # Should have called _download_file for each msigdb file
         assert mock_dl.call_count == len(DATASETS["msigdb"]["files"])
 
-    @patch("ct.data.downloader._download_file")
-    @patch("ct.data.downloader.Config")
+    @patch("data.downloader._download_file")
+    @patch("data.downloader.Config")
     def test_skips_existing_files(self, mock_config, mock_dl, tmp_path):
         mock_cfg = MagicMock()
         mock_cfg.get.return_value = str(tmp_path)
@@ -139,8 +139,8 @@ class TestDownloadDataset:
         expected_downloads = len(DATASETS["msigdb"]["files"]) - 1
         assert mock_dl.call_count == expected_downloads
 
-    @patch("ct.data.downloader._download_file")
-    @patch("ct.data.downloader.Config")
+    @patch("data.downloader._download_file")
+    @patch("data.downloader.Config")
     def test_auto_configures_data_path_after_download(self, mock_config, mock_dl, tmp_path):
         """After successful download, config should be auto-set."""
         mock_cfg = MagicMock()
@@ -154,8 +154,8 @@ class TestDownloadDataset:
         mock_cfg.set.assert_called_once_with("data.msigdb", str(tmp_path))
         mock_cfg.save.assert_called_once()
 
-    @patch("ct.data.downloader._download_file")
-    @patch("ct.data.downloader.Config")
+    @patch("data.downloader._download_file")
+    @patch("data.downloader.Config")
     def test_depmap_auto_download(self, mock_config, mock_dl, tmp_path):
         """DepMap should now auto-download (not manual)."""
         mock_cfg = MagicMock()
@@ -168,8 +168,8 @@ class TestDownloadDataset:
         # Should have called _download_file for each depmap file
         assert mock_dl.call_count == len(DATASETS["depmap"]["files"])
 
-    @patch("ct.data.downloader._download_file")
-    @patch("ct.data.downloader.Config")
+    @patch("data.downloader._download_file")
+    @patch("data.downloader.Config")
     def test_prism_manual_download(self, mock_config, mock_dl, tmp_path):
         """PRISM is now manual — should not call _download_file."""
         mock_cfg = MagicMock()
@@ -181,7 +181,7 @@ class TestDownloadDataset:
 
 
 class TestDownloadAll:
-    @patch("ct.data.downloader.download_dataset")
+    @patch("data.downloader.download_dataset")
     def test_download_all_calls_auto_datasets(self, mock_download):
         """download_all should call download_dataset for each auto-downloadable dataset."""
         download_all()
@@ -190,7 +190,7 @@ class TestDownloadAll:
         called_names = {call.args[0] for call in mock_download.call_args_list}
         assert auto_names == called_names
 
-    @patch("ct.data.downloader.download_dataset")
+    @patch("data.downloader.download_dataset")
     def test_download_dataset_all_flag(self, mock_download):
         """download_dataset('all') should trigger download_all."""
         download_dataset("all")
@@ -199,7 +199,7 @@ class TestDownloadAll:
 
 
 class TestDatasetStatus:
-    @patch("ct.data.downloader.Config")
+    @patch("data.downloader.Config")
     def test_returns_table(self, mock_config, tmp_path):
         mock_cfg = MagicMock()
         mock_cfg.get.side_effect = lambda key, *args: str(tmp_path) if key == "data.base" else None
@@ -209,7 +209,7 @@ class TestDatasetStatus:
         assert table is not None
         assert table.title == "Dataset Status"
 
-    @patch("ct.data.downloader.Config")
+    @patch("data.downloader.Config")
     def test_detects_complete_dataset(self, mock_config, tmp_path):
         mock_cfg = MagicMock()
         mock_cfg.get.side_effect = lambda key, *args: str(tmp_path) if key == "data.base" else None
@@ -224,7 +224,7 @@ class TestDatasetStatus:
         # Table exists and has rows for all datasets
         assert len(table.rows) == len(DATASETS)
 
-    @patch("ct.data.downloader.Config")
+    @patch("data.downloader.Config")
     def test_includes_l1000_dataset(self, mock_config, tmp_path):
         mock_cfg = MagicMock()
         mock_cfg.get.side_effect = lambda key, *args: str(tmp_path) if key == "data.base" else None

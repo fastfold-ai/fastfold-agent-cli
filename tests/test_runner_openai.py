@@ -5,8 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from ct.agent.mcp_server import RuntimeToolSpec
-from ct.agent.runner import (
+from agent.mcp_server import RuntimeToolSpec
+from agent.runner import (
     AgentRunner,
     _format_openai_error,
     _openai_temperature_kwargs,
@@ -86,10 +86,10 @@ def test_runner_openai_tool_loop_and_summary():
     ]
 
     with patch("openai.OpenAI", return_value=client) as openai_ctor, patch(
-        "ct.agent.mcp_server.create_ct_tool_runtime",
+        "agent.mcp_server.create_ct_tool_runtime",
         return_value=(tool_specs, executor, None, ["chemistry.pubchem_lookup"], []),
-    ), patch("ct.agent.system_prompt.build_system_prompt", return_value="sys prompt"), patch(
-        "ct.ui.traces.TraceRenderer"
+    ), patch("agent.system_prompt.build_system_prompt", return_value="sys prompt"), patch(
+        "ui.traces.TraceRenderer"
     ):
         result = runner.run("test query", context={})
 
@@ -128,10 +128,10 @@ def test_runner_openai_plan_preview_rejection_returns_error():
     client.chat.completions.create.return_value = _fake_response("Plan: 1) do X 2) do Y", tool_calls=[])
 
     with patch("openai.OpenAI", return_value=client), patch(
-        "ct.agent.mcp_server.create_ct_tool_runtime",
+        "agent.mcp_server.create_ct_tool_runtime",
         return_value=([], _FakeExecutor(), None, [], []),
-    ), patch("ct.agent.system_prompt.build_system_prompt", return_value="sys prompt"), patch(
-        "ct.ui.traces.TraceRenderer"
+    ), patch("agent.system_prompt.build_system_prompt", return_value="sys prompt"), patch(
+        "ui.traces.TraceRenderer"
     ), patch("builtins.input", return_value="n"):
         result = runner.run("test query", context={}, progress_callback=lambda *_a, **_k: None)
 
@@ -218,10 +218,10 @@ def test_runner_openai_caps_tool_payload_to_provider_limit():
     )
 
     with patch("openai.OpenAI", return_value=client), patch(
-        "ct.agent.mcp_server.create_ct_tool_runtime",
+        "agent.mcp_server.create_ct_tool_runtime",
         return_value=(tool_specs, _FakeExecutor(), None, [s.name for s in tool_specs], []),
-    ), patch("ct.agent.system_prompt.build_system_prompt", return_value="sys prompt"), patch(
-        "ct.ui.traces.TraceRenderer"
+    ), patch("agent.system_prompt.build_system_prompt", return_value="sys prompt"), patch(
+        "ui.traces.TraceRenderer"
     ):
         result = runner.run("test query", context={})
 
