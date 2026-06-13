@@ -106,7 +106,7 @@ result = {'summary': 'Plot saved'}
         assert Path(result["plots"][0]).exists()
 
     def test_write_outside_output_dir_blocked(self, sandbox, tmp_path):
-        outside = tmp_path.parent / "sandbox_outside_write.txt"
+        outside = Path.home() / ".fastfold_sandbox_blocked_write_test.txt"
         code = f"""
 with open(r"{outside}", "w") as f:
     f.write("blocked")
@@ -130,16 +130,19 @@ result = {{"summary": "write ok"}}
         assert inside.read_text() == "ok"
 
     def test_read_outside_allowed_dirs_blocked(self, sandbox, tmp_path):
-        outside = tmp_path.parent / "sandbox_outside_read.txt"
+        outside = Path.home() / ".fastfold_sandbox_blocked_read_test.txt"
         outside.write_text("secret")
-        code = f"""
+        try:
+            code = f"""
 with open(r"{outside}", "r") as f:
     txt = f.read()
 result = {{"summary": txt}}
 """
-        result = sandbox.execute(code)
-        assert result["error"] is not None
-        assert "restricted" in result["error"].lower()
+            result = sandbox.execute(code)
+            assert result["error"] is not None
+            assert "restricted" in result["error"].lower()
+        finally:
+            outside.unlink(missing_ok=True)
 
 
 class TestDataInjection:
