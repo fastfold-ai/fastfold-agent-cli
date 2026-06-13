@@ -1,7 +1,7 @@
-"""Optional live API smoke checks for schema drift detection.
+"""Optional live data-source smoke checks for schema drift detection.
 
-These tests hit real public endpoints and are skipped by default.
-Enable in CI with: RUN_API_SMOKE=1 (legacy: CT_RUN_API_SMOKE=1).
+These tests call real public databases (PubMed, OpenAlex, UniProt, etc.) and are
+skipped by default. Enable with: RUN_DATA_SMOKE=1 (legacy: RUN_API_SMOKE=1).
 """
 
 from __future__ import annotations
@@ -24,12 +24,12 @@ from tools.target import disease_association, druggability, expression_profile
 from tools.translational import biomarker_readiness
 
 
-_RUN_SMOKE = env_flag("RUN_API_SMOKE", "CT_RUN_API_SMOKE")
-_STRICT_SMOKE = env_flag("API_SMOKE_STRICT", "CT_API_SMOKE_STRICT")
+_RUN_SMOKE = env_flag("RUN_DATA_SMOKE", "RUN_API_SMOKE", "CT_RUN_API_SMOKE")
+_STRICT_SMOKE = env_flag("DATA_SMOKE_STRICT", "API_SMOKE_STRICT", "CT_API_SMOKE_STRICT")
 
 pytestmark = [
-    pytest.mark.api_smoke,
-    pytest.mark.skipif(not _RUN_SMOKE, reason="Set RUN_API_SMOKE=1 to run live smoke tests"),
+    pytest.mark.data_smoke,
+    pytest.mark.skipif(not _RUN_SMOKE, reason="Set RUN_DATA_SMOKE=1 to run live data source smoke tests"),
 ]
 
 

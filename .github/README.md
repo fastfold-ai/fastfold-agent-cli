@@ -6,12 +6,12 @@
 |-----|----------------|--------------|
 | **Tests & coverage** | No | `compileall` + import smoke, CLI smoke (`--version`, `skills list`, `tool list`), `pytest` + coverage, knowledge benchmark, wheel build/install smoke |
 | **Docker image** | No | `docker compose build` + CLI smoke (`--version`, `skills list`, `tool list`) |
+| **Live data source smoke** | No | Hits public databases (PubMed, OpenAlex, UniProt, ClinicalTrials.gov, …). `continue-on-error: true` so external drift does not block merges. |
 
-## Scheduled / manual jobs
+## Manual / tag-triggered jobs
 
 | Job | Needs secrets? | When |
 |-----|----------------|--------------|
-| **Live API smoke** | No | Daily cron + **Actions → CI → Run workflow**. Hits public APIs (PubMed, OpenAlex, UniProt, …). `continue-on-error: true` so nightly drift does not block merges. |
 | **Publish Docker image** | `DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN` | On `v*.*.*` git tags + **Actions → Publish Docker image → Run workflow**. Pushes `fastfold/fastfold-agent-cli:latest` and `:VERSION` for `linux/amd64` + `linux/arm64`. |
 
 ## Optional repository secrets
@@ -34,14 +34,14 @@
 
 | Variable | Purpose |
 |----------|---------|
-| `RUN_API_SMOKE=1` | Enable live public API smoke tests (`tests/test_api_smoke.py`) |
-| `API_SMOKE_STRICT=1` | Fail on degraded API responses (default in scheduled smoke job) |
+| `RUN_DATA_SMOKE=1` | Enable live public data-source smoke tests (`tests/test_api_smoke.py`) |
+| `DATA_SMOKE_STRICT=1` | Fail on degraded responses (default in CI smoke job) |
 | `RUN_E2E_MATRIX=1` | Enable live LLM prompt matrix (requires `ANTHROPIC_API_KEY`) |
 | `E2E_MATRIX_LIMIT` | Max prompts in matrix (default: 10) |
 | `E2E_MATRIX_STRICT` | Strict assertions in matrix mode |
 | `E2E_MATRIX_MAX_FAILED_QUERIES` | Max allowed failures in strict mode |
 
-Legacy `CT_*` names (`CT_RUN_API_SMOKE`, `CT_API_SMOKE_STRICT`, etc.) still work for smoke tests.
+Legacy names (`RUN_API_SMOKE`, `API_SMOKE_STRICT`, `CT_*`) still work.
 
 ## Run checks locally
 
@@ -56,7 +56,7 @@ fastfold skills list
 fastfold tool list | head -20
 
 # Unit + coverage (same as CI)
-pytest tests/ -q -m "not api_smoke and not integration" \
+pytest tests/ -q -m "not data_smoke and not integration" \
   --cov=agent --cov=api --cov=cli --cov=data --cov=kb --cov=models \
   --cov=reports --cov=skills --cov=tools --cov=ui \
   --cov-report=xml:coverage.xml --cov-fail-under=55
@@ -66,8 +66,8 @@ fastfold knowledge benchmark --strict --min-pass-rate 0.9
 # Wheel build smoke
 pip install build && python -m build --outdir dist/ && pip install dist/*.whl
 
-# Live API smoke
-RUN_API_SMOKE=1 API_SMOKE_STRICT=1 pytest tests/test_api_smoke.py -q
+# Live data source smoke (PubMed, UniProt, OpenAlex, …)
+RUN_DATA_SMOKE=1 DATA_SMOKE_STRICT=1 pytest tests/test_api_smoke.py -q
 
 # Docker smoke
 docker compose build

@@ -2313,7 +2313,7 @@ def release_check_cmd(
     if run_tests:
         ok = _run_step_command(
             "Local test suite",
-            ["pytest", "-q", "tests", "-m", "not api_smoke and not e2e and not e2e_matrix"],
+            ["pytest", "-q", "tests", "-m", "not data_smoke and not e2e and not e2e_matrix"],
         )
         failed = failed or (not ok)
 
@@ -2354,10 +2354,10 @@ def release_check_cmd(
 
     if include_live:
         smoke_env = dict(os.environ)
-        smoke_env["RUN_API_SMOKE"] = "1"
-        smoke_env.setdefault("API_SMOKE_STRICT", "1")
+        smoke_env["RUN_DATA_SMOKE"] = "1"
+        smoke_env.setdefault("DATA_SMOKE_STRICT", "1")
         smoke_ok = _run_step_command(
-            "Live API smoke checks",
+            "Live data source smoke checks",
             ["pytest", "-q", "tests/test_api_smoke.py"],
             env=smoke_env,
         )
