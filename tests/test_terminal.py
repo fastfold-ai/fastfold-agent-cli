@@ -743,6 +743,169 @@ class TestTerminalMethods:
             terminal._run_upgrade()
         mock_exec.assert_called_once_with(console_obj=terminal.console, cfg=terminal.session.config)
 
+    def test_run_routes_commands_and_queries(self, terminal):
+        terminal.console.width = 80
+        terminal._prompt_session = MagicMock()
+        terminal._prompt_session.prompt.side_effect = [
+            "/ help",
+            "/interrupt --force",
+            "/skills-add owner/repo@skills/x",
+            "/skills-find kinase",
+            "/skills-remove x",
+            "/skills",
+            "/model",
+            "/settings",
+            "/plan",
+            "/usage",
+            "/tasks refresh",
+            "/upgrade",
+            "/copy",
+            "/export out.md",
+            "/notebook out.ipynb",
+            "/compact concise summary",
+            "/new",
+            "/sessions",
+            "/resume abc",
+            "/agents 2 profile crbn",
+            "/case-study list",
+            "!echo hello",
+            "continue",
+            "find degraders",
+            "/quit",
+        ]
+        terminal._current_placeholder = MagicMock(return_value="placeholder")
+        terminal._has_active_query = MagicMock(return_value=False)
+        terminal._advance_suggestion = MagicMock()
+        terminal._request_interrupt = MagicMock(return_value=True)
+        terminal._print_exit_with_resume_hint = MagicMock()
+        terminal._show_help = MagicMock()
+        terminal._add_skill = MagicMock()
+        terminal._find_skills = MagicMock()
+        terminal._remove_skill = MagicMock()
+        terminal._show_skills = MagicMock()
+        terminal._switch_model = MagicMock()
+        terminal._change_settings = MagicMock()
+        terminal._toggle_plan_mode = MagicMock()
+        terminal._show_usage = MagicMock()
+        terminal._show_tasks = MagicMock()
+        terminal._run_upgrade = MagicMock()
+        terminal._copy_last_response = MagicMock()
+        terminal._export_session = MagicMock()
+        terminal._export_notebook = MagicMock()
+        terminal._compact_context = MagicMock()
+        terminal._new_session = MagicMock()
+        terminal._list_sessions = MagicMock()
+        terminal._resume_session = MagicMock()
+        terminal._handle_agents_command = MagicMock()
+        terminal._handle_case_study_command = MagicMock()
+        terminal._run_shell = MagicMock()
+        terminal._submit_query = MagicMock()
+        terminal.agent = MagicMock()
+        terminal.agent._last_plan = None
+        terminal.session.config.get.side_effect = lambda key, default=None: default
+
+        fake_loop = MagicMock()
+        with patch("ui.terminal.patch_stdout"), patch("agent.loop.AgentLoop", return_value=fake_loop):
+            terminal.run(initial_context={"source": "test"})
+
+        terminal._show_help.assert_called_once()
+        terminal._request_interrupt.assert_called_once_with(force=True)
+        terminal._add_skill.assert_called_once_with("owner/repo@skills/x")
+        terminal._find_skills.assert_called_once_with("kinase")
+        terminal._remove_skill.assert_called_once_with("x")
+        terminal._show_skills.assert_called_once()
+        terminal._switch_model.assert_called_once()
+        terminal._change_settings.assert_called_once()
+        terminal._toggle_plan_mode.assert_called_once()
+        terminal._show_usage.assert_called_once()
+        terminal._show_tasks.assert_called_once_with(force_refresh=True)
+        terminal._run_upgrade.assert_called_once()
+        terminal._copy_last_response.assert_called_once()
+        terminal._export_session.assert_called_once_with("out.md")
+        terminal._export_notebook.assert_called_once_with("out.ipynb")
+        terminal._compact_context.assert_called_once_with("concise summary")
+        terminal._new_session.assert_called_once()
+        terminal._list_sessions.assert_called_once()
+        terminal._resume_session.assert_called_once_with("abc")
+        terminal._handle_agents_command.assert_called_once_with("/agents 2 profile crbn", {"source": "test"})
+        terminal._handle_case_study_command.assert_called_once_with("/case-study list", {"source": "test"})
+        terminal._run_shell.assert_called_once_with("echo hello")
+        assert terminal._submit_query.call_count == 1
+        terminal._print_exit_with_resume_hint.assert_called_once()
+
+    def test_run_blocks_settings_commands_when_busy(self, terminal):
+        terminal.console.width = 80
+        terminal._prompt_session = MagicMock()
+        terminal._prompt_session.prompt.side_effect = ["/model", "/quit"]
+        terminal._current_placeholder = MagicMock(return_value="placeholder")
+        terminal._has_active_query = MagicMock(return_value=True)
+        terminal._advance_suggestion = MagicMock()
+        terminal._request_interrupt = MagicMock(return_value=True)
+        terminal._print_exit_with_resume_hint = MagicMock()
+        terminal._switch_model = MagicMock()
+        terminal.session.config.get.side_effect = lambda key, default=None: default
+
+        fake_loop = MagicMock()
+        with patch("ui.terminal.patch_stdout"), patch("agent.loop.AgentLoop", return_value=fake_loop):
+            terminal.run()
+
+        terminal._switch_model.assert_not_called()
+        terminal._request_interrupt.assert_called_once_with(force=True)
+        terminal._print_exit_with_resume_hint.assert_called_once()
+
+    def test_run_resume_last_renders_history(self, terminal):
+        terminal.console.width = 80
+        terminal._prompt_session = MagicMock()
+        terminal._prompt_session.prompt.side_effect = ["/quit"]
+        terminal._current_placeholder = MagicMock(return_value="placeholder")
+        terminal._has_active_query = MagicMock(return_value=False)
+        terminal._print_exit_with_resume_hint = MagicMock()
+        terminal._restore_usage_from_trajectory = MagicMock()
+        terminal._render_resumed_history = MagicMock()
+        terminal.session.config.get.side_effect = lambda key, default=None: default
+
+        resumed = MagicMock()
+        resumed.trajectory.turns = [MagicMock()]
+        resumed.trajectory.title = "Session title"
+        resumed.trajectory.session_id = "abc12345"
+        with patch("ui.terminal.patch_stdout"), patch("agent.loop.AgentLoop.resume_latest", return_value=resumed):
+            terminal.run(resume_id="last")
+
+        terminal._restore_usage_from_trajectory.assert_called_once()
+        terminal._render_resumed_history.assert_called_once()
+        terminal._print_exit_with_resume_hint.assert_called_once()
+
+    def test_run_with_clarification_collects_answer_and_retries(self, terminal):
+        from agent.loop import Clarification, ClarificationNeeded
+
+        terminal._ensure_llm_ready_for_query = MagicMock(return_value=True)
+        terminal._prompt_session = MagicMock()
+        terminal._prompt_session.prompt.return_value = "CRBN"
+        result = MagicMock()
+        clar = Clarification(question="Which target?", missing=["target"], suggestions=["CRBN"])
+        terminal.agent = MagicMock()
+        terminal.agent.run.side_effect = [ClarificationNeeded(clar), result]
+
+        output = terminal._run_with_clarification("study @depmap signals", {"foo": "bar"})
+
+        assert output is result
+        assert terminal.agent.run.call_count == 2
+        _, second_kwargs = terminal.agent.run.call_args_list[1]
+        assert second_kwargs["progress_callback"] is None
+        assert "target" in terminal.agent.run.call_args_list[1].args[1]
+
+    def test_run_with_clarification_cancelled_returns_none(self, terminal):
+        from agent.loop import Clarification, ClarificationNeeded
+
+        terminal._ensure_llm_ready_for_query = MagicMock(return_value=True)
+        terminal._prompt_session = MagicMock()
+        terminal._prompt_session.prompt.return_value = ""
+        clar = Clarification(question="Need more details", missing=["target"])
+        terminal.agent = MagicMock()
+        terminal.agent.run.side_effect = ClarificationNeeded(clar)
+
+        assert terminal._run_with_clarification("study target", {}) is None
+
 
 class TestExtractMentions:
     """Tests for extract_mentions() — parsing @ tokens from query text."""
