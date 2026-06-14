@@ -1,6 +1,7 @@
 """Direct unit tests for cli.py pure helpers not covered elsewhere."""
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +19,7 @@ from cli import (
     _latest_report_path,
     _latest_trace_path,
     _normalize_upgrade_flavor,
+    _maybe_offer_fastfold_skills_install_after_upgrade,
     _ollama_tags_url_from_base,
     _openai_models_url_from_base,
     _parse_semver_triplet,
@@ -33,6 +35,7 @@ from cli import (
     fetch_pypi_latest_version,
     get_upgrade_available_version,
     print_banner,
+    run_interactive,
     run_query,
 )
 
@@ -174,7 +177,8 @@ class TestOpenAICompatibleSetupFetch:
         monkeypatch.setattr("cli.urllib.request.urlopen", lambda *a, **k: FakeResp())
         names = _fetch_openai_models_for_setup("http://localhost:8888/v1", api_key="sk-test")
         assert names == ["gemma:12b", "gpt-oss:20b"]
-        assert "Found 2 model" in buf.getvalue()
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", buf.getvalue())
+        assert "Found 2 model" in plain
 
     def test_fetch_ollama_tags_for_setup(self, captured_console, monkeypatch):
         console, buf = captured_console
@@ -332,6 +336,31 @@ class TestRunQueryAndBanner:
         assert "Fastfold Agent CLI" in out
         assert "tools" in out.lower() or "2" in out
 
+    def test_run_interactive_offers_missing_skills_prompt_on_startup(
+        self, captured_console, monkeypatch
+    ):
+        console, _ = captured_console
+        monkeypatch.setattr("cli.console", console)
+        cfg = Config(data={"llm.api_key": "sk-ant-test"})
+        monkeypatch.setattr("agent.config.Config.load", lambda: cfg)
+
+        fake_terminal = MagicMock()
+        with patch.object(cfg, "llm_preflight_issue", return_value=None), patch(
+            "cli.print_banner"
+        ), patch(
+            "cli._maybe_offer_fastfold_skills_install_after_upgrade"
+        ) as mock_offer, patch(
+            "cli.InteractiveTerminal", return_value=fake_terminal
+        ):
+            run_interactive({}, None, None, False)
+
+        mock_offer.assert_called_once_with(
+            ui=console,
+            install_missing=False,
+            prompt_if_missing=True,
+        )
+        fake_terminal.run.assert_called_once()
+
 
 class TestEntryRouting:
     def test_entry_help_alias(self, monkeypatch):
@@ -356,3 +385,27 @@ class TestEntryRouting:
         monkeypatch.setattr("sys.argv", ["fastfold", "--version"])
         entry()
         assert called["args"] == ["run", "--version"]
+
+
+class TestUpgradeSkillsPrompt:
+    def test_noninteractive_missing_skills_shows_hint(self, captured_console, monkeypatch):
+        console, buf = captured_console
+        monkeypatch.setattr("agent.skills.user_installed_skill_names", lambda: [])
+        monkeypatch.setattr("cli.sys.stdin", MagicMock(isatty=lambda: False))
+        monkeypatch.setattr("cli.sys.stdout", MagicMock(isatty=lambda: False))
+
+        _maybe_offer_fastfold_skills_install_after_upgrade(ui=console)
+        assert "No official Fastfold skills detected" in buf.getvalue()
+
+    def test_install_missing_skills_flag_installs_catalog(self, captured_console, monkeypatch):
+        console, _ = captured_console
+        monkeypatch.setattr("agent.skills.user_installed_skill_names", lambda: [])
+        called = []
+        monkeypatch.setattr("cli._install_skill_sources", lambda sources: called.extend(sources))
+
+        _maybe_offer_fastfold_skills_install_after_upgrade(
+            ui=console,
+            install_missing=True,
+            prompt_if_missing=False,
+        )
+        assert called == ["fastfold-ai/skills"]

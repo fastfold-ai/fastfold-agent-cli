@@ -1,7 +1,7 @@
 """Tests for CLI argument parsing and subcommand dispatch."""
 
 import subprocess
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import pytest
 from typer.testing import CliRunner
@@ -436,7 +436,27 @@ def test_upgrade_subcommand_invokes_execute_upgrade():
     ) as mock_exec:
         result = runner.invoke(app, ["upgrade"])
     assert result.exit_code == 0
-    mock_exec.assert_called_once()
+    mock_exec.assert_called_once_with(
+        console_obj=ANY,
+        cfg=cfg,
+        install_missing_skills=False,
+        prompt_missing_skills=True,
+    )
+
+
+def test_upgrade_subcommand_forwards_skill_flags():
+    cfg = Config(data={})
+    with patch("agent.config.Config.load", return_value=cfg), patch(
+        "cli.execute_upgrade", return_value=True
+    ) as mock_exec:
+        result = runner.invoke(app, ["upgrade", "--install-skills", "--skip-skills-prompt"])
+    assert result.exit_code == 0
+    mock_exec.assert_called_once_with(
+        console_obj=ANY,
+        cfg=cfg,
+        install_missing_skills=True,
+        prompt_missing_skills=False,
+    )
 
 
 def test_config_set_agent_profile_applies_preset():

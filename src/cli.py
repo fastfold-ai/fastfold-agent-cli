@@ -276,7 +276,75 @@ def get_upgrade_available_version(current_version: str = __version__) -> Optiona
     return latest if is_newer_version(latest, current_version) else None
 
 
-def execute_upgrade(console_obj: Optional[Console] = None, cfg=None) -> bool:
+_FASTFOLD_CORE_SKILL_NAMES = {
+    "fold",
+    "protein_design_boltzgen",
+    "md_openmm_calvados",
+    "md_openmmdl",
+    "slack_report",
+}
+
+
+def _has_fastfold_skills_installed() -> bool:
+    """Return True when at least one official Fastfold skill is installed."""
+    from agent.skills import user_installed_skill_names
+
+    installed = set(user_installed_skill_names())
+    return bool(installed.intersection(_FASTFOLD_CORE_SKILL_NAMES))
+
+
+def _maybe_offer_fastfold_skills_install_after_upgrade(
+    *,
+    ui: Console,
+    install_missing: bool = False,
+    prompt_if_missing: bool = True,
+) -> None:
+    """Offer to install official Fastfold skills after a successful upgrade."""
+    if _has_fastfold_skills_installed():
+        return
+
+    if install_missing:
+        ui.print("\n[cyan]Installing official Fastfold skills...[/cyan]")
+        _install_skill_sources(["fastfold-ai/skills"])
+        return
+
+    if not prompt_if_missing:
+        return
+
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    if not interactive:
+        ui.print(
+            "\n  [dim]No official Fastfold skills detected. "
+            "Install them with `fastfold skills add fastfold-ai/skills`.[/dim]"
+        )
+        return
+
+    try:
+        answer = input(
+            "\n  Install official Fastfold skills now? [Y/n] "
+        ).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        ui.print("\n  [dim]Skipped Fastfold skills install.[/dim]")
+        return
+
+    if answer in {"n", "no"}:
+        ui.print(
+            "  [dim]Skipped. Add later with "
+            "`fastfold skills add fastfold-ai/skills`.[/dim]"
+        )
+        return
+
+    ui.print("  [cyan]Installing official Fastfold skills...[/cyan]")
+    _install_skill_sources(["fastfold-ai/skills"])
+
+
+def execute_upgrade(
+    console_obj: Optional[Console] = None,
+    cfg=None,
+    *,
+    install_missing_skills: bool = False,
+    prompt_missing_skills: bool = True,
+) -> bool:
     """Run uv tool upgrade with persisted (or fallback) install flavor."""
     ui = console_obj or console
     flavor = resolve_upgrade_flavor(cfg=cfg, persist=True)
@@ -306,6 +374,11 @@ def execute_upgrade(console_obj: Optional[Console] = None, cfg=None) -> bool:
         return False
 
     ui.print("[green]Upgrade complete.[/green] Restart `fastfold` to use the new version.")
+    _maybe_offer_fastfold_skills_install_after_upgrade(
+        ui=ui,
+        install_missing=install_missing_skills,
+        prompt_if_missing=prompt_missing_skills,
+    )
     return True
 
 
@@ -394,12 +467,28 @@ def keys_cmd():
 
 
 @app.command("upgrade")
-def upgrade_cmd():
+def upgrade_cmd(
+    install_skills: bool = typer.Option(
+        False,
+        "--install-skills",
+        help="Auto-install official Fastfold skills if missing",
+    ),
+    skip_skills_prompt: bool = typer.Option(
+        False,
+        "--skip-skills-prompt",
+        help="Skip the post-upgrade Fastfold skills prompt",
+    ),
+):
     """Upgrade fastfold-agent-cli with uv tool install --upgrade."""
     from agent.config import Config
 
     cfg = Config.load()
-    ok = execute_upgrade(console_obj=console, cfg=cfg)
+    ok = execute_upgrade(
+        console_obj=console,
+        cfg=cfg,
+        install_missing_skills=install_skills,
+        prompt_missing_skills=not skip_skills_prompt,
+    )
     if not ok:
         raise typer.Exit(code=1)
 
@@ -3186,6 +3275,11 @@ def run_interactive(
 
     _pin_startup_to_bottom()
     print_banner()
+    _maybe_offer_fastfold_skills_install_after_upgrade(
+        ui=console,
+        install_missing=False,
+        prompt_if_missing=True,
+    )
 
     console.print()
 

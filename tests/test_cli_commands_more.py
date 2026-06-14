@@ -93,11 +93,11 @@ class TestTraceDiagnoseJson:
 class TestUpgradeCommand:
     def test_get_upgrade_available_version_newer(self):
         with patch("cli.fetch_pypi_latest_version", return_value="9.9.9"):
-            assert get_upgrade_available_version("0.0.51") == "9.9.9"
+            assert get_upgrade_available_version("0.0.52") == "9.9.9"
 
     def test_get_upgrade_available_version_none_when_same(self):
-        with patch("cli.fetch_pypi_latest_version", return_value="0.0.51"):
-            assert get_upgrade_available_version("0.0.51") is None
+        with patch("cli.fetch_pypi_latest_version", return_value="0.0.52"):
+            assert get_upgrade_available_version("0.0.52") is None
 
     def test_upgrade_cmd_success(self):
         cfg = Config(data={"install.uv_flavor": "all"})

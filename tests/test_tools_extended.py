@@ -41,10 +41,14 @@ class TestBiomarkerMutationSensitivity:
         assert result["n_tested"] >= 1
 
     @patch("tools._compound_resolver.resolve_compound", side_effect=lambda x, **k: x)
+    @patch("data.loaders.load_model_metadata")
+    @patch("data.loaders.load_mutations")
     @patch("data.loaders.load_prism")
-    def test_compound_not_found(self, mock_prism, _resolve):
+    def test_compound_not_found(self, mock_prism, mock_mut, mock_model, _resolve):
         from tools.biomarker import mutation_sensitivity
 
+        mock_model.return_value = pd.DataFrame({"CCLEName": [], "ModelID": []})
+        mock_mut.return_value = pd.DataFrame(index=[])
         mock_prism.return_value = pd.DataFrame(columns=["pert_name", "pert_dose", "ccle_name", "LFC"])
         result = mutation_sensitivity(compound_id="missing_cpd")
         assert "error" in result

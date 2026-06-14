@@ -118,6 +118,22 @@ class TestQueryEndpoint:
         call_kwargs = mock_engine.query_parquet.call_args.kwargs
         assert call_kwargs["filters"]["molecule_chembl_id"] == "CHEMBL25"
 
+    def test_query_compound_filter_falls_back_to_compound_column(self, client):
+        test_client, mock_engine, _ = client
+        with patch("api.app.DATASET_REGISTRY", {
+            "custom": {
+                "path_pattern": "custom/*.parquet",
+                "filterable": ["gene"],
+            }
+        }):
+            resp = test_client.post(
+                "/query",
+                json={"dataset": "custom", "compound": "cmpd-x"},
+            )
+        assert resp.status_code == 200
+        call_kwargs = mock_engine.query_parquet.call_args.kwargs
+        assert call_kwargs["filters"]["compound"] == "cmpd-x"
+
 
 class TestGeneSummary:
     def test_gene_summary_success(self, client):
@@ -144,8 +160,19 @@ class TestGeneSummary:
         resp = test_client.get("/datasets/unknown/gene/TP53")
         assert resp.status_code == 404
 
+    def test_gene_summary_file_not_found(self, client):
+        test_client, mock_engine, _ = client
+        mock_engine.query_parquet.side_effect = FileNotFoundError("missing")
+        resp = test_client.get("/datasets/perturbatlas/gene/TP53")
+        assert resp.status_code == 503
+
 
 class TestCompoundSummary:
+    def test_compound_summary_unknown_dataset(self, client):
+        test_client, _, _ = client
+        resp = test_client.get("/datasets/unknown/compound/aspirin")
+        assert resp.status_code == 404
+
     def test_compound_summary_success(self, client):
         test_client, mock_engine, _ = client
         mock_engine.query_parquet.return_value = [{"compound": "aspirin"}]
@@ -164,3 +191,9 @@ class TestCompoundSummary:
         mock_engine.query_parquet.side_effect = ValueError("bad column")
         resp = test_client.get("/datasets/perturbatlas/compound/aspirin")
         assert resp.status_code == 400
+
+    def test_compound_summary_file_not_found(self, client):
+        test_client, mock_engine, _ = client
+        mock_engine.query_parquet.side_effect = FileNotFoundError("missing")
+        resp = test_client.get("/datasets/perturbatlas/compound/aspirin")
+        assert resp.status_code == 503
