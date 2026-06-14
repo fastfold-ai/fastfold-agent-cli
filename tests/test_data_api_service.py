@@ -1,268 +1,169 @@
-"""End-to-end tests for the ct Data API service.
+"""Data API tests that run without requiring /mnt2/bronze."""
 
-All tests run against real data at CT_DATA_ROOT=/mnt2/bronze.
-No mocks — every test hits the real DuckDB engine and real files.
-"""
-
-import os
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+import gzip
 
 import pytest
 
-try:
-    import fastapi
-    import duckdb
-    HAS_API_DEPS = True
-except ImportError:
-    HAS_API_DEPS = False
+pytest.importorskip("fastapi")
+pytest.importorskip("duckdb")
+from fastapi.testclient import TestClient
 
-DATA_ROOT = "/mnt2/bronze"
-
-pytestmark = [
-    pytest.mark.skipif(not HAS_API_DEPS, reason="fastapi/duckdb not installed"),
-    pytest.mark.skipif(
-        not os.path.isdir(os.path.join(DATA_ROOT, "perturbatlas")),
-        reason=f"Real data not found at {DATA_ROOT}",
-    ),
-]
-
-
-@pytest.fixture(autouse=True)
-def _set_data_root(monkeypatch):
-    """Point the API at real data for every test."""
-    monkeypatch.setenv("CT_DATA_ROOT", DATA_ROOT)
-    # Patch the module-level DATA_ROOT that was already imported
-    from pathlib import Path
-    import api.config as config_mod
-    import api.engine as engine_mod
-    monkeypatch.setattr(config_mod, "DATA_ROOT", Path(DATA_ROOT))
-    # Re-create the engine with the correct root
-    from api import app as app_mod
-    app_mod.engine = engine_mod.QueryEngine(data_root=Path(DATA_ROOT))
+from api.engine import QueryEngine
 
 
 @pytest.fixture
 def client():
-    """FastAPI TestClient backed by real data."""
-    from fastapi.testclient import TestClient
-    from api.app import app
-    return TestClient(app)
+    with patch("api.app.engine") as mock_engine, patch("api.app.discover_datasets") as mock_discover:
+        mock_engine.query_parquet = MagicMock(return_value=[])
+        mock_discover.return_value = {
+            "perturbatlas": {
+                "description": "PerturbAtlas test",
+                "format": "csv.gz",
+                "n_files": 2,
+                "total_size_mb": 0.1,
+                "filterable": ["gene", "perturb_id"],
+            }
+        }
+        from api.app import app
+
+        yield TestClient(app), mock_engine
 
 
-class TestHealthEndpoint:
-    def test_health_returns_ok(self, client):
-        resp = client.get("/health")
+class TestApiRoutesNoRealData:
+    def test_health_ok(self, client):
+        test_client, _ = client
+        resp = test_client.get("/health")
         assert resp.status_code == 200
         assert resp.json()["status"] == "ok"
-
-    def test_health_lists_perturbatlas(self, client):
-        resp = client.get("/health")
         assert "perturbatlas" in resp.json()["datasets"]
 
-    def test_health_reports_dataset_count(self, client):
-        resp = client.get("/health")
-        assert resp.json()["n_datasets"] >= 1
-
-
-class TestSchemaHealthEndpoint:
-    def test_schema_returns_200(self, client):
-        resp = client.get("/health/schema")
+    def test_schema_health_ok(self, client):
+        test_client, _ = client
+        with patch("api.app.validate_schema", return_value={"perturbatlas": {"status": "valid"}}):
+            resp = test_client.get("/health/schema")
         assert resp.status_code == 200
 
-    def test_perturbatlas_has_no_missing_required(self, client):
-        resp = client.get("/health/schema")
-        pa = resp.json()["datasets"]["perturbatlas"]
-        assert pa["missing_required"] == []
+    def test_schema_health_unhealthy(self, client):
+        test_client, _ = client
+        with patch("api.app.validate_schema", return_value={"perturbatlas": {"status": "invalid"}}):
+            resp = test_client.get("/health/schema")
+        assert resp.status_code == 503
 
-    def test_perturbatlas_schema_valid_or_warning(self, client):
-        resp = client.get("/health/schema")
-        pa = resp.json()["datasets"]["perturbatlas"]
-        assert pa["status"] in ("valid", "warning")
-
-    def test_perturbatlas_actual_columns_include_required(self, client):
-        resp = client.get("/health/schema")
-        pa = resp.json()["datasets"]["perturbatlas"]
-        actual = set(pa["actual_columns"])
-        for col in ["gene", "log2FoldChange", "pvalue", "padj"]:
-            assert col in actual, f"Required column {col!r} missing from actual columns"
-
-
-class TestDatasetsEndpoint:
-    def test_list_datasets_returns_list(self, client):
-        resp = client.get("/datasets")
+    def test_datasets_list(self, client):
+        test_client, _ = client
+        resp = test_client.get("/datasets")
         assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
+        payload = resp.json()
+        assert payload[0]["name"] == "perturbatlas"
+        assert "required_columns" in payload[0]
 
-    def test_perturbatlas_in_datasets(self, client):
-        resp = client.get("/datasets")
-        names = [d["name"] for d in resp.json()]
-        assert "perturbatlas" in names
-
-    def test_perturbatlas_metadata(self, client):
-        resp = client.get("/datasets")
-        ds = next(d for d in resp.json() if d["name"] == "perturbatlas")
-        assert ds["format"] == "csv.gz"
-        assert ds["n_files"] > 2000
-        assert "gene" in ds["filterable_columns"]
-        assert "gene" in ds["required_columns"]
-        assert ds["total_size_mb"] > 0
-
-
-class TestQueryEndpoint:
-    def test_query_gene_returns_data(self, client):
-        """Query TP53 (ENSG00000141510) — should exist across many experiments."""
-        resp = client.post("/query", json={
-            "dataset": "perturbatlas",
-            "gene": "ENSG00000141510",
-            "limit": 5,
-        })
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["dataset"] == "perturbatlas"
-        assert data["total_rows"] == 5
-        for row in data["data"]:
-            assert row["gene"] == "ENSG00000141510"
-
-    def test_query_returns_expected_columns(self, client):
-        resp = client.post("/query", json={
-            "dataset": "perturbatlas",
-            "gene": "ENSG00000141510",
-            "limit": 1,
-        })
-        row = resp.json()["data"][0]
-        for col in ["gene", "log2FoldChange", "pvalue", "padj", "baseMean", "perturb_id"]:
-            assert col in row, f"Expected column {col!r} in query result"
-
-    def test_query_respects_limit(self, client):
-        resp = client.post("/query", json={
-            "dataset": "perturbatlas",
-            "gene": "ENSG00000141510",
-            "limit": 3,
-        })
-        assert resp.json()["total_rows"] == 3
-
-    def test_query_with_perturb_id_filter(self, client):
-        resp = client.post("/query", json={
-            "dataset": "perturbatlas",
-            "filters": {"perturb_id": "Perturb_1"},
-            "limit": 5,
-        })
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["total_rows"] > 0
-        for row in data["data"]:
-            assert row["perturb_id"] == "Perturb_1"
-
-    def test_query_select_columns(self, client):
-        resp = client.post("/query", json={
-            "dataset": "perturbatlas",
-            "gene": "ENSG00000141510",
-            "columns": ["gene", "log2FoldChange", "padj"],
-            "limit": 2,
-        })
-        assert resp.status_code == 200
-        row = resp.json()["data"][0]
-        assert set(row.keys()) == {"gene", "log2FoldChange", "padj"}
-
-    def test_query_order_by(self, client):
-        resp = client.post("/query", json={
-            "dataset": "perturbatlas",
-            "gene": "ENSG00000141510",
-            "order_by": "log2FoldChange",
-            "limit": 10,
-        })
-        assert resp.status_code == 200
-        lfcs = [r["log2FoldChange"] for r in resp.json()["data"]]
-        assert lfcs == sorted(lfcs)
-
-    def test_query_unknown_dataset_returns_404(self, client):
-        resp = client.post("/query", json={"dataset": "nonexistent"})
+    def test_query_unknown_dataset_404(self, client):
+        test_client, _ = client
+        resp = test_client.post("/query", json={"dataset": "nope"})
         assert resp.status_code == 404
 
-    def test_query_nonexistent_gene_returns_empty(self, client):
-        resp = client.post("/query", json={
-            "dataset": "perturbatlas",
-            "gene": "FAKE_GENE_DOES_NOT_EXIST",
-            "limit": 5,
-        })
+    def test_query_success(self, client):
+        test_client, mock_engine = client
+        mock_engine.query_parquet.return_value = [{"gene": "TP53", "log2FoldChange": 1.2}]
+        resp = test_client.post("/query", json={"dataset": "perturbatlas", "gene": "TP53", "limit": 5})
         assert resp.status_code == 200
-        assert resp.json()["total_rows"] == 0
+        body = resp.json()
+        assert body["total_rows"] == 1
+        assert body["data"][0]["gene"] == "TP53"
 
+    def test_query_file_missing_503(self, client):
+        test_client, mock_engine = client
+        mock_engine.query_parquet.side_effect = FileNotFoundError("missing")
+        resp = test_client.post("/query", json={"dataset": "perturbatlas"})
+        assert resp.status_code == 503
 
-class TestGeneEndpoint:
-    def test_gene_summary_tp53(self, client):
-        resp = client.get("/datasets/perturbatlas/gene/ENSG00000141510")
+    def test_query_bad_column_400(self, client):
+        test_client, mock_engine = client
+        mock_engine.query_parquet.side_effect = ValueError("bad column")
+        resp = test_client.post("/query", json={"dataset": "perturbatlas"})
+        assert resp.status_code == 400
+
+    def test_gene_summary_happy_path(self, client):
+        test_client, mock_engine = client
+        mock_engine.query_parquet.return_value = [
+            {"gene": "TP53", "log2FoldChange": -1.0, "padj": 0.01},
+            {"gene": "TP53", "log2FoldChange": -0.5, "padj": 0.2},
+        ]
+        resp = test_client.get("/datasets/perturbatlas/gene/TP53")
         assert resp.status_code == 200
-        data = resp.json()
-        assert data["gene"] == "ENSG00000141510"
-        assert data["dataset"] == "perturbatlas"
-        assert data["n_perturbations"] > 0
-        assert isinstance(data["mean_effect"], float)
-        assert data["n_significant"] >= 0
-        assert isinstance(data["sample_data"], list)
-        assert len(data["sample_data"]) > 0
+        assert resp.json()["n_perturbations"] == 2
+        assert resp.json()["n_significant"] == 1
 
-    def test_gene_summary_unknown_dataset_returns_404(self, client):
-        resp = client.get("/datasets/nonexistent/gene/ENSG00000141510")
+    def test_gene_summary_not_found(self, client):
+        test_client, mock_engine = client
+        mock_engine.query_parquet.return_value = []
+        resp = test_client.get("/datasets/perturbatlas/gene/NOPE")
         assert resp.status_code == 404
 
-    def test_gene_summary_unknown_gene_returns_404(self, client):
-        resp = client.get("/datasets/perturbatlas/gene/FAKE_GENE_DOES_NOT_EXIST")
-        assert resp.status_code == 404
+    def test_compound_summary_uses_filterable_column(self, client):
+        test_client, mock_engine = client
+        mock_engine.query_parquet.return_value = [{"pert_name": "imatinib"}]
+        with patch.dict(
+            "api.app.DATASET_REGISTRY",
+            {
+                "perturbatlas": {
+                    "path_pattern": "x/*.csv.gz",
+                    "filterable": ["pert_name"],
+                }
+            },
+            clear=True,
+        ):
+            resp = test_client.get("/datasets/perturbatlas/compound/imatinib")
+        assert resp.status_code == 200
 
 
-class TestCompoundEndpoint:
-    def test_compound_unknown_dataset_returns_404(self, client):
-        resp = client.get("/datasets/nonexistent/compound/imatinib")
-        assert resp.status_code == 404
-
-    def test_compound_not_found_returns_404(self, client):
-        """PerturbAtlas has no compound column, so any compound query should 404."""
-        resp = client.get("/datasets/perturbatlas/compound/imatinib")
-        assert resp.status_code in (404, 400, 503)
-
-
-class TestEngineDirectly:
-    """Test the DuckDB QueryEngine directly against real files."""
-
+class TestQueryEngineLocalFiles:
     @pytest.fixture
-    def engine(self):
-        from pathlib import Path
-        from api.engine import QueryEngine
-        return QueryEngine(data_root=Path(DATA_ROOT))
+    def local_data_root(self, tmp_path):
+        root = tmp_path / "data"
+        d = root / "perturbatlas" / "Homo sapiens" / "exp1"
+        d.mkdir(parents=True, exist_ok=True)
+        p = d / "degs.csv.gz"
+        with gzip.open(p, "wt", encoding="utf-8") as f:
+            f.write("gene,perturb_id,log2FoldChange,pvalue,padj\n")
+            f.write("TP53,Perturb_1,-1.2,0.001,0.01\n")
+            f.write("BRCA1,Perturb_2,0.8,0.02,0.1\n")
+            f.write("TP53,Perturb_3,-0.7,0.03,0.2\n")
+        return root
 
-    def test_sample_columns(self, engine):
+    def test_sample_columns(self, local_data_root):
+        engine = QueryEngine(data_root=local_data_root)
         cols = engine.sample_columns("perturbatlas/Homo sapiens/*/degs.csv.gz")
         assert "gene" in cols
         assert "log2FoldChange" in cols
-        assert "pvalue" in cols
-        assert "padj" in cols
 
-    def test_query_parquet_returns_records(self, engine):
-        data = engine.query_parquet(
+    def test_query_with_filters_and_limit(self, local_data_root):
+        engine = QueryEngine(data_root=local_data_root)
+        rows = engine.query_parquet(
             file_pattern="perturbatlas/Homo sapiens/*/degs.csv.gz",
-            filters={"gene": "ENSG00000141510"},
-            limit=3,
+            filters={"gene": "TP53"},
+            limit=1,
         )
-        assert len(data) == 3
-        assert all(r["gene"] == "ENSG00000141510" for r in data)
+        assert len(rows) == 1
+        assert rows[0]["gene"] == "TP53"
 
-    def test_count(self, engine):
-        n = engine.count(
+    def test_query_with_selected_columns(self, local_data_root):
+        engine = QueryEngine(data_root=local_data_root)
+        rows = engine.query_parquet(
             file_pattern="perturbatlas/Homo sapiens/*/degs.csv.gz",
-            filters={"gene": "ENSG00000141510"},
+            columns=["gene", "padj"],
+            limit=2,
         )
-        assert n > 100  # TP53 appears in most experiments
+        assert set(rows[0].keys()) == {"gene", "padj"}
 
-    def test_query_with_no_filters_returns_data(self, engine):
-        data = engine.query_parquet(
-            file_pattern="perturbatlas/Homo sapiens/*/degs.csv.gz",
-            limit=5,
-        )
-        assert len(data) == 5
+    def test_count(self, local_data_root):
+        engine = QueryEngine(data_root=local_data_root)
+        n = engine.count("perturbatlas/Homo sapiens/*/degs.csv.gz", filters={"gene": "TP53"})
+        assert n == 2
 
-    def test_query_nonexistent_pattern_raises(self, engine):
+    def test_query_nonexistent_pattern_raises(self, local_data_root):
+        engine = QueryEngine(data_root=local_data_root)
         with pytest.raises(FileNotFoundError):
-            engine.query_parquet(
-                file_pattern="does_not_exist/*.csv.gz",
-                limit=1,
-            )
+            engine.query_parquet("missing/*.csv.gz", limit=1)

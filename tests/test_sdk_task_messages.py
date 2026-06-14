@@ -3,7 +3,14 @@
 import asyncio
 from io import StringIO
 
-from claude_agent_sdk import ResultMessage, SystemMessage
+from claude_agent_sdk import (
+    AssistantMessage,
+    ResultMessage,
+    SystemMessage,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+)
 from claude_agent_sdk.types import StreamEvent
 from rich.console import Console
 
@@ -252,6 +259,51 @@ def test_process_messages_handles_stream_event_text_delta():
     assert stream_events
     assert stream_events[-1]["streamed_chars"] == len("hello world")
     assert result["streamed_len"] == len("hello world")
+
+
+def test_process_messages_handles_assistant_tool_blocks_and_trace_events():
+    trace_events = []
+    messages = [
+        AssistantMessage(
+            content=[
+                ToolUseBlock(id="u1", name="mcp__ct-tools__target.search", input={"query": "CRBN"}),
+                ToolResultBlock(tool_use_id="u1", content=[{"type": "text", "text": "found"}], is_error=False),
+                TextBlock(text="Final answer text"),
+            ],
+            model="claude-sonnet-4-5-20250929",
+        ),
+        _success_result(),
+    ]
+
+    renderer, _ = _renderer()
+    result = asyncio.run(
+        process_messages(_aiter(messages), trace_renderer=renderer, trace_events=trace_events)
+    )
+
+    assert result["tool_calls"]
+    assert result["tool_calls"][0]["result_text"] == "found"
+    assert result["full_text"] == ["Final answer text"]
+    event_types = [e.get("type") for e in trace_events]
+    assert "tool_start" in event_types
+    assert "tool_result" in event_types
+    assert "text" in event_types
+
+
+def test_process_messages_legacy_activity_callback_fallback():
+    seen = []
+
+    def _legacy_only(text):
+        seen.append(text)
+
+    messages = [
+        AssistantMessage(
+            content=[TextBlock(text="A concise summary from assistant.")],
+            model="claude-sonnet-4-5-20250929",
+        ),
+        _success_result(),
+    ]
+    asyncio.run(process_messages(_aiter(messages), on_activity=_legacy_only))
+    assert seen
 
 
 def test_is_warp_terminal_env_detection():

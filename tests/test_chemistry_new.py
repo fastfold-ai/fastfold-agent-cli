@@ -2,6 +2,7 @@
 
 import pytest
 from unittest.mock import patch, MagicMock
+import pandas as pd
 
 
 # ─── Retrosynthesis (heuristic) ──────────────────────────────────
@@ -321,3 +322,113 @@ class TestPharmacophore:
 
         # Different compounds, fewer common features
         assert len(result["common_features"]) < 6  # not all feature types common
+
+
+# ─── Core chemistry tools ────────────────────────────────────────
+
+class TestDescriptors:
+    def test_aspirin_descriptors(self):
+        from tools.chemistry import descriptors
+
+        result = descriptors(smiles="CC(=O)Oc1ccccc1C(=O)O")
+        assert "error" not in result
+        assert result["properties"]["lipinski_violations"] == 0
+        assert "MW=" in result["summary"]
+
+    def test_invalid_smiles(self):
+        from tools.chemistry import descriptors
+
+        result = descriptors(smiles="NOT_A_SMILES")
+        assert "error" in result
+
+    def test_extract_smiles_from_dict(self):
+        from tools.chemistry import _extract_smiles
+
+        smiles = _extract_smiles({"canonical_smiles": "CCO"})
+        assert smiles == "CCO"
+
+
+class TestPairwiseSimilarity:
+    def test_two_compounds(self):
+        from tools.chemistry import pairwise_similarity
+
+        result = pairwise_similarity(
+            compounds=["CCO", "CC(=O)O"],
+            fingerprint="morgan",
+        )
+        assert "error" not in result
+        assert result["n_compounds"] == 2
+        assert len(result["pairs"]) == 1
+
+    def test_requires_at_least_two(self):
+        from tools.chemistry import pairwise_similarity
+
+        result = pairwise_similarity(compounds=["CCO"])
+        assert "error" in result
+
+
+class TestSimilaritySearch:
+    def test_search_local_library(self, tmp_path):
+        from tools.chemistry import similarity_search
+
+        lib = tmp_path / "library.csv"
+        pd.DataFrame({
+            "smiles": ["CCO", "CC(=O)O", "c1ccccc1"],
+            "name": ["ethanol", "acetic", "benzene"],
+        }).to_csv(lib, index=False)
+
+        result = similarity_search(smiles="CCO", library_path=str(lib), top_n=2)
+        assert "error" not in result
+        assert result["library_size"] >= 1
+        assert result["hits"][0]["similarity"] == pytest.approx(1.0, abs=0.01)
+
+
+class TestSarAnalyze:
+    def test_sar_from_csv(self, tmp_path):
+        from tools.chemistry import sar_analyze
+
+        csv_path = tmp_path / "compounds.csv"
+        pd.DataFrame({
+            "smiles": ["CCO", "CCCO", "CCCCO"],
+            "activity": [1.0, 2.0, 3.0],
+        }).to_csv(csv_path, index=False)
+
+        result = sar_analyze(compounds_path=str(csv_path), activity_col="activity")
+        assert "error" not in result
+        assert result["n_compounds"] == 3
+
+
+class TestPubchemLookup:
+    @patch("tools.chemistry.request")
+    def test_lookup_by_name(self, mock_request):
+        from tools.chemistry import pubchem_lookup
+
+        lookup_resp = MagicMock(status_code=200)
+        lookup_resp.json.return_value = {
+            "PC_Compounds": [{"id": {"id": {"cid": 2244}}}],
+        }
+        props_resp = MagicMock(status_code=200)
+        props_resp.json.return_value = {
+            "PropertyTable": {
+                "Properties": [{
+                    "CID": 2244,
+                    "CanonicalSMILES": "CC(=O)Oc1ccccc1C(=O)O",
+                    "MolecularFormula": "C9H8O4",
+                    "MolecularWeight": "180.16",
+                }]
+            }
+        }
+        syn_resp = MagicMock(status_code=200)
+        syn_resp.json.return_value = {
+            "InformationList": {"Information": [{"Synonym": ["aspirin", "ASA"]}]}
+        }
+        mock_request.side_effect = [
+            (lookup_resp, None),
+            (props_resp, None),
+            (syn_resp, None),
+        ]
+
+        result = pubchem_lookup(query="aspirin", query_type="name")
+        assert "error" not in result
+        assert "aspirin" in result["summary"].lower() or "C9H8O4" in result["summary"]
+

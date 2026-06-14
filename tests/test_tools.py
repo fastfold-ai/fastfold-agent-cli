@@ -247,6 +247,63 @@ class TestSafetyLabelRiskExtract:
         assert result["risk_level"] == "UNKNOWN"
 
 
+class TestSafetyHelpers:
+    def test_gene_ids_maps_uniprot(self):
+        from tools.safety import _gene_ids, UNIPROT_TO_GENE
+
+        uid = next(iter(UNIPROT_TO_GENE))
+        gene = UNIPROT_TO_GENE[uid]
+        hits = _gene_ids({gene}, {uid})
+        assert uid in hits
+
+    def test_display_name(self):
+        from tools.safety import _display_name, UNIPROT_TO_GENE
+
+        uid = next(iter(UNIPROT_TO_GENE))
+        gene = UNIPROT_TO_GENE[uid]
+        assert gene in _display_name(uid)
+
+    def test_openfda_escape(self):
+        from tools.safety import _openfda_escape
+
+        assert _openfda_escape('drug "test"') == 'drug \\"test\\"'
+
+
+class TestSafetyAdmetPredict:
+    def test_admet_aspirin(self):
+        from tools.safety import admet_predict
+
+        result = admet_predict(smiles="CC(=O)Oc1ccccc1C(=O)O")
+        assert "error" not in result
+        assert "filters" in result
+        assert "summary" in result
+
+    def test_admet_invalid_smiles(self):
+        from tools.safety import admet_predict
+
+        result = admet_predict(smiles="INVALID")
+        assert "error" in result
+
+
+class TestSafetyDdiPredict:
+    def test_ddi_two_compounds(self):
+        from tools.safety import ddi_predict
+
+        result = ddi_predict(
+            smiles="CC(=O)Oc1ccccc1C(=O)O",
+            comedication_smiles="CCO",
+        )
+        assert "error" not in result
+        assert "cyp_profile" in result
+
+    def test_ddi_without_comedication(self):
+        from tools.safety import ddi_predict
+
+        result = ddi_predict(smiles="CCO", comedication_smiles=None)
+        assert "error" not in result
+        assert "overall_risk" in result
+
+
 # ─── Combination tools ────────────────────────────────────────
 
 class TestSynergyPredict:

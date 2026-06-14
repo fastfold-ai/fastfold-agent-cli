@@ -47,7 +47,7 @@ jobs:
             --cov=reports --cov=skills --cov=tools --cov=ui \
             --cov-report=term-missing:skip-covered \
             --cov-report=xml:coverage.xml \
-            --cov-fail-under=55
+            --cov-fail-under=80
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
