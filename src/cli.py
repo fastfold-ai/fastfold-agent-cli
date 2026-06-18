@@ -59,6 +59,22 @@ app = typer.Typer(
     no_args_is_help=False,
 )
 console = Console()
+
+
+from contextlib import contextmanager
+
+
+@contextmanager
+def spinner(message: str, *, console: Console = console):
+    """Animated status spinner for long-running operations.
+
+    Renders an animated 'dots' spinner on a TTY; on a non-interactive stream
+    Rich falls back to a single static line, so this is always safe to use.
+    """
+    with console.status(f"[green]{message}[/green]", spinner="dots"):
+        yield
+
+
 FASTFOLD_CLOUD_API_KEYS_URL = "https://cloud.fastfold.ai/api-keys"
 SETUP_PROVIDER_ORDER = ("anthropic", "openai", "openai_compatible")
 UV_INSTALL_FLAVORS = frozenset({"all", "win_build"})
@@ -276,6 +292,34 @@ def get_upgrade_available_version(current_version: str = __version__) -> Optiona
     return latest if is_newer_version(latest, current_version) else None
 
 
+def _get_cached_skills_update_safe() -> Optional[dict]:
+    """Local-only cached skills-update check for the banner (never raises)."""
+    try:
+        from agent.skills import get_cached_skills_update
+
+        return get_cached_skills_update()
+    except Exception:
+        return None
+
+
+def _start_skills_update_check() -> None:
+    """Refresh the skills-update cache in a daemon thread (no boot-path network)."""
+    import threading
+
+    def _worker():
+        try:
+            from agent.skills import refresh_skills_update_cache
+
+            refresh_skills_update_cache()
+        except Exception:
+            pass
+
+    try:
+        threading.Thread(target=_worker, daemon=True).start()
+    except Exception:
+        pass
+
+
 _FASTFOLD_CORE_SKILL_NAMES = {
     "fold",
     "protein_design_boltzgen",
@@ -354,7 +398,8 @@ def execute_upgrade(
     ui.print(f"[dim]$ {' '.join(cmd)}[/dim]")
 
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True)
+        with spinner("Upgrading via uv (this may take a moment)...", console=ui):
+            proc = subprocess.run(cmd, capture_output=True, text=True)
     except FileNotFoundError:
         ui.print("[red]`uv` command not found. Install uv first: https://docs.astral.sh/uv/[/red]")
         return False
@@ -1028,8 +1073,9 @@ def _fetch_openai_models_for_setup(base_url: str, api_key: Optional[str] = None)
         headers["Authorization"] = f"Bearer {api_key}"
     req = urllib.request.Request(url=url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=4.0) as resp:
-            text = resp.read().decode("utf-8", errors="replace")
+        with spinner("Discovering models from /v1/models..."):
+            with urllib.request.urlopen(req, timeout=4.0) as resp:
+                text = resp.read().decode("utf-8", errors="replace")
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
         return []
     try:
@@ -1053,8 +1099,9 @@ def _fetch_ollama_tags_for_setup(base_url: str, api_key: Optional[str] = None) -
         headers["Authorization"] = f"Bearer {api_key}"
     req = urllib.request.Request(url=url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=4.0) as resp:
-            text = resp.read().decode("utf-8", errors="replace")
+        with spinner("Discovering models from /api/tags..."):
+            with urllib.request.urlopen(req, timeout=4.0) as resp:
+                text = resp.read().decode("utf-8", errors="replace")
     except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
         return []
     try:
@@ -1483,7 +1530,8 @@ def _install_skill_sources(sources: list[str]) -> None:
         console.print(f"  [dim]Installing {len(sources)} skill source(s) via `git` (npx not found).[/dim]")
         for src in sources:
             provider = _provider_label_for_source(src)
-            result = install_skill(src, prefer_npx=False)
+            with spinner(f"Installing {provider} ({src})..."):
+                result = install_skill(src, prefer_npx=False)
             if result.get("ok"):
                 console.print(f"  [green]\u2713[/green] [cyan]{provider}[/cyan]: {result['summary']} [dim](method: git)[/dim]")
             else:
@@ -1510,22 +1558,25 @@ def _install_skill_sources(sources: list[str]) -> None:
             g["skills"].append(skill)
 
     for target, g in groups.items():
-        result = npx_add(target, g["skills"] or None, g["whole"])
         provider = g["provider"]
+        with spinner(f"Installing {provider} ({target})..."):
+            result = npx_add(target, g["skills"] or None, g["whole"])
         if result.get("ok"):
             console.print(f"  [green]\u2713[/green] [cyan]{provider}[/cyan]: {result['summary']} [dim](method: npx skills add)[/dim]")
         else:
             # Fall back to git for this repo's sources.
             console.print(f"  [yellow]npx failed for {target}; trying git...[/yellow] [dim]{result.get('summary','')}[/dim]")
             git_src = target if g["whole"] else f"{target}@skills/{g['skills'][0]}" if g["skills"] else target
-            gres = install_skill(git_src, prefer_npx=False)
+            with spinner(f"Installing {provider} ({git_src}) via git..."):
+                gres = install_skill(git_src, prefer_npx=False)
             style = "green" if gres.get("ok") else "red"
             mark = "\u2713" if gres.get("ok") else "\u2717"
             console.print(f"  [{style}]{mark}[/{style}] [cyan]{provider}[/cyan]: {gres.get('summary','')} [dim](method: git)[/dim]")
 
     for src in fallback:
         provider = _provider_label_for_source(src)
-        result = install_skill(src, prefer_npx=False)
+        with spinner(f"Installing {provider} ({src})..."):
+            result = install_skill(src, prefer_npx=False)
         method = {"git": "git", "local": "local copy"}.get(result.get("via", ""), result.get("via", "?"))
         style = "green" if result.get("ok") else "red"
         mark = "\u2713" if result.get("ok") else "\u2717"
@@ -1697,8 +1748,8 @@ def _prompt_install_skills(skills_arg: Optional[str] = None, skip: bool = False)
         )
         return
 
-    console.print("  [cyan]Fetching the current Fastfold skills catalog...[/cyan]")
-    catalog = discover_skills()
+    with spinner("Fetching the current Fastfold skills catalog..."):
+        catalog = discover_skills()
     selected: list[str] = []
     if catalog:
         selected = _select_skills_from_catalog(catalog)
@@ -1825,7 +1876,7 @@ app.add_typer(skill_app, name="skill")  # back-compat alias
 def skill_list():
     """List all loaded agent skills."""
     from rich.table import Table
-    from agent.skills import list_skills
+    from agent.skills import list_skills, display_author, display_updated, display_version
 
     skills = list_skills()
     if not skills:
@@ -1835,10 +1886,20 @@ def skill_list():
     table = Table(title=f"Agent Skills ({len(skills)} loaded)", show_lines=False)
     table.add_column("Skill", style="bold cyan", no_wrap=True)
     table.add_column("Source", style="dim")
+    table.add_column("Author", style="dim")
+    table.add_column("Updated", style="dim")
+    table.add_column("Version", style="dim")
     table.add_column("Description", style="white")
 
     for info in skills:
-        table.add_row(info.name, info.source, info.description)
+        table.add_row(
+            info.name,
+            info.source,
+            display_author(info),
+            display_updated(info),
+            display_version(info),
+            info.description,
+        )
 
     console.print(table)
 
@@ -1853,8 +1914,10 @@ def skill_add(
     from agent.skills import install_skill
 
     provider = _provider_label_for_source(source)
-    console.print(f"  [cyan]Installing skill from[/cyan] {source} [dim]({provider})[/dim] ...")
-    result = install_skill(source)
+    with console.status(
+        f"[green]Installing skill from {source} ({provider})...[/green]", spinner="dots"
+    ):
+        result = install_skill(source)
     method = {"npx": "npx skills add", "git": "git", "local": "local copy"}.get(result.get("via", ""), result.get("via", "?"))
     if result.get("ok"):
         console.print(f"  [green]{result['summary']}[/green] [dim](provider: {provider}, method: {method})[/dim]")
@@ -1890,13 +1953,12 @@ def skill_upgrade(
         console.print("  [red]--catalog-only and --no-catalog are mutually exclusive.[/red]")
         raise typer.Exit(code=2)
 
-    console.print("  [cyan]Syncing agent skills...[/cyan]")
-
     if catalog_only:
         # Catalog sync only.
         from agent.skills import install_skill, DEFAULT_CATALOG
 
-        result = install_skill(DEFAULT_CATALOG.split("@", 1)[0])
+        with console.status("[green]Syncing Fastfold catalog...[/green]", spinner="dots"):
+            result = install_skill(DEFAULT_CATALOG.split("@", 1)[0])
         if result.get("ok"):
             console.print(f"  [green]{result['summary']}[/green]")
         else:
@@ -1904,7 +1966,12 @@ def skill_upgrade(
             raise typer.Exit(code=1)
         return
 
-    result = upgrade_skills(include_catalog=not no_catalog, include_npx=not no_npx)
+    with console.status("[green]Syncing agent skills...[/green]", spinner="dots") as status:
+        result = upgrade_skills(
+            include_catalog=not no_catalog,
+            include_npx=not no_npx,
+            progress=lambda msg: status.update(f"[green]{msg}[/green]"),
+        )
     if result["added"]:
         console.print(f"  [green]Added:[/green] {', '.join(result['added'])}")
     if result["updated"]:
@@ -1986,8 +2053,8 @@ def skill_find(
     from rich.table import Table
     from agent.skills import discover_skills
 
-    console.print("  [cyan]Searching skill catalog...[/cyan]")
-    results = discover_skills(query)
+    with spinner("Searching skill catalog..."):
+        results = discover_skills(query)
     if not results:
         console.print(
             "  [yellow]No matching skills found.[/yellow] "
@@ -3222,6 +3289,13 @@ def print_banner():
             f"[bold yellow]Upgrade available:[/] [dim]v{__version__} -> v{upgrade_version}[/dim] "
             "[dim]Run [/dim][bold #D4148E]/upgrade[/]"
         )
+    skills_update = _get_cached_skills_update_safe()
+    if skills_update:
+        meta_lines.append(
+            f"[bold yellow]Skills update available:[/] "
+            f"[dim]{skills_update['installed']} -> {skills_update['latest']}[/dim] "
+            "[dim]Run [/dim][bold #D4148E]/skills-upgrade[/]"
+        )
     meta_lines.append(f"[dim]{n_tools} tools · {n_skills} skills[/dim]")
     meta_lines.append(_random_command_tip_markup())
     meta_lines.append(_random_news_item_markup())
@@ -3280,6 +3354,9 @@ def run_interactive(
         install_missing=False,
         prompt_if_missing=True,
     )
+    # Refresh the skills-update cache in the background so the next boot's banner
+    # notice is fresh — no network on this boot's path.
+    _start_skills_update_check()
 
     console.print()
 

@@ -81,6 +81,9 @@ class TestSkillsListCommand:
         skill.name = "fold"
         skill.source = "bundled"
         skill.description = "Protein folding jobs"
+        skill.author = "fastfold-ai"
+        skill.updated_at = ""
+        skill.version = None
         with patch("agent.skills.list_skills", return_value=[skill]):
             result = runner.invoke(app, ["skills", "list"])
         assert result.exit_code == 0

@@ -50,6 +50,7 @@ SLASH_COMMANDS = {
     "/skills": "List currently loaded skills",
     "/skills-add": "Install a skill from GitHub/local path/name",
     "/skills-find": "Discover installable skills from the catalog",
+    "/skills-upgrade": "Sync the Fastfold catalog and update installed skills",
     "/skills-remove": "Remove a globally-installed skill",
     "/model": "Switch LLM model/provider interactively",
     "/settings": "Configure UI and agent preferences",
@@ -1382,6 +1383,10 @@ class InteractiveTerminal:
                 self._find_skills(cmd_rest)
                 self._advance_suggestion()
                 continue
+            if cmd_head in ("skills-upgrade", "/skills-upgrade", "skill-upgrade", "/skill-upgrade"):
+                self._upgrade_skills()
+                self._advance_suggestion()
+                continue
             if cmd_head in ("skills-remove", "/skills-remove", "skill-remove", "/skill-remove"):
                 self._remove_skill(cmd_rest)
                 self._advance_suggestion()
@@ -2075,8 +2080,9 @@ class InteractiveTerminal:
             method="GET",
         )
         try:
-            with urllib.request.urlopen(req_models, timeout=5.0) as resp:
-                payload = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
+            with self.console.status("[green]Discovering models from /v1/models...[/green]", spinner="dots"):
+                with urllib.request.urlopen(req_models, timeout=5.0) as resp:
+                    payload = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
             data = payload.get("data") if isinstance(payload, dict) else None
         except urllib.error.HTTPError as exc:
             if exc.code in {401, 403}:
@@ -2111,8 +2117,9 @@ class InteractiveTerminal:
             method="GET",
         )
         try:
-            with urllib.request.urlopen(req_tags, timeout=5.0) as resp:
-                payload = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
+            with self.console.status("[green]Discovering models from /api/tags...[/green]", spinner="dots"):
+                with urllib.request.urlopen(req_tags, timeout=5.0) as resp:
+                    payload = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
         except Exception:
             return []
 
@@ -2713,8 +2720,9 @@ class InteractiveTerminal:
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                text = resp.read().decode("utf-8", errors="replace")
+            with self.console.status("[green]Sending report to Slack...[/green]", spinner="dots"):
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    text = resp.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as e:
             text = e.read().decode("utf-8", errors="replace")
             try:
@@ -3259,7 +3267,7 @@ class InteractiveTerminal:
     def _show_skills(self):
         """List currently loaded skills in interactive mode."""
         from rich.table import Table
-        from agent.skills import list_skills
+        from agent.skills import list_skills, display_author, display_updated, display_version
 
         skills = list_skills()
         if not skills:
@@ -3272,10 +3280,20 @@ class InteractiveTerminal:
         table = Table(title=f"Loaded Skills ({len(skills)})", show_lines=False)
         table.add_column("Skill", style="bold cyan", no_wrap=True)
         table.add_column("Source", style="dim")
+        table.add_column("Author", style="dim")
+        table.add_column("Updated", style="dim")
+        table.add_column("Version", style="dim")
         table.add_column("Description", style="white")
 
         for info in skills:
-            table.add_row(info.name, info.source, info.description)
+            table.add_row(
+                info.name,
+                info.source,
+                display_author(info),
+                display_updated(info),
+                display_version(info),
+                info.description,
+            )
 
         self.console.print(table)
 
@@ -3289,8 +3307,10 @@ class InteractiveTerminal:
                 "  [yellow]Usage:[/yellow] /skills-add <github url | owner/repo@path | local path | name>"
             )
             return
-        self.console.print(f"  [cyan]Installing skill from[/cyan] {source} ...")
-        result = install_skill(source)
+        with self.console.status(
+            f"[green]Installing skill from {source}...[/green]", spinner="dots"
+        ):
+            result = install_skill(source)
         if result.get("ok"):
             self.console.print(f"  [green]{result['summary']}[/green]")
             self.console.print(
@@ -3304,8 +3324,8 @@ class InteractiveTerminal:
         from rich.table import Table
         from agent.skills import discover_skills
 
-        self.console.print("  [cyan]Searching skill catalog...[/cyan]")
-        results = discover_skills(query.strip() or None)
+        with self.console.status("[green]Searching skill catalog...[/green]", spinner="dots"):
+            results = discover_skills(query.strip() or None)
         if not results:
             self.console.print(
                 "  [yellow]No matching skills found.[/yellow] "
@@ -3320,6 +3340,30 @@ class InteractiveTerminal:
             table.add_row(r["name"], r["install_source"], r["description"])
         self.console.print(table)
         self.console.print("  [dim]Install with:[/dim] /skills-add <install source>")
+
+    def _upgrade_skills(self):
+        """Sync the Fastfold catalog and update installed skills."""
+        from agent.skills import upgrade_skills, GLOBAL_SKILLS_DIR
+
+        with self.console.status("[green]Syncing agent skills...[/green]", spinner="dots") as status:
+            result = upgrade_skills(
+                progress=lambda msg: status.update(f"[green]{msg}[/green]")
+            )
+        if result.get("added"):
+            self.console.print(f"  [green]Added:[/green] {', '.join(result['added'])}")
+        if result.get("updated"):
+            self.console.print(f"  [green]Updated:[/green] {', '.join(result['updated'])}")
+        if result.get("npx_synced"):
+            self.console.print(
+                f"  [green]npx-synced:[/green] {result['npx_synced']} project-local source(s)"
+            )
+        for source, reason in result.get("failed", []):
+            self.console.print(f"  [yellow]Failed:[/yellow] {source} — {reason}")
+        self.console.print(f"  [dim]{result['summary']}[/dim]")
+        self.console.print(f"  [dim]Location: {GLOBAL_SKILLS_DIR}[/dim]")
+        self.console.print(
+            "  [dim]Available on your next message (the system prompt reloads each turn).[/dim]"
+        )
 
     def _remove_skill(self, name: str):
         """Remove a globally-installed skill by name."""

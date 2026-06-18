@@ -87,7 +87,10 @@ class SkillInfo:
     description: str = ""
     tags: list[str] = field(default_factory=list)
     path: Optional[Path] = None  # path to SKILL.md
-    source: str = ""  # tier: global | project | bundled
+    source: str = ""  # tier: global | project | bundled | npx
+    author: str = ""  # org/owner derived from the install source
+    updated_at: str = ""  # ISO timestamp the skill was installed/updated
+    version: Optional[str] = None  # release tag (e.g. "v1.2.0") when known
 
     @property
     def directory(self) -> Optional[Path]:
@@ -134,16 +137,71 @@ def parse_skill_md(skill_md: Path) -> SkillInfo:
     return SkillInfo(name=name, description=description, tags=tags, path=skill_md)
 
 
+# ─── Display helpers ───────────────────────────────────────────────────────
+def _derive_author(source: str) -> str:
+    """Derive an author/org label from an install source string.
+
+    ``fastfold-ai/skills@skills/fold`` -> ``fastfold-ai``;
+    ``https://github.com/owner/repo/...`` -> ``owner``; local paths -> ``local``.
+    """
+    s = (source or "").strip()
+    if not s:
+        return ""
+    if s.startswith(("http://", "https://", "git@")):
+        m = re.search(r"github\.com[:/](?P<owner>[\w.-]+)/", s)
+        return m.group("owner") if m else ""
+    if s.startswith((".", "/", "~")):
+        return "local"
+    # owner/repo or owner/repo@subpath shorthand
+    if "/" in s:
+        return s.split("/", 1)[0]
+    return ""
+
+
+def display_author(info: SkillInfo) -> str:
+    """Author column value, with clean fallbacks for tiers without a source."""
+    author = getattr(info, "author", "") or ""
+    if author:
+        return author
+    if getattr(info, "source", "") == "bundled":
+        return "fastfold-ai"
+    return "-"
+
+
+def display_updated(info: SkillInfo) -> str:
+    """Updated column value (date only), or ``-`` when unknown."""
+    updated = getattr(info, "updated_at", "") or ""
+    if not updated:
+        return "-"
+    return updated[:10]  # YYYY-MM-DD from an ISO timestamp
+
+
+def display_version(info: SkillInfo) -> str:
+    """Version column value, or ``Version not available`` when unreleased.
+
+    npx-installed, bundled, and GitHub sources without a release have no tag.
+    """
+    return getattr(info, "version", None) or "Version not available"
+
+
 # ─── Discovery / loading ───────────────────────────────────────────────────
 def _scan_dir(base: Path, source: str) -> dict[str, SkillInfo]:
     out: dict[str, SkillInfo] = {}
     if not base.exists():
         return out
+    manifest = _read_manifest(base)
+    skills_meta = manifest.get("skills", {}) if isinstance(manifest, dict) else {}
     for child in sorted(base.iterdir()):
         skill_md = child / "SKILL.md"
         if child.is_dir() and skill_md.exists():
             info = parse_skill_md(skill_md)
             info.source = source
+            meta = skills_meta.get(child.name) or {}
+            if isinstance(meta, dict):
+                info.author = _derive_author(str(meta.get("source") or ""))
+                info.updated_at = str(meta.get("installed_at") or "")
+                release = meta.get("release")
+                info.version = str(release) if release else None
             # Key by directory name (canonical identifier everywhere else).
             out[child.name] = info
     return out
@@ -323,11 +381,7 @@ def _resolve_skill_dirs(root: Path, subpath: Optional[str]) -> list[Path]:
     """Find skill directories (containing SKILL.md) within a cloned repo."""
     base = (root / subpath) if subpath else root
     if not base.exists():
-        # Common convention: skills live under a 'skills/' folder.
-        if (root / "skills").exists():
-            base = root / "skills"
-        else:
-            return []
+        base = root
 
     # Single skill directly at base.
     if (base / "SKILL.md").exists():
@@ -335,7 +389,15 @@ def _resolve_skill_dirs(root: Path, subpath: Optional[str]) -> list[Path]:
 
     # Otherwise treat children (depth 1) with SKILL.md as a pack.
     found = [c for c in sorted(base.iterdir()) if c.is_dir() and (c / "SKILL.md").exists()]
-    return found
+    if found:
+        return found
+
+    # Monorepo convention: skills live under a 'skills/' folder
+    # (e.g. fastfold-ai/skills with skills/<name>/SKILL.md). Mirrors discover_skills().
+    skills_dir = base / "skills"
+    if skills_dir.exists():
+        return [c for c in sorted(skills_dir.iterdir()) if c.is_dir() and (c / "SKILL.md").exists()]
+    return []
 
 
 def _read_manifest(dest: Path) -> dict:
@@ -358,13 +420,22 @@ def _write_manifest(dest: Path, manifest: dict) -> None:
     tmp.replace(path)
 
 
-def _record_install(dest: Path, name: str, source: str, commit: Optional[str]) -> None:
+def _record_install(
+    dest: Path,
+    name: str,
+    source: str,
+    commit: Optional[str],
+    release: Optional[str] = None,
+) -> None:
     manifest = _read_manifest(dest)
-    manifest["skills"][name] = {
+    entry = {
         "source": source,
         "commit": commit,
         "installed_at": datetime.now(timezone.utc).isoformat(),
     }
+    if release:
+        entry["release"] = release
+    manifest["skills"][name] = entry
     _write_manifest(dest, manifest)
 
 
@@ -445,6 +516,155 @@ def _npx_update() -> dict:
         return {"ok": False, "summary": f"npx skills update failed: {exc}"}
 
 
+# ─── GitHub releases + update cache ─────────────────────────────────────────
+GITHUB_API = "https://api.github.com"
+SKILLS_UPDATE_CACHE = CONFIG_DIR / "skills_update_check.json"
+_UPDATE_CHECK_INTERVAL_S = 24 * 3600
+_SEMVER_TAG_RE = re.compile(r"v?(\d+)\.(\d+)\.(\d+)")
+
+
+def _owner_repo_from_source(source: str) -> Optional[str]:
+    """Extract ``owner/repo`` from a GitHub URL or shorthand (drops any @subpath)."""
+    s = (source or "").strip()
+    if not s:
+        return None
+    if s.startswith(("http://", "https://", "git@")):
+        m = re.search(r"github\.com[:/](?P<owner>[\w.-]+)/(?P<repo>[\w.-]+?)(?:\.git)?(?:/|$)", s)
+        return f"{m.group('owner')}/{m.group('repo')}" if m else None
+    m = _GITHUB_SHORTHAND_RE.match(s)
+    if m:
+        return f"{m.group('owner')}/{m.group('repo')}"
+    return None
+
+
+def _tag_tuple(tag: str) -> Optional[tuple[int, int, int]]:
+    m = _SEMVER_TAG_RE.search(str(tag or ""))
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
+def _is_newer_tag(latest: str, current: str) -> bool:
+    lt, ct = _tag_tuple(latest), _tag_tuple(current)
+    if not lt or not ct:
+        return False
+    return lt > ct
+
+
+def fetch_latest_release(owner_repo: str, *, timeout_s: float = 2.5) -> Optional[dict]:
+    """Return ``{"tag", "published_at"}`` for a repo's latest GitHub Release.
+
+    Best-effort and network-bound: returns None on any error or when the repo
+    has no releases (HTTP 404). Used to surface a version in the /skills table.
+    """
+    import urllib.error
+    import urllib.request
+
+    if not owner_repo:
+        return None
+    req = urllib.request.Request(
+        url=f"{GITHUB_API}/repos/{owner_repo}/releases/latest",
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "fastfold-agent-cli"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            data = json.loads(resp.read().decode("utf-8", errors="replace"))
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError):
+        return None
+    except Exception:  # noqa: BLE001
+        return None
+    if not isinstance(data, dict):
+        return None
+    tag = str(data.get("tag_name") or "").strip()
+    if not tag:
+        return None
+    return {"tag": tag, "published_at": str(data.get("published_at") or "")}
+
+
+def _read_update_cache() -> dict:
+    if not SKILLS_UPDATE_CACHE.exists():
+        return {}
+    try:
+        data = json.loads(SKILLS_UPDATE_CACHE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _write_update_cache(cache: dict) -> None:
+    try:
+        SKILLS_UPDATE_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = SKILLS_UPDATE_CACHE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(cache, indent=2), encoding="utf-8")
+        tmp.replace(SKILLS_UPDATE_CACHE)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Could not write skills update cache: %s", exc)
+
+
+def _installed_catalog_release(catalog: str = DEFAULT_CATALOG) -> Optional[str]:
+    """Return the release tag recorded for the installed Fastfold catalog, if any."""
+    owner_repo = catalog.split("@", 1)[0]
+    manifest = _read_manifest(GLOBAL_SKILLS_DIR)
+    for meta in (manifest.get("skills") or {}).values():
+        if not isinstance(meta, dict):
+            continue
+        src = str(meta.get("source") or "")
+        if _owner_repo_from_source(src) == owner_repo and meta.get("release"):
+            return str(meta["release"])
+    return None
+
+
+def get_cached_skills_update(catalog: str = DEFAULT_CATALOG) -> Optional[dict]:
+    """Local-only check (no network) for a newer catalog release.
+
+    Returns ``{"installed", "latest", "published_at"}`` when the cached latest
+    release is newer than the installed catalog release, else None. Safe to call
+    on the boot path.
+    """
+    cache = _read_update_cache()
+    latest = cache.get("latest_release")
+    if not latest:
+        return None
+    installed = _installed_catalog_release(catalog)
+    if not installed:
+        return None
+    if _is_newer_tag(str(latest), installed):
+        return {
+            "installed": installed,
+            "latest": str(latest),
+            "published_at": str(cache.get("latest_published_at") or ""),
+        }
+    return None
+
+
+def refresh_skills_update_cache(
+    *, catalog: str = DEFAULT_CATALOG, timeout_s: float = 2.5, force: bool = False
+) -> None:
+    """Refresh the cached latest catalog release (network). Throttled to 24h.
+
+    Designed to run in a daemon thread so the next boot reads a fresh cache
+    without any network on the boot path.
+    """
+    cache = _read_update_cache()
+    if not force:
+        checked = cache.get("checked_at")
+        if checked:
+            try:
+                last = datetime.fromisoformat(str(checked))
+                if (datetime.now(timezone.utc) - last).total_seconds() < _UPDATE_CHECK_INTERVAL_S:
+                    return
+            except Exception:  # noqa: BLE001
+                pass
+    owner_repo = catalog.split("@", 1)[0]
+    rel = fetch_latest_release(owner_repo, timeout_s=timeout_s)
+    _write_update_cache(
+        {
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "latest_release": (rel or {}).get("tag"),
+            "latest_published_at": (rel or {}).get("published_at", ""),
+        }
+    )
+
+
 def install_skill(source: str, *, dest: Optional[Path] = None, prefer_npx: bool = False) -> dict:
     """Install a skill from a GitHub URL/shorthand, local path, or catalog name.
 
@@ -487,6 +707,11 @@ def install_skill(source: str, *, dest: Optional[Path] = None, prefer_npx: bool 
     # GitHub (URL or shorthand) — native clone, fall back to npx.
     if not _git_available():
         return _npx_install(source)
+    # Best-effort: record the repo's latest GitHub Release tag so the /skills
+    # table can show a version. Repos without releases simply get no tag.
+    owner_repo = _owner_repo_from_source(source)
+    release_info = fetch_latest_release(owner_repo) if owner_repo else None
+    release_tag = release_info.get("tag") if release_info else None
     try:
         with tempfile.TemporaryDirectory(prefix="fastfold-skill-") as tmp:
             clone_root = Path(tmp) / "repo"
@@ -494,7 +719,7 @@ def install_skill(source: str, *, dest: Optional[Path] = None, prefer_npx: bool 
             skill_dirs = _resolve_skill_dirs(clone_root, subpath)
             if not skill_dirs:
                 return {"ok": False, "summary": f"No SKILL.md found in {source}."}
-            installed = _copy_skill_dirs(skill_dirs, dest, source, commit)
+            installed = _copy_skill_dirs(skill_dirs, dest, source, commit, release_tag)
         return {
             "ok": True,
             "installed": installed,
@@ -524,7 +749,13 @@ def _install_local(source: str, dest: Path) -> dict:
     }
 
 
-def _copy_skill_dirs(skill_dirs: list[Path], dest: Path, source: str, commit: Optional[str]) -> list[str]:
+def _copy_skill_dirs(
+    skill_dirs: list[Path],
+    dest: Path,
+    source: str,
+    commit: Optional[str],
+    release: Optional[str] = None,
+) -> list[str]:
     installed: list[str] = []
     for sd in skill_dirs:
         name = sd.name
@@ -532,7 +763,7 @@ def _copy_skill_dirs(skill_dirs: list[Path], dest: Path, source: str, commit: Op
         if target.exists():
             shutil.rmtree(target)
         shutil.copytree(sd, target, ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"))
-        _record_install(dest, name, source, commit)
+        _record_install(dest, name, source, commit, release)
         installed.append(name)
     return installed
 
@@ -561,6 +792,7 @@ def upgrade_skills(
     include_npx: bool = True,
     catalog: str = DEFAULT_CATALOG,
     project_root: Optional[Path] = None,
+    progress: Optional[callable] = None,
 ) -> dict:
     """Re-sync installed skills to their latest versions.
 
@@ -572,9 +804,21 @@ def upgrade_skills(
        ``npx skills add`` for each source recorded in the project-local
        ``skills-lock.json`` (skills the Skills CLI installed into .claude/skills).
 
+    ``progress`` is an optional ``callable(str)`` invoked with a human-readable
+    phase message (e.g. for driving an animated spinner). It is best-effort and
+    never affects the result.
+
     Returns a dict: added (new names), updated (refreshed names), failed (list of
     (source, reason)), and a human-readable summary.
     """
+
+    def _notify(msg: str) -> None:
+        if progress is not None:
+            try:
+                progress(msg)
+            except Exception:  # noqa: BLE001
+                pass
+
     dest = GLOBAL_SKILLS_DIR
     if project_root is None:
         project_root = Path.cwd()
@@ -585,6 +829,7 @@ def upgrade_skills(
     # 1) Sync the whole Fastfold catalog (one clone: adds new + overrides existing).
     catalog_owner_repo = catalog.split("@", 1)[0]
     if include_catalog:
+        _notify(f"Syncing catalog ({catalog_owner_repo})...")
         if _git_available() or _npx_available():
             result = install_skill(catalog_owner_repo, dest=dest)
             if result.get("ok"):
@@ -596,13 +841,17 @@ def upgrade_skills(
 
     # 2) Update other manifest-tracked skills from their recorded sources.
     manifest = _read_manifest(dest)
-    for name, meta in sorted(manifest.get("skills", {}).items()):
-        source = (meta or {}).get("source")
+    tracked = [
+        (name, (meta or {}).get("source"))
+        for name, meta in sorted(manifest.get("skills", {}).items())
+    ]
+    for name, source in tracked:
         if not source:
             continue
         # Skip skills already refreshed by the catalog sync above.
         if include_catalog and source.split("@", 1)[0] == catalog_owner_repo:
             continue
+        _notify(f"Updating {name} ({source})...")
         result = install_skill(source, dest=dest)
         if result.get("ok"):
             installed_total += result.get("installed", []) or [name]
@@ -612,11 +861,14 @@ def upgrade_skills(
     # 3) Update npx-installed skills (fastfold-owned dir) via `npx skills update`.
     npx_synced = 0
     if include_npx and _npx_available() and NPX_SKILLS_DIR.exists():
+        _notify("Updating npx-installed skills...")
         result = _npx_update()
         if result.get("ok"):
             npx_synced = len(_scan_dir(NPX_SKILLS_DIR, "npx"))
         else:
             failed.append(("npx skills update", result.get("summary", "failed")))
+
+    _notify("Finalizing...")
 
     after = set(iter_skills(project_root).keys())
     added = sorted(after - before)

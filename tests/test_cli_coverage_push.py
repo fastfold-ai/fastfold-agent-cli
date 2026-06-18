@@ -793,7 +793,11 @@ class TestDirectSkillFunctionCalls:
         }
         result = runner.invoke(app, ["skills", "upgrade", "--no-catalog"])
         assert result.exit_code == 0
-        mock_upgrade.assert_called_once_with(include_catalog=False, include_npx=True)
+        mock_upgrade.assert_called_once()
+        _, kwargs = mock_upgrade.call_args
+        assert kwargs["include_catalog"] is False
+        assert kwargs["include_npx"] is True
+        assert callable(kwargs.get("progress"))
 
     @patch("agent.skills.remove_skill")
     def test_skill_remove_direct(self, mock_remove):

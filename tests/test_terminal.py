@@ -37,6 +37,10 @@ class TestSlashCommands:
         for cmd, desc in SLASH_COMMANDS.items():
             assert isinstance(desc, str) and len(desc) > 5, f"{cmd} has no description"
 
+    def test_skills_commands_registered(self):
+        for cmd in ["/skills", "/skills-add", "/skills-find", "/skills-upgrade", "/skills-remove"]:
+            assert cmd in SLASH_COMMANDS, f"{cmd} not in SLASH_COMMANDS"
+
 
 
 class TestTerminalMethods:

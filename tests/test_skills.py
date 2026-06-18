@@ -14,6 +14,9 @@ def _isolate_npx_dir(monkeypatch, tmp_path_factory):
     root = tmp_path_factory.mktemp("npx_root")
     monkeypatch.setattr(skills_mod, "NPX_INSTALL_ROOT", root)
     monkeypatch.setattr(skills_mod, "NPX_SKILLS_DIR", root / ".claude" / "skills")
+    # Never hit the network for GitHub release lookups during tests.
+    monkeypatch.setattr(skills_mod, "fetch_latest_release", lambda *a, **k: None)
+    monkeypatch.setattr(skills_mod, "SKILLS_UPDATE_CACHE", root / "skills_update_check.json")
 
 
 def _write_skill(base: Path, name: str, description: str = "", tags: str = "") -> Path:
@@ -65,6 +68,35 @@ def test_parse_github_tree_url():
     assert sub == "skills/foo"
 
 
+# ─── Skill dir resolution ──────────────────────────────────────────────────
+def test_resolve_skill_dirs_whole_repo_under_skills_folder(tmp_path):
+    """A whole-repo clone with skills under skills/<name>/ resolves all skills."""
+    repo = tmp_path / "repo"
+    (repo / "skills").mkdir(parents=True)
+    _write_skill(repo / "skills", "fold", "Fold skill")
+    _write_skill(repo / "skills", "boltz", "Boltz skill")
+    # Repo root has non-skill files (mimics fastfold-ai/skills layout).
+    (repo / "README.md").write_text("readme", encoding="utf-8")
+
+    dirs = skills_mod._resolve_skill_dirs(repo, None)
+    names = sorted(d.name for d in dirs)
+    assert names == ["boltz", "fold"]
+
+
+def test_resolve_skill_dirs_single_skill_at_base(tmp_path):
+    base = tmp_path / "one"
+    _write_skill(base, "solo")
+    dirs = skills_mod._resolve_skill_dirs(base / "solo", None)
+    assert [d.name for d in dirs] == ["solo"]
+
+
+def test_resolve_skill_dirs_subpath(tmp_path):
+    repo = tmp_path / "repo"
+    _write_skill(repo / "skills", "fold")
+    dirs = skills_mod._resolve_skill_dirs(repo, "skills/fold")
+    assert [d.name for d in dirs] == ["fold"]
+
+
 # ─── Frontmatter parsing ───────────────────────────────────────────────────
 def test_parse_skill_md_reads_name_description_tags(tmp_path):
     d = _write_skill(tmp_path, "my-skill", "Does a thing", "a, b")
@@ -72,6 +104,79 @@ def test_parse_skill_md_reads_name_description_tags(tmp_path):
     assert info.name == "my-skill"
     assert info.description == "Does a thing"
     assert info.tags == ["a", "b"]
+
+
+# ─── Display helpers (author/updated/version) ──────────────────────────────
+def test_display_version_missing_shows_not_available():
+    info = skills_mod.SkillInfo(name="x", version=None)
+    assert skills_mod.display_version(info) == "Version not available"
+
+
+def test_display_version_with_release_tag():
+    info = skills_mod.SkillInfo(name="x", version="v1.2.0")
+    assert skills_mod.display_version(info) == "v1.2.0"
+
+
+def test_display_author_and_updated_fallbacks():
+    bundled = skills_mod.SkillInfo(name="x", source="bundled")
+    assert skills_mod.display_author(bundled) == "fastfold-ai"
+    npx = skills_mod.SkillInfo(name="y", source="npx")
+    assert skills_mod.display_author(npx) == "-"
+    assert skills_mod.display_updated(npx) == "-"
+    dated = skills_mod.SkillInfo(name="z", updated_at="2026-06-18T10:00:00+00:00")
+    assert skills_mod.display_updated(dated) == "2026-06-18"
+
+
+def test_derive_author_from_sources():
+    assert skills_mod._derive_author("fastfold-ai/skills@skills/fold") == "fastfold-ai"
+    assert skills_mod._derive_author("https://github.com/owner/repo/tree/main") == "owner"
+    assert skills_mod._derive_author("/local/path") == "local"
+
+
+def test_scan_dir_enriches_from_manifest(tmp_path):
+    base = tmp_path / "global"
+    _write_skill(base, "fold", "Fold skill")
+    skills_mod._write_manifest(
+        base,
+        {
+            "version": 1,
+            "skills": {
+                "fold": {
+                    "source": "fastfold-ai/skills@skills/fold",
+                    "installed_at": "2026-06-18T10:00:00+00:00",
+                    "release": "v1.0.0",
+                }
+            },
+        },
+    )
+    out = skills_mod._scan_dir(base, "global")
+    assert out["fold"].author == "fastfold-ai"
+    assert out["fold"].version == "v1.0.0"
+    assert out["fold"].updated_at.startswith("2026-06-18")
+
+
+# ─── Update cache (boot notice) ────────────────────────────────────────────
+def test_get_cached_skills_update_reports_newer(monkeypatch, tmp_path):
+    monkeypatch.setattr(skills_mod, "GLOBAL_SKILLS_DIR", tmp_path / "global")
+    monkeypatch.setattr(skills_mod, "_installed_catalog_release", lambda catalog=skills_mod.DEFAULT_CATALOG: "v1.0.0")
+    monkeypatch.setattr(
+        skills_mod, "_read_update_cache",
+        lambda: {"latest_release": "v1.1.0", "latest_published_at": "2026-06-18T00:00:00Z"},
+    )
+    res = skills_mod.get_cached_skills_update()
+    assert res == {"installed": "v1.0.0", "latest": "v1.1.0", "published_at": "2026-06-18T00:00:00Z"}
+
+
+def test_get_cached_skills_update_none_when_up_to_date(monkeypatch):
+    monkeypatch.setattr(skills_mod, "_installed_catalog_release", lambda catalog=skills_mod.DEFAULT_CATALOG: "v1.1.0")
+    monkeypatch.setattr(skills_mod, "_read_update_cache", lambda: {"latest_release": "v1.1.0"})
+    assert skills_mod.get_cached_skills_update() is None
+
+
+def test_get_cached_skills_update_none_without_installed_release(monkeypatch):
+    monkeypatch.setattr(skills_mod, "_installed_catalog_release", lambda catalog=skills_mod.DEFAULT_CATALOG: None)
+    monkeypatch.setattr(skills_mod, "_read_update_cache", lambda: {"latest_release": "v9.9.9"})
+    assert skills_mod.get_cached_skills_update() is None
 
 
 # ─── Tier override ─────────────────────────────────────────────────────────
@@ -377,6 +482,24 @@ def test_upgrade_skills_syncs_catalog_and_manifest(monkeypatch, tmp_path):
     assert "added" in res and "updated" in res and "failed" in res
 
 
+def test_upgrade_skills_invokes_progress_callback(monkeypatch, tmp_path):
+    monkeypatch.setattr(skills_mod, "GLOBAL_SKILLS_DIR", tmp_path)
+    monkeypatch.setattr(skills_mod, "_git_available", lambda: True)
+    monkeypatch.setattr(skills_mod, "_npx_available", lambda: False)
+    monkeypatch.setattr(skills_mod, "_read_manifest", lambda dest: {"version": 1, "skills": {}})
+    monkeypatch.setattr(
+        skills_mod, "install_skill",
+        lambda source, dest=None, prefer_npx=False: {"ok": True, "installed": [], "summary": "ok"},
+    )
+    monkeypatch.setattr(skills_mod, "iter_skills", lambda *a, **k: {})
+    messages = []
+    skills_mod.upgrade_skills(progress=messages.append)
+    assert any("Syncing catalog" in m for m in messages)
+    # A failing callback must never break the upgrade.
+    res = skills_mod.upgrade_skills(progress=lambda _m: (_ for _ in ()).throw(RuntimeError("boom")))
+    assert "summary" in res
+
+
 def test_upgrade_skills_no_catalog_only_manifest(monkeypatch, tmp_path):
     monkeypatch.setattr(skills_mod, "GLOBAL_SKILLS_DIR", tmp_path)
     monkeypatch.setattr(skills_mod, "_git_available", lambda: True)
@@ -418,7 +541,7 @@ def test_cli_skill_upgrade(monkeypatch):
 
     monkeypatch.setattr(
         "agent.skills.upgrade_skills",
-        lambda include_catalog=True, include_npx=True: {"added": ["x"], "updated": ["y"], "npx_synced": 0, "failed": [], "summary": "ok"},
+        lambda include_catalog=True, include_npx=True, progress=None: {"added": ["x"], "updated": ["y"], "npx_synced": 0, "failed": [], "summary": "ok"},
     )
     runner = CliRunner()
     result = runner.invoke(app, ["skills", "upgrade"])
@@ -518,3 +641,20 @@ def test_terminal_add_skill_invokes_install(monkeypatch):
     monkeypatch.setattr(skills_mod, "install_skill", fake_install)
     t._add_skill("owner/repo@skills/foo")
     assert captured["source"] == "owner/repo@skills/foo"
+
+
+def test_terminal_upgrade_skills_invokes_upgrade(monkeypatch):
+    from ui.terminal import InteractiveTerminal
+
+    t = InteractiveTerminal.__new__(InteractiveTerminal)
+    t.console = MagicMock()
+
+    called = {"ran": False}
+
+    def fake_upgrade(*a, **k):
+        called["ran"] = True
+        return {"added": ["fold"], "updated": [], "npx_synced": 0, "failed": [], "summary": "ok"}
+
+    monkeypatch.setattr(skills_mod, "upgrade_skills", fake_upgrade)
+    t._upgrade_skills()
+    assert called["ran"] is True
