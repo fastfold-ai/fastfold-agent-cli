@@ -7,6 +7,8 @@ import pytest
 
 from agent import skills as skills_mod
 
+_REAL_FETCH_LATEST_RELEASE = skills_mod.fetch_latest_release
+
 
 @pytest.fixture(autouse=True)
 def _isolate_npx_dir(monkeypatch, tmp_path_factory):
@@ -658,3 +660,204 @@ def test_terminal_upgrade_skills_invokes_upgrade(monkeypatch):
     monkeypatch.setattr(skills_mod, "upgrade_skills", fake_upgrade)
     t._upgrade_skills()
     assert called["ran"] is True
+
+
+def test_resolve_skill_dirs_missing_subpath_falls_back_to_root(tmp_path):
+    repo = tmp_path / "repo"
+    _write_skill(repo / "skills", "fold")
+    dirs = skills_mod._resolve_skill_dirs(repo, "not/here")
+    assert [d.name for d in dirs] == ["fold"]
+
+
+def test_resolve_skill_dirs_returns_empty_when_no_skill_layout(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    assert skills_mod._resolve_skill_dirs(repo, None) == []
+
+
+def test_record_install_persists_release_metadata(tmp_path):
+    dest = tmp_path / "global"
+    dest.mkdir(parents=True)
+    skills_mod._record_install(
+        dest,
+        "fold",
+        "fastfold-ai/skills@skills/fold",
+        "abc123",
+        release="v1.2.3",
+    )
+    manifest = skills_mod._read_manifest(dest)
+    assert manifest["skills"]["fold"]["release"] == "v1.2.3"
+
+
+def test_owner_repo_from_source_handles_empty_and_unknown():
+    assert skills_mod._owner_repo_from_source("") is None
+    assert (
+        skills_mod._owner_repo_from_source(
+            "https://github.com/fastfold-ai/skills/tree/main/skills/fold"
+        )
+        == "fastfold-ai/skills"
+    )
+    assert skills_mod._owner_repo_from_source("not-a-github-source") is None
+
+
+def test_is_newer_tag_returns_false_for_invalid_versions():
+    assert skills_mod._is_newer_tag("not-semver", "v1.0.0") is False
+    assert skills_mod._is_newer_tag("v1.1.0", "bad") is False
+
+
+def test_installed_catalog_release_skips_non_dict_manifest_entries(monkeypatch):
+    monkeypatch.setattr(
+        skills_mod,
+        "_read_manifest",
+        lambda _dest: {
+            "skills": {
+                "bad-entry": "not-a-dict",
+                "fold": {
+                    "source": "fastfold-ai/skills@skills/fold",
+                    "release": "v1.0.0",
+                },
+            }
+        },
+    )
+    assert skills_mod._installed_catalog_release() == "v1.0.0"
+
+
+def test_get_cached_skills_update_none_without_latest_release(monkeypatch):
+    monkeypatch.setattr(
+        skills_mod,
+        "_installed_catalog_release",
+        lambda catalog=skills_mod.DEFAULT_CATALOG: "v1.0.0",
+    )
+    monkeypatch.setattr(skills_mod, "_read_update_cache", lambda: {})
+    assert skills_mod.get_cached_skills_update() is None
+
+
+def test_refresh_skills_update_cache_invalid_checked_at_still_refreshes(monkeypatch):
+    monkeypatch.setattr(skills_mod, "_read_update_cache", lambda: {"checked_at": "not-a-date"})
+    monkeypatch.setattr(
+        skills_mod,
+        "fetch_latest_release",
+        lambda owner_repo, timeout_s=2.5: {
+            "tag": "v1.2.0",
+            "published_at": "2026-06-18T00:00:00Z",
+        },
+    )
+    written = {}
+    monkeypatch.setattr(skills_mod, "_write_update_cache", lambda cache: written.update(cache))
+
+    skills_mod.refresh_skills_update_cache(force=False)
+
+    assert written["latest_release"] == "v1.2.0"
+    assert written["latest_published_at"] == "2026-06-18T00:00:00Z"
+    assert "checked_at" in written
+
+
+def test_read_update_cache_invalid_json_returns_empty():
+    skills_mod.SKILLS_UPDATE_CACHE.write_text("{bad-json", encoding="utf-8")
+    assert skills_mod._read_update_cache() == {}
+
+
+def test_write_update_cache_persists_json_file():
+    payload = {"latest_release": "v2.0.0"}
+    skills_mod._write_update_cache(payload)
+    raw = skills_mod.SKILLS_UPDATE_CACHE.read_text(encoding="utf-8")
+    assert '"latest_release": "v2.0.0"' in raw
+
+
+def test_fetch_latest_release_returns_none_without_owner_repo():
+    assert _REAL_FETCH_LATEST_RELEASE("") is None
+
+
+def test_fetch_latest_release_success(monkeypatch):
+    import urllib.request
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"tag_name":"v1.2.3","published_at":"2026-06-18T00:00:00Z"}'
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_a, **_k: _Resp())
+    out = _REAL_FETCH_LATEST_RELEASE("fastfold-ai/skills", timeout_s=0.1)
+    assert out == {"tag": "v1.2.3", "published_at": "2026-06-18T00:00:00Z"}
+
+
+def test_fetch_latest_release_returns_none_on_url_error(monkeypatch):
+    import urllib.error
+    import urllib.request
+
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda *_a, **_k: (_ for _ in ()).throw(urllib.error.URLError("down")),
+    )
+    assert _REAL_FETCH_LATEST_RELEASE("fastfold-ai/skills", timeout_s=0.1) is None
+
+
+def test_fetch_latest_release_returns_none_on_non_dict_payload(monkeypatch):
+    import urllib.request
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'["not-a-dict"]'
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_a, **_k: _Resp())
+    assert _REAL_FETCH_LATEST_RELEASE("fastfold-ai/skills", timeout_s=0.1) is None
+
+
+def test_fetch_latest_release_returns_none_when_tag_missing(monkeypatch):
+    import urllib.request
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"tag_name":"", "published_at":"2026-06-18T00:00:00Z"}'
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *_a, **_k: _Resp())
+    assert _REAL_FETCH_LATEST_RELEASE("fastfold-ai/skills", timeout_s=0.1) is None
+
+
+def test_read_update_cache_missing_file_returns_empty(monkeypatch, tmp_path):
+    monkeypatch.setattr(skills_mod, "SKILLS_UPDATE_CACHE", tmp_path / "does-not-exist.json")
+    assert skills_mod._read_update_cache() == {}
+
+
+def test_write_update_cache_logs_debug_on_write_failure(monkeypatch):
+    from pathlib import Path
+
+    debug = MagicMock()
+    monkeypatch.setattr(skills_mod.logger, "debug", debug)
+    monkeypatch.setattr(Path, "write_text", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    skills_mod._write_update_cache({"latest_release": "v9.9.9"})
+    debug.assert_called_once()
+
+
+def test_installed_catalog_release_returns_none_when_no_match(monkeypatch):
+    monkeypatch.setattr(
+        skills_mod,
+        "_read_manifest",
+        lambda _dest: {
+            "skills": {
+                "other": {
+                    "source": "someone-else/skills@skills/other",
+                    "release": "v1.0.0",
+                }
+            }
+        },
+    )
+    assert skills_mod._installed_catalog_release() is None

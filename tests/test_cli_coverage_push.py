@@ -811,3 +811,116 @@ class TestDirectSkillFunctionCalls:
         with pytest.raises(typer.Exit) as exc:
             skill_info_cmd("missing")
         assert exc.value.exit_code == 1
+
+
+class TestSkillsUpdateAndInstallEdgeCases:
+    def test_get_cached_skills_update_safe_handles_import_error(self):
+        import types
+        import cli
+
+        fake_mod = types.ModuleType("agent.skills")
+        with patch.dict("sys.modules", {"agent.skills": fake_mod}):
+            assert cli._get_cached_skills_update_safe() is None
+
+    def test_start_skills_update_check_swallows_worker_import_error(self):
+        import types
+        import cli
+
+        fake_mod = types.ModuleType("agent.skills")
+
+        class _ImmediateThread:
+            def __init__(self, target=None, daemon=None):
+                self._target = target
+
+            def start(self):
+                if self._target:
+                    self._target()
+
+        with patch.dict("sys.modules", {"agent.skills": fake_mod}), patch(
+            "threading.Thread", _ImmediateThread
+        ):
+            cli._start_skills_update_check()
+
+    def test_start_skills_update_check_swallows_thread_creation_error(self):
+        import cli
+
+        with patch("threading.Thread", side_effect=RuntimeError("boom")):
+            cli._start_skills_update_check()
+
+    def test_install_skill_sources_falls_back_to_git_and_local(
+        self, monkeypatch, tmp_path
+    ):
+        import cli
+        from contextlib import nullcontext
+
+        local_skill = tmp_path / "local-skill"
+        local_skill.mkdir(parents=True)
+        install_calls = []
+
+        def _install(source, prefer_npx=False):
+            install_calls.append((source, prefer_npx))
+            return {"ok": True, "summary": "ok", "via": "git"}
+
+        monkeypatch.setattr("agent.skills._npx_available", lambda: True)
+        monkeypatch.setattr(
+            "agent.skills.npx_add",
+            lambda target, skill_names=None, whole=False: {
+                "ok": False,
+                "summary": "npx is temporarily unavailable",
+            },
+        )
+        monkeypatch.setattr("agent.skills.install_skill", _install)
+        monkeypatch.setattr("cli.spinner", lambda *args, **kwargs: nullcontext())
+
+        cli._install_skill_sources(
+            ["fastfold-ai/skills@skills/fold", str(local_skill)]
+        )
+
+        assert ("fastfold-ai/skills@skills/fold", False) in install_calls
+        assert (str(local_skill), False) in install_calls
+
+    def test_prompt_install_skills_interactive_fetches_catalog(self, monkeypatch):
+        import cli
+        from contextlib import nullcontext
+
+        discover = MagicMock(return_value=[])
+        monkeypatch.setattr("cli.sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr("cli.sys.stdout.isatty", lambda: True)
+        monkeypatch.setattr("builtins.input", MagicMock(side_effect=["y", ""]))
+        monkeypatch.setattr("agent.skills.discover_skills", discover)
+        monkeypatch.setattr("cli._select_suggested_sources", lambda: [])
+        monkeypatch.setattr("cli.spinner", lambda *args, **kwargs: nullcontext())
+        monkeypatch.setattr(
+            "cli._install_skill_sources",
+            lambda _sources: pytest.fail("No skills should be installed in this flow"),
+        )
+
+        cli._prompt_install_skills()
+        discover.assert_called_once()
+
+    def test_print_banner_includes_skills_update_notice(
+        self, captured_console, monkeypatch
+    ):
+        import cli
+
+        console, buf = captured_console
+        monkeypatch.setattr("cli.console", console)
+        cfg = Config(data={"llm.model": "claude-sonnet-4-5-20250929"})
+        monkeypatch.setattr("agent.config.Config.load", lambda: cfg)
+        monkeypatch.setattr("cli._count_installed_claude_skills", lambda: 2)
+        monkeypatch.setattr("cli._resolve_fastfold_subscription_tier", lambda _c: "pro")
+        monkeypatch.setattr("cli.get_upgrade_available_version", lambda _v: None)
+        monkeypatch.setattr(
+            "cli._get_cached_skills_update_safe",
+            lambda: {"installed": "v1.0.0", "latest": "v1.1.0"},
+        )
+        monkeypatch.setattr("cli._random_command_tip_markup", lambda: "[dim]tip[/dim]")
+        monkeypatch.setattr("cli._random_news_item_markup", lambda: "[dim]news[/dim]")
+        monkeypatch.setattr("tools.registry.list_tools", lambda: ["a", "b"])
+
+        with patch("tools.ensure_loaded"):
+            cli.print_banner()
+
+        out = buf.getvalue()
+        assert "Skills update available" in out
+        assert "/skills-upgrade" in out

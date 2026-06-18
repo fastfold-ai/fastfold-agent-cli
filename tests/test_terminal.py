@@ -1072,3 +1072,87 @@ class TestMergedCompleterDispatch:
     def test_no_trigger_yields_nothing(self, merged):
         completions = self._get_completions(merged, "analyze compound")
         assert len(completions) == 0
+
+
+class TestSkillsUpgradeTerminalPaths:
+    def _make_terminal(self):
+        with patch("ui.terminal.InteractiveTerminal.__init__", return_value=None):
+            terminal = InteractiveTerminal.__new__(InteractiveTerminal)
+        terminal.session = MagicMock()
+        terminal.session.verbose = False
+        terminal.session.current_model = "claude-sonnet-4-5-20250929"
+        terminal.session.config = MagicMock()
+        terminal.session.config.get.side_effect = lambda key, default=None: default
+        terminal.console = MagicMock()
+        terminal.console.width = 80
+        terminal._current_placeholder = MagicMock(return_value="placeholder")
+        terminal._has_active_query = MagicMock(return_value=False)
+        terminal._advance_suggestion = MagicMock()
+        terminal._request_interrupt = MagicMock(return_value=True)
+        terminal._print_exit_with_resume_hint = MagicMock()
+        return terminal
+
+    def test_run_routes_skills_upgrade_command(self):
+        terminal = self._make_terminal()
+        terminal._prompt_session = MagicMock()
+        terminal._prompt_session.prompt.side_effect = ["/skills-upgrade", "/quit"]
+        terminal._upgrade_skills = MagicMock()
+
+        fake_loop = MagicMock()
+        with patch("ui.terminal.patch_stdout"), patch(
+            "agent.loop.AgentLoop", return_value=fake_loop
+        ):
+            terminal.run()
+
+        terminal._upgrade_skills.assert_called_once()
+
+    def test_send_export_to_slack_success_payload(self, monkeypatch):
+        terminal = self._make_terminal()
+        status_cm = MagicMock()
+        status_cm.__enter__.return_value = None
+        status_cm.__exit__.return_value = False
+        terminal.console.status.return_value = status_cm
+
+        cfg = MagicMock()
+        cfg.get.return_value = "cfg-key"
+        monkeypatch.setattr("agent.config.Config.load", lambda: cfg)
+        monkeypatch.delenv("FASTFOLD_API_KEY", raising=False)
+
+        response = MagicMock()
+        response.read.return_value = b'{"ok": true, "channel_id": "C123"}'
+        response.__enter__.return_value = response
+        response.__exit__.return_value = False
+
+        with patch("urllib.request.urlopen", return_value=response) as mock_urlopen:
+            result = terminal._send_export_to_slack("# report", "report.md")
+
+        assert result["ok"] is True
+        assert result["channel_id"] == "C123"
+        mock_urlopen.assert_called_once()
+
+    def test_upgrade_skills_prints_updated_npx_and_failed_sections(self):
+        terminal = self._make_terminal()
+        status_cm = MagicMock()
+        status_cm.__enter__.return_value = status_cm
+        status_cm.__exit__.return_value = False
+        terminal.console.status.return_value = status_cm
+
+        result = {
+            "added": ["fold"],
+            "updated": ["md_openmmdl"],
+            "npx_synced": 2,
+            "failed": [("bad/source", "network error")],
+            "summary": "Sync complete",
+        }
+        with patch("agent.skills.upgrade_skills", return_value=result), patch(
+            "agent.skills.GLOBAL_SKILLS_DIR", Path("/tmp/skills")
+        ):
+            terminal._upgrade_skills()
+
+        rendered = "\n".join(
+            str(call.args[0]) for call in terminal.console.print.call_args_list if call.args
+        )
+        assert "Updated:" in rendered
+        assert "npx-synced:" in rendered
+        assert "Failed:" in rendered
+        assert "Available on your next message" in rendered
