@@ -13,7 +13,7 @@
 
 Fastfold Agent CLI is an agentic research environment for scientists in search of great tools, combining open-source skills and tools with Fastfold workflows, cloud services, and local or hosted LLMs.
 
-It is built on CellType,[1](#notes) an open-source agent for computational biology that achieves a state-of-the-art **90% on BixBench-Verified-50**.[2](#notes)
+It is built on CellType,[1](#notes) an open-source agent for computational biology that achieves a state-of-the-art **90% on BixBench-Verified-50.2**.[2](#notes)
 
 
 ### Why Fastfold CLI
@@ -433,5 +433,5 @@ MIT
 ## Notes
 
 1. Agent foundation and capabilities ("Why ct"): [github.com/celltype/celltype-agent#why-ct](https://github.com/celltype/celltype-agent#why-ct)
-2. Benchmark — 90% on BixBench-Verified-50, as reported upstream: [github.com/celltype/celltype-agent#benchmark](https://github.com/celltype/celltype-agent#benchmark)
+2. Benchmark — 90% on BixBench-Verified-50.2, as reported upstream: [github.com/celltype/celltype-agent#benchmark](https://github.com/celltype/celltype-agent#benchmark)
 
