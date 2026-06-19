@@ -1,5 +1,6 @@
 """Extra coverage for InteractiveTerminal settings/tasks helpers."""
 
+import io
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -116,12 +117,15 @@ class TestTerminalOpenAICompatibleHelpers:
             code=401,
             msg="Unauthorized",
             hdrs=None,
-            fp=None,
+            fp=io.BytesIO(b'{"error":{"message":"invalid api key","code":"invalid_api_key"}}'),
         )
         with patch("ui.terminal.urllib.request.urlopen", side_effect=err):
             names = term._fetch_openai_models("http://localhost:11434/v1", api_key="x")
         assert names == []
-        term.console.print.assert_called()
+        printed = " ".join(str(call) for call in term.console.print.call_args_list)
+        assert "/v1/models request failed" in printed
+        assert "invalid api key" in printed
+        assert "requires endpoint auth" in printed
 
     def test_fetch_openai_models_success(self):
         term, _ = _mk_terminal_stub()
@@ -164,6 +168,11 @@ class TestTerminalOpenAICompatibleHelpers:
         names = term._fetch_compatible_models("http://localhost:11434/v1", backend="other")
         assert names == []
         term.console.print.assert_called()
+
+    def test_prompt_discovery_followup_action_defaults_to_manual(self):
+        term, _ = _mk_terminal_stub()
+        term._plain_prompt_session.prompt.return_value = ""
+        assert term._prompt_discovery_followup_action() == "manual"
 
 
 class TestTerminalSettingsMenu:

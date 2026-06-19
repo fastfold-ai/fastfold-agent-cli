@@ -554,7 +554,37 @@ def setup_cmd(
     openai_compatible_backend: Optional[str] = typer.Option(
         None,
         "--openai-compatible-backend",
-        help="Compatible backend type: ollama, unsloth, or other",
+        help="Compatible backend type: ollama, unsloth, omlx, or other",
+    ),
+    profile_label: Optional[str] = typer.Option(
+        None,
+        "--profile-label",
+        help="Label for the OpenAI-compatible profile to create/update",
+    ),
+    profile_template: Optional[str] = typer.Option(
+        None,
+        "--profile-template",
+        help="OpenAI-compatible template: ollama, unsloth, omlx, or other",
+    ),
+    profile_endpoint: Optional[str] = typer.Option(
+        None,
+        "--profile-endpoint",
+        help="Profile endpoint URL (alias of --openai-base-url for compatible setup)",
+    ),
+    profile_key: Optional[str] = typer.Option(
+        None,
+        "--profile-key",
+        help="API key for the selected OpenAI-compatible profile",
+    ),
+    profile_default_model: Optional[str] = typer.Option(
+        None,
+        "--profile-default-model",
+        help="Default model id to store in the selected compatible profile",
+    ),
+    set_default_profile: bool = typer.Option(
+        False,
+        "--set-default-profile",
+        help="Set the selected OpenAI-compatible profile as default",
     ),
     fastfold_api_key: Optional[str] = typer.Option(
         None, "--fastfold-api-key", help="Fastfold AI Cloud API key (non-interactive mode)"
@@ -582,6 +612,18 @@ def setup_cmd(
         openai_base_url = None
     if isinstance(openai_compatible_backend, OptionInfo):
         openai_compatible_backend = None
+    if isinstance(profile_label, OptionInfo):
+        profile_label = None
+    if isinstance(profile_template, OptionInfo):
+        profile_template = None
+    if isinstance(profile_endpoint, OptionInfo):
+        profile_endpoint = None
+    if isinstance(profile_key, OptionInfo):
+        profile_key = None
+    if isinstance(profile_default_model, OptionInfo):
+        profile_default_model = None
+    if isinstance(set_default_profile, OptionInfo):
+        set_default_profile = False
     if isinstance(fastfold_api_key, OptionInfo):
         fastfold_api_key = None
     if isinstance(provider, OptionInfo):
@@ -590,6 +632,11 @@ def setup_cmd(
         skills = None
     if isinstance(skip_skills, OptionInfo):
         skip_skills = False
+
+    if profile_endpoint and not openai_base_url:
+        openai_base_url = profile_endpoint
+    if profile_template and not openai_compatible_backend:
+        openai_compatible_backend = profile_template
 
     cfg = Config.load()
 
@@ -626,12 +673,73 @@ def setup_cmd(
     resolved_openai_base_url: Optional[str] = None
     resolved_openai_backend: Optional[str] = None
     resolved_openai_compatible_model: Optional[str] = None
+    selected_compatible_profile_id: Optional[str] = None
+    selected_compatible_profile: Optional[dict] = None
+    resolved_compatible_profile_label = str(profile_label or "").strip() or None
     if "openai_compatible" in selected_providers:
+        selected_compatible_profile_id = _find_compatible_profile_id_by_label(
+            cfg, resolved_compatible_profile_label
+        )
+        if selected_compatible_profile_id is None and not resolved_compatible_profile_label:
+            selected_compatible_profile_id = _prompt_setup_compatible_profile_id(cfg)
+        if selected_compatible_profile_id:
+            selected_compatible_profile = cfg.get_openai_profile(selected_compatible_profile_id)
+            if selected_compatible_profile:
+                selected_profile_label = str(
+                    selected_compatible_profile.get("label") or selected_compatible_profile_id
+                ).strip()
+                selected_profile_backend = str(
+                    selected_compatible_profile.get("backend") or "other"
+                ).strip().lower()
+                selected_profile_endpoint = str(
+                    selected_compatible_profile.get("base_url") or ""
+                ).strip()
+                backend_name = (
+                    "oMLX"
+                    if selected_profile_backend == "omlx"
+                    else "Ollama"
+                    if selected_profile_backend == "ollama"
+                    else "Unsloth"
+                    if selected_profile_backend == "unsloth"
+                    else "Custom"
+                )
+                endpoint_text = selected_profile_endpoint or "—"
+                console.print(
+                    f"  [dim]Using existing compatible profile:[/dim] {selected_profile_label} "
+                    f"[dim]({backend_name}, {endpoint_text})[/dim]"
+                )
+                if not openai_compatible_backend:
+                    openai_compatible_backend = str(
+                        selected_compatible_profile.get("backend") or ""
+                    ).strip().lower() or None
+                if not openai_base_url:
+                    openai_base_url = str(
+                        selected_compatible_profile.get("base_url") or ""
+                    ).strip() or None
+                if not profile_default_model:
+                    profile_default_model = str(
+                        selected_compatible_profile.get("default_model") or ""
+                    ).strip() or None
+                if not resolved_compatible_profile_label:
+                    resolved_compatible_profile_label = str(
+                        selected_compatible_profile.get("label") or ""
+                    ).strip() or None
         resolved_openai_base_url, resolved_openai_backend = _resolve_openai_compatible_endpoint(
             cfg,
             cli_base_url=openai_base_url,
             cli_backend=openai_compatible_backend,
         )
+        if not resolved_compatible_profile_label:
+            label_defaults = {
+                "ollama": "Ollama Local",
+                "unsloth": "Unsloth Local",
+                "omlx": "oMLX Local",
+                "other": "Custom Compatible Endpoint",
+            }
+            resolved_compatible_profile_label = label_defaults.get(
+                str(resolved_openai_backend or "").strip().lower(),
+                "Compatible Endpoint",
+            )
     elif "openai" in selected_providers:
         resolved_openai_base_url = _resolve_openai_base_url(
             cfg,
@@ -641,10 +749,19 @@ def setup_cmd(
 
     resolved_keys: dict[str, str] = {}
     for prov in selected_providers:
+        cli_key_for_provider = api_key
+        if prov == "openai":
+            cli_key_for_provider = openai_api_key
+        elif prov == "openai_compatible":
+            cli_key_for_provider = profile_key or openai_api_key
+            if not cli_key_for_provider and selected_compatible_profile:
+                cli_key_for_provider = str(
+                    selected_compatible_profile.get("api_key") or ""
+                ).strip() or None
         chosen_key = _resolve_provider_key(
             cfg,
             provider=prov,
-            cli_key=(openai_api_key if prov in {"openai", "openai_compatible"} else api_key),
+            cli_key=cli_key_for_provider,
             openai_base_url=resolved_openai_base_url if prov == "openai_compatible" else None,
             compatible_backend=resolved_openai_backend if prov == "openai_compatible" else None,
         )
@@ -667,35 +784,94 @@ def setup_cmd(
             and resolved_openai_base_url
             and resolved_openai_backend
         ):
-            resolved_openai_compatible_model = _prompt_compatible_model_for_setup(
+            backend_name = (
+                "oMLX"
+                if str(resolved_openai_backend).strip().lower() == "omlx"
+                else "Ollama"
+                if str(resolved_openai_backend).strip().lower() == "ollama"
+                else "Unsloth"
+                if str(resolved_openai_backend).strip().lower() == "unsloth"
+                else "Custom"
+            )
+            profile_name = str(resolved_compatible_profile_label or "Compatible Endpoint").strip()
+            console.print(
+                f"  [dim]Profile:[/dim] {profile_name}  "
+                f"[dim]Template:[/dim] {backend_name}  "
+                f"[dim]Endpoint:[/dim] {resolved_openai_base_url}"
+            )
+            compatible_model_choice = _prompt_compatible_model_for_setup(
                 cfg,
                 base_url=resolved_openai_base_url,
                 backend=resolved_openai_backend,
                 api_key=chosen_key,
             )
+            if isinstance(compatible_model_choice, tuple):
+                resolved_openai_compatible_model = compatible_model_choice[0]
+                retry_key_override = str(compatible_model_choice[1] or "").strip()
+                if retry_key_override:
+                    resolved_keys[prov] = retry_key_override
+            else:
+                resolved_openai_compatible_model = compatible_model_choice
+            if not resolved_openai_compatible_model and profile_default_model:
+                resolved_openai_compatible_model = str(profile_default_model).strip() or None
 
     # Determine Fastfold AI Cloud API key (optional, but recommended for cloud-integrated skills)
     cloud_key = _prompt_fastfold_cloud_api_key(cfg, fastfold_api_key)
 
     # Save
+    resolved_compatible_profile_id: Optional[str] = None
     for prov, key in resolved_keys.items():
         if prov == "openai":
-            cfg.unset("llm.openai_base_url")
-            cfg.unset("llm.openai_compatible_backend")
             cfg.set("llm.openai_api_key", key)
+            cfg.upsert_openai_profile(
+                profile_id="openai_cloud",
+                label="OpenAI Cloud",
+                backend="openai",
+                base_url="https://api.openai.com/v1",
+                api_key=key,
+            )
         elif prov == "openai_compatible":
-            if resolved_openai_base_url:
-                cfg.set("llm.openai_base_url", resolved_openai_base_url)
-            else:
-                cfg.set("llm.openai_base_url", "http://localhost:11434/v1")
-            cfg.set("llm.openai_compatible_backend", resolved_openai_backend or "ollama")
-            cfg.set("llm.openai_compatible_api_key", key)
-            if resolved_openai_compatible_model:
-                cfg.set("llm.model", resolved_openai_compatible_model)
+            backend = str(resolved_openai_backend or "").strip().lower() or "other"
+            default_endpoints = {
+                "ollama": "http://localhost:11434/v1",
+                "unsloth": "http://localhost:8888/v1",
+                "omlx": "http://localhost:8000/v1",
+            }
+            endpoint = (
+                _normalize_openai_base_url(resolved_openai_base_url)
+                or default_endpoints.get(backend, "http://localhost:11434/v1")
+            )
+            profile_id = selected_compatible_profile_id or _find_compatible_profile_id_by_label(
+                cfg, resolved_compatible_profile_label
+            )
+            desired_model = (
+                str(profile_default_model or "").strip()
+                or str(resolved_openai_compatible_model or "").strip()
+                or None
+            )
+            resolved_compatible_profile_id = cfg.upsert_openai_profile(
+                profile_id=profile_id,
+                label=resolved_compatible_profile_label,
+                backend=backend,
+                base_url=endpoint,
+                api_key=key,
+                default_model=desired_model,
+                set_active=True,
+                set_default=set_default_profile,
+            )
+            if desired_model:
+                cfg.set("llm.model", desired_model)
         elif prov == "anthropic":
             cfg.set("llm.anthropic_api_key", key)
     active_setup_provider = default_provider if default_provider in selected_providers else selected_providers[0]
     cfg.set("llm.provider", _setup_provider_runtime_id(active_setup_provider))
+    if active_setup_provider == "openai":
+        if "openai_compatible" in selected_providers and resolved_compatible_profile_id:
+            cfg.set_openai_active_profile(resolved_compatible_profile_id)
+        else:
+            cfg.set_openai_active_profile("openai_cloud")
+    if set_default_profile and "openai" in selected_providers and "openai_compatible" not in selected_providers:
+        cfg.set_openai_default_profile("openai_cloud")
     if cloud_key:
         cfg.set("api.fastfold_cloud_key", cloud_key)
         # Make available immediately to subprocess tools/skills in this run.
@@ -805,6 +981,11 @@ def _prompt_openai_compatible_api_key(backend: str = "other") -> str:
         console.print(
             "  [dim]Ollama often accepts placeholder keys (for example: ollama).[/dim]"
         )
+    elif backend_type == "omlx":
+        console.print(
+            "  oMLX endpoint: [link=http://localhost:8000]http://localhost:8000[/link]"
+        )
+        console.print("  [dim]Use your oMLX key if your endpoint requires auth.[/dim]")
     else:
         console.print(
             "  [dim]Using a custom OpenAI-compatible endpoint key.[/dim]"
@@ -968,6 +1149,8 @@ def _infer_openai_compatible_backend(base_url: Optional[str], key: Optional[str]
     secret = str(key or "").strip().lower()
     if secret.startswith("sk-unsloth-") or "8888" in endpoint:
         return "unsloth"
+    if "8000" in endpoint or "omlx" in endpoint:
+        return "omlx"
     if "11434" in endpoint:
         return "ollama"
     return "other"
@@ -976,14 +1159,15 @@ def _infer_openai_compatible_backend(base_url: Optional[str], key: Optional[str]
 def _prompt_openai_compatible_backend(default_backend: str = "ollama") -> str:
     """Prompt backend type for OpenAI-compatible setup."""
     normalized_default = str(default_backend or "").strip().lower()
-    if normalized_default not in {"ollama", "unsloth", "other"}:
+    if normalized_default not in {"ollama", "unsloth", "omlx", "other"}:
         normalized_default = "ollama"
 
     console.print("\n  [cyan]Endpoint type[/cyan]")
     console.print("    [1] Ollama (/api/tags)")
     console.print("    [2] Unsloth (/v1/models, auth)")
-    console.print("    [3] Other OpenAI-compatible (/v1/models then /api/tags)")
-    default_num = {"ollama": "1", "unsloth": "2", "other": "3"}[normalized_default]
+    console.print("    [3] oMLX (/v1/models, auth)")
+    console.print("    [4] Other OpenAI-compatible (/v1/models then /api/tags)")
+    default_num = {"ollama": "1", "unsloth": "2", "omlx": "3", "other": "4"}[normalized_default]
     try:
         raw = input(f"  Select endpoint type [{default_num}]: ").strip().lower()
     except (EOFError, KeyboardInterrupt):
@@ -995,7 +1179,9 @@ def _prompt_openai_compatible_backend(default_backend: str = "ollama") -> str:
         return "ollama"
     if raw in {"2", "unsloth", "u"}:
         return "unsloth"
-    if raw in {"3", "other", "custom", "k"}:
+    if raw in {"3", "omlx", "m"}:
+        return "omlx"
+    if raw in {"4", "other", "custom", "k"}:
         return "other"
     console.print("  [dim]Invalid selection; using generic compatible mode.[/dim]")
     return "other"
@@ -1011,29 +1197,39 @@ def _resolve_openai_compatible_endpoint(
     existing_key = cfg.get("llm.openai_compatible_api_key")
     configured_backend = str(cfg.get("llm.openai_compatible_backend") or "").strip().lower()
     inferred_backend = _infer_openai_compatible_backend(existing, existing_key)
-    default_backend = configured_backend if configured_backend in {"ollama", "unsloth", "other"} else inferred_backend
+    default_backend = (
+        configured_backend if configured_backend in {"ollama", "unsloth", "omlx", "other"} else inferred_backend
+    )
     selected_backend = str(cli_backend or "").strip().lower()
-    if selected_backend not in {"ollama", "unsloth", "other"}:
+    if selected_backend not in {"ollama", "unsloth", "omlx", "other"}:
         selected_backend = _prompt_openai_compatible_backend(default_backend=default_backend)
+
+    default_endpoint_by_backend = {
+        "unsloth": "http://localhost:8888/v1",
+        "omlx": "http://localhost:8000/v1",
+        "ollama": "http://localhost:11434/v1",
+    }
 
     if cli_base_url is not None:
         chosen = _normalize_openai_base_url(cli_base_url)
         if not chosen:
-            chosen = "http://localhost:8888/v1" if selected_backend == "unsloth" else "http://localhost:11434/v1"
+            chosen = default_endpoint_by_backend.get(selected_backend, "http://localhost:11434/v1")
         if _is_openai_managed_base_url(chosen):
             console.print("  [yellow]OpenAI cloud URL detected; using compatible default endpoint instead.[/yellow]")
-            chosen = "http://localhost:8888/v1" if selected_backend == "unsloth" else "http://localhost:11434/v1"
+            chosen = default_endpoint_by_backend.get(selected_backend, "http://localhost:11434/v1")
         return chosen, selected_backend
 
     if selected_backend == "unsloth":
         default_endpoint = "http://localhost:8888/v1"
+    elif selected_backend == "omlx":
+        default_endpoint = "http://localhost:8000/v1"
     elif selected_backend == "ollama":
         default_endpoint = "http://localhost:11434/v1"
     else:
         default_endpoint = existing if (existing and not _is_openai_managed_base_url(existing)) else "http://localhost:11434/v1"
 
     console.print("\n  [cyan]OpenAI endpoint setup[/cyan]")
-    console.print("  [dim]Examples: Ollama, Unsloth, vLLM, LM Studio, proxy gateways[/dim]")
+    console.print("  [dim]Examples: Ollama, Unsloth, oMLX, vLLM, LM Studio, proxy gateways[/dim]")
     try:
         entered = input(f"  Endpoint base URL [{default_endpoint}]: ").strip()
     except (EOFError, KeyboardInterrupt):
@@ -1043,6 +1239,75 @@ def _resolve_openai_compatible_endpoint(
     if not chosen or _is_openai_managed_base_url(chosen):
         chosen = default_endpoint
     return chosen, selected_backend
+
+
+def _find_compatible_profile_id_by_label(cfg, label: Optional[str]) -> Optional[str]:
+    """Find compatible profile by id/label (case-insensitive)."""
+    target = str(label or "").strip().lower()
+    if not target:
+        return None
+    profiles = cfg.openai_profiles(include_cloud=False)
+    for profile_id, profile in profiles.items():
+        profile_label = str(profile.get("label") or "").strip().lower()
+        if target in {str(profile_id).strip().lower(), profile_label}:
+            return profile_id
+    return None
+
+
+def _prompt_setup_compatible_profile_id(cfg) -> Optional[str]:
+    """Prompt to reuse an existing compatible profile or create new."""
+    profiles = cfg.openai_profiles(include_cloud=False)
+    if not profiles:
+        return None
+
+    if not (sys.stdin.isatty() and sys.stdout.isatty()):
+        active_profile = cfg.get_openai_profile()
+        active_backend = str((active_profile or {}).get("backend") or "").strip().lower()
+        if active_backend and active_backend != "openai":
+            return str((active_profile or {}).get("id") or "").strip() or None
+        return None
+
+    rows = sorted(
+        profiles.items(),
+        key=lambda item: str(item[1].get("label") or item[0]).strip().lower(),
+    )
+    active_profile_id = cfg.active_openai_profile_id()
+
+    console.print("\n  [cyan]OpenAI-compatible profile[/cyan]")
+    for idx, (profile_id, profile) in enumerate(rows, 1):
+        marker = " [green]*[/green]" if profile_id == active_profile_id else ""
+        backend = str(profile.get("backend") or "other").strip().lower()
+        endpoint = str(profile.get("base_url") or "").strip() or "—"
+        label = str(profile.get("label") or profile_id).strip()
+        console.print(
+            f"    [{idx}] {label} [dim]({backend}, {endpoint})[/dim]{marker}"
+        )
+    create_idx = len(rows) + 1
+    console.print(f"    [{create_idx}] Create new profile")
+
+    default_idx = create_idx
+    for idx, (profile_id, _) in enumerate(rows, 1):
+        if profile_id == active_profile_id:
+            default_idx = idx
+            break
+    try:
+        raw = input(f"  Select profile [{default_idx}]: ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n  [dim]Setup cancelled.[/dim]")
+        raise typer.Exit()
+    selected = raw or str(default_idx)
+    if selected in {"new", "n", str(create_idx)}:
+        return None
+    if selected.isdigit():
+        idx = int(selected)
+        if 1 <= idx <= len(rows):
+            return rows[idx - 1][0]
+    for profile_id, profile in rows:
+        label = str(profile.get("label") or "").strip().lower()
+        if selected in {profile_id.lower(), label}:
+            return profile_id
+    console.print("  [dim]Invalid selection; creating new profile.[/dim]")
+    return None
 
 
 def _ollama_tags_url_from_base(base_url: str) -> str:
@@ -1065,6 +1330,74 @@ def _openai_models_url_from_base(base_url: str) -> str:
     return parsed._replace(path=models_path, query="", fragment="").geturl()
 
 
+def _truncate_discovery_detail(text: str, max_chars: int = 320) -> str:
+    value = str(text or "").strip()
+    if len(value) <= max_chars:
+        return value
+    return value[:max_chars] + f"... [{len(value)} chars total]"
+
+
+def _extract_discovery_error_message(raw: str) -> str:
+    """Extract concise API error messages from JSON payloads when available."""
+    value = str(raw or "").strip()
+    if not value:
+        return ""
+    try:
+        payload = json.loads(value)
+    except Exception:
+        return value
+
+    if isinstance(payload, dict):
+        err = payload.get("error")
+        if isinstance(err, dict):
+            msg = str(err.get("message") or err.get("detail") or "").strip()
+            code = str(err.get("code") or "").strip()
+            if msg:
+                return f"{msg} (code={code})" if code else msg
+        for key in ("message", "detail", "description", "error_description"):
+            msg = payload.get(key)
+            if isinstance(msg, str) and msg.strip():
+                return msg.strip()
+    return value
+
+
+def _read_http_error_body(exc: urllib.error.HTTPError) -> str:
+    try:
+        body = exc.read()
+    except Exception:
+        return ""
+    if not body:
+        return ""
+    return body.decode("utf-8", errors="replace").strip()
+
+
+def _report_discovery_http_error(endpoint: str, url: str, exc: urllib.error.HTTPError) -> None:
+    status = int(getattr(exc, "code", 0) or 0)
+    reason = str(getattr(exc, "reason", "") or getattr(exc, "msg", "")).strip()
+    body_raw = _read_http_error_body(exc)
+    body_msg = _extract_discovery_error_message(body_raw)
+
+    console.print(
+        f"  [yellow]{endpoint} request failed[/yellow] "
+        f"[dim](status={status or 'unknown'}, url={url})[/dim]"
+    )
+    if reason:
+        console.print(f"  [dim]Reason:[/dim] {reason}")
+    if body_msg:
+        console.print(
+            f"  [dim]Response:[/dim] {_truncate_discovery_detail(body_msg)}",
+            markup=False,
+        )
+
+
+def _report_discovery_exception(endpoint: str, url: str, exc: Exception) -> None:
+    console.print(f"  [yellow]{endpoint} request failed[/yellow] [dim](url={url})[/dim]")
+    console.print(
+        f"  [dim]Error:[/dim] {_truncate_discovery_detail(str(exc))}",
+        markup=False,
+    )
+
+
 def _fetch_openai_models_for_setup(base_url: str, api_key: Optional[str] = None) -> list[str]:
     """Fetch model IDs from OpenAI-compatible /v1/models."""
     url = _openai_models_url_from_base(base_url)
@@ -1076,7 +1409,14 @@ def _fetch_openai_models_for_setup(base_url: str, api_key: Optional[str] = None)
         with spinner("Discovering models from /v1/models..."):
             with urllib.request.urlopen(req, timeout=4.0) as resp:
                 text = resp.read().decode("utf-8", errors="replace")
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
+    except urllib.error.HTTPError as exc:
+        _report_discovery_http_error("/v1/models", url, exc)
+        return []
+    except (urllib.error.URLError, TimeoutError) as exc:
+        _report_discovery_exception("/v1/models", url, exc)
+        return []
+    except Exception as exc:
+        _report_discovery_exception("/v1/models", url, exc)
         return []
     try:
         payload = json.loads(text) if text else {}
@@ -1102,7 +1442,14 @@ def _fetch_ollama_tags_for_setup(base_url: str, api_key: Optional[str] = None) -
         with spinner("Discovering models from /api/tags..."):
             with urllib.request.urlopen(req, timeout=4.0) as resp:
                 text = resp.read().decode("utf-8", errors="replace")
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
+    except urllib.error.HTTPError as exc:
+        _report_discovery_http_error("/api/tags", url, exc)
+        return []
+    except (urllib.error.URLError, TimeoutError) as exc:
+        _report_discovery_exception("/api/tags", url, exc)
+        return []
+    except Exception as exc:
+        _report_discovery_exception("/api/tags", url, exc)
         return []
     try:
         payload = json.loads(text) if text else {}
@@ -1120,7 +1467,7 @@ def _fetch_ollama_tags_for_setup(base_url: str, api_key: Optional[str] = None) -
 def _fetch_compatible_models_for_setup(base_url: str, backend: str, api_key: Optional[str] = None) -> list[str]:
     """Discover compatible models based on selected backend."""
     backend_type = str(backend or "").strip().lower()
-    if backend_type == "unsloth":
+    if backend_type in {"unsloth", "omlx"}:
         names = _fetch_openai_models_for_setup(base_url, api_key=api_key)
     elif backend_type == "ollama":
         names = _fetch_ollama_tags_for_setup(base_url, api_key=api_key)
@@ -1144,10 +1491,44 @@ def _prompt_compatible_model_for_setup(
     base_url: str,
     backend: str,
     api_key: Optional[str] = None,
-) -> str:
+) -> str | tuple[str, Optional[str]]:
     """Prompt for compatible model selection in setup flow."""
     default_model = str(cfg.get("llm.model") or "").strip() or "llama3.1"
-    discovered = _fetch_compatible_models_for_setup(base_url, backend=backend, api_key=api_key)
+    retry_key_override: Optional[str] = None
+    effective_key = str(api_key or "").strip() or None
+    discovered = _fetch_compatible_models_for_setup(base_url, backend=backend, api_key=effective_key)
+
+    def _result_with_key(model_id: str) -> str | tuple[str, Optional[str]]:
+        if retry_key_override:
+            return model_id, retry_key_override
+        return model_id
+
+    while not discovered:
+        console.print("  [cyan]Model discovery options[/cyan]")
+        console.print("    [1] Retry discovery with a new API key")
+        console.print("    [2] Enter model ID manually")
+        console.print("    [3] Cancel setup")
+        try:
+            raw_action = input("  Select option [2]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n  [dim]Setup cancelled.[/dim]")
+            raise typer.Exit()
+        if raw_action in {"3", "cancel", "c", "q"}:
+            console.print("  [dim]Setup cancelled.[/dim]")
+            raise typer.Exit()
+        if raw_action in {"", "2", "manual", "m"}:
+            break
+        if raw_action not in {"1", "retry", "r"}:
+            console.print("  [dim]Invalid selection; switching to manual entry.[/dim]")
+            break
+        retry_key = _prompt_openai_compatible_api_key(backend=backend)
+        if not retry_key:
+            console.print("  [dim]Retry skipped; keeping current key.[/dim]")
+            continue
+        retry_key_override = retry_key
+        effective_key = retry_key
+        discovered = _fetch_compatible_models_for_setup(base_url, backend=backend, api_key=effective_key)
+
     if discovered:
         console.print("  [cyan]Available models[/cyan]")
         for idx, name in enumerate(discovered, 1):
@@ -1162,7 +1543,7 @@ def _prompt_compatible_model_for_setup(
         if raw_choice.isdigit():
             selected = int(raw_choice)
             if 1 <= selected <= len(discovered):
-                return discovered[selected - 1]
+                return _result_with_key(discovered[selected - 1])
             if selected != manual_idx:
                 console.print("  [dim]Invalid selection; switching to manual entry.[/dim]")
         elif raw_choice:
@@ -1173,7 +1554,8 @@ def _prompt_compatible_model_for_setup(
     except (EOFError, KeyboardInterrupt):
         console.print("\n  [dim]Setup cancelled.[/dim]")
         raise typer.Exit()
-    return model_input or default_model
+    selected_model = model_input or default_model
+    return _result_with_key(selected_model)
 
 
 def _prompt_masked_secret(message: str) -> str:
@@ -1371,7 +1753,7 @@ def _resolve_provider_key(
         label = "OpenAI-compatible" if is_compat else "OpenAI"
         config_key = key_config_key
         backend = str(compatible_backend or "").strip().lower()
-        if backend not in {"ollama", "unsloth", "other"}:
+        if backend not in {"ollama", "unsloth", "omlx", "other"}:
             backend = _infer_openai_compatible_backend(openai_base_url, existing_key)
         default_compat_key = "ollama" if (is_compat and backend == "ollama") else None
         if is_compat and not default_compat_key:

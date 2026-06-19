@@ -14,6 +14,7 @@ import pytest
 from rich.panel import Panel
 from rich.table import Table
 
+from agent.config import Config
 from ui.terminal import InteractiveTerminal
 
 
@@ -121,6 +122,124 @@ class TestSettingsAndCommands:
 
 
 class TestOpenAICompatibleSetupAndFetch:
+    def test_switch_model_lists_configured_profile_models_top_level(self):
+        term = _mk_terminal()
+        cfg = Config(data={"llm.provider": "openai", "llm.model": "gpt-5.5"})
+        cfg.upsert_openai_profile(
+            profile_id="omlx_local",
+            label="oMLX Local",
+            backend="omlx",
+            base_url="http://localhost:8000/v1",
+            api_key="sk-omlx-test",
+            default_model="omlx-default",
+            set_active=True,
+        )
+        cfg.upsert_openai_profile(
+            profile_id="unsloth_local",
+            label="Unsloth Local",
+            backend="unsloth",
+            base_url="http://localhost:8888/v1",
+            api_key="sk-unsloth-test",
+            default_model="unsloth-default",
+        )
+        term.session.config = cfg
+        term.session.config.save = MagicMock()
+        term.session.current_model = "gpt-5.5"
+        term._prompt_session.prompt.return_value = "12"  # first profile model option after static entries
+        term._fetch_compatible_models = MagicMock(
+            side_effect=[["omlx-a", "omlx-b"], ["unsloth-a"]]
+        )
+
+        term._switch_model()
+
+        term.session.set_model.assert_called_once_with("omlx-a", provider="openai")
+        assert cfg.active_openai_profile_id() == "omlx_local"
+        rendered = "\n".join(
+            str(call.args[0]) for call in term.console.print.call_args_list if call.args
+        )
+        assert "[0] OpenAI-compatible profiles" not in rendered
+        assert "(custom)" not in rendered
+        assert "oMLX Local: omlx-a" in rendered
+        assert "Unsloth Local: unsloth-a" in rendered
+        assert "(oMLX)" in rendered
+        assert "(openai:omlx_local)" not in rendered
+
+    def test_handle_model_manager_command_renders_diagnostics_table(self):
+        term = _mk_terminal()
+        cfg = Config(data={"llm.provider": "openai", "llm.model": "gpt-5.5"})
+        cfg.upsert_openai_profile(
+            profile_id="omlx_local",
+            label="oMLX Local",
+            backend="omlx",
+            base_url="http://127.0.0.1:8005/v1",
+            api_key="sk-omlx-test",
+            set_active=True,
+        )
+
+        with patch("agent.config.Config.load", return_value=cfg):
+            term._getch = MagicMock(return_value="0")
+            term._probe_compatible_profile = MagicMock(
+                return_value={
+                    "health": "[green]healthy[/green]",
+                    "models_path": "/v1/models",
+                    "models": ["diffusiongemma-26B-A4B-it-4bit", "qwen3.5"],
+                    "error": "",
+                }
+            )
+            with patch("sys.stdout.flush"):
+                term._handle_model_manager_command("/model-manager")
+
+        table_calls = [c for c in term.console.print.call_args_list if c.args and isinstance(c.args[0], Table)]
+        assert table_calls
+        table = table_calls[-1].args[0]
+        first_col = list(getattr(table.columns[0], "_cells", []))
+        backend_col = list(getattr(table.columns[1], "_cells", []))
+        endpoint_col = list(getattr(table.columns[2], "_cells", []))
+        path_col = list(getattr(table.columns[3], "_cells", []))
+        models_col = list(getattr(table.columns[6], "_cells", []))
+        assert any("oMLX Local" in cell for cell in first_col)
+        assert any(cell == "oMLX" for cell in backend_col)
+        assert any("http://127.0.0.1:8005/v1" in cell for cell in endpoint_col)
+        assert any(cell == "/v1/models" for cell in path_col)
+        assert any("diffusiongemma-26B-A4B-it-4bit" in cell for cell in models_col)
+
+    def test_handle_model_manager_command_supports_add_edit_delete_actions(self):
+        term = _mk_terminal()
+        cfg = Config(data={"llm.provider": "openai", "llm.model": "gpt-5.5"})
+        cfg.upsert_openai_profile(
+            profile_id="omlx_local",
+            label="oMLX Local",
+            backend="omlx",
+            base_url="http://127.0.0.1:8005/v1",
+            api_key="sk-omlx-test",
+            set_active=True,
+        )
+        cfg.save = MagicMock()
+        cfg.remove_openai_profile = MagicMock(return_value=True)
+
+        with patch("agent.config.Config.load", return_value=cfg):
+            term._probe_compatible_profile = MagicMock(
+                return_value={
+                    "health": "[green]healthy[/green]",
+                    "models_path": "/v1/models",
+                    "models": ["model-a"],
+                    "error": "",
+                }
+            )
+            term._create_or_edit_compatible_profile = MagicMock(
+                side_effect=["new_profile", "updated_profile"]
+            )
+            term._prompt_select_compatible_profile_id = MagicMock(return_value="omlx_local")
+            term._getch = MagicMock(side_effect=["1", "2", "3", "0"])
+            with patch("sys.stdout.flush"):
+                term._handle_model_manager_command("/model-manager")
+
+        assert term._create_or_edit_compatible_profile.call_args_list[0].kwargs == {}
+        assert term._create_or_edit_compatible_profile.call_args_list[1].kwargs == {
+            "profile_id": "omlx_local"
+        }
+        cfg.remove_openai_profile.assert_called_once_with("omlx_local")
+
     def test_configure_openai_compatible_model_sets_default_ollama_key(self):
         term = _mk_terminal()
         term.session.config.get.side_effect = lambda key, default=None: {
@@ -160,6 +279,40 @@ class TestOpenAICompatibleSetupAndFetch:
 
         key_sets = [c for c in term.session.config.set.call_args_list if c.args and c.args[0] == "llm.openai_compatible_api_key"]
         assert key_sets == []
+
+    def test_configure_openai_compatible_model_retry_with_new_api_key(self):
+        term = _mk_terminal()
+        term.session.config.get.side_effect = lambda key, default=None: {
+            "llm.openai_base_url": "http://localhost:8000/v1",
+            "llm.openai_compatible_api_key": "",
+        }.get(key, default)
+        term._prompt_openai_compatible_backend = MagicMock(return_value="omlx")
+        term._plain_prompt_session.prompt.side_effect = [
+            "",  # keep default endpoint
+            "1",  # retry with new API key
+            "1",  # choose discovered model
+        ]
+        term._secret_prompt_session.prompt.side_effect = [
+            "",  # initial key prompt (blank)
+            "sk-omlx-retry",  # retry key
+        ]
+        term._fetch_compatible_models = MagicMock(side_effect=[[], ["omlx-model"]])
+        term._choose_model_from_discovered_tags = MagicMock(return_value="omlx-model")
+
+        term._configure_openai_compatible_model()
+
+        term._fetch_compatible_models.assert_any_call(
+            "http://localhost:8000/v1",
+            backend="omlx",
+            api_key=None,
+        )
+        term._fetch_compatible_models.assert_any_call(
+            "http://localhost:8000/v1",
+            backend="omlx",
+            api_key="sk-omlx-retry",
+        )
+        term.session.config.set.assert_any_call("llm.openai_compatible_api_key", "sk-omlx-retry")
+        term.session.set_model.assert_called_once_with("omlx-model", provider="openai")
 
     def test_fetch_openai_models_success_and_dedup(self):
         term = _mk_terminal()

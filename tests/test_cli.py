@@ -132,6 +132,34 @@ def test_setup_cmd_openai_compatible_persists_backend(monkeypatch):
     assert cfg.get("llm.model") == "gpt-oss:20b"
 
 
+def test_setup_cmd_openai_compatible_model_prompt_can_override_key(monkeypatch):
+    cfg = Config(data={})
+    monkeypatch.setattr("agent.config.Config.load", lambda: cfg)
+    monkeypatch.setattr("cli._prompt_setup_providers", lambda default: ["openai_compatible"])
+    monkeypatch.setattr(
+        "cli._resolve_openai_compatible_endpoint",
+        lambda cfg, cli_base_url=None, cli_backend=None: ("http://localhost:8000/v1", "omlx"),
+    )
+    monkeypatch.setattr(
+        "cli._resolve_provider_key",
+        lambda cfg, provider, cli_key=None, openai_base_url=None, compatible_backend=None: "stale-key",
+    )
+    monkeypatch.setattr(
+        "cli._prompt_compatible_model_for_setup",
+        lambda cfg, base_url, backend, api_key=None: ("omlx-model", "fresh-key"),
+    )
+    monkeypatch.setattr("cli._prompt_fastfold_cloud_api_key", lambda cfg, cli_key: None)
+    monkeypatch.setattr("agent.doctor.run_checks", lambda cfg: [])
+    monkeypatch.setattr("agent.doctor.to_table", lambda checks: "")
+    monkeypatch.setattr("agent.doctor.has_errors", lambda checks: False)
+
+    setup_cmd(provider="openai_compatible")
+
+    assert cfg.get("llm.openai_compatible_backend") == "omlx"
+    assert cfg.get("llm.openai_compatible_api_key") == "fresh-key"
+    assert cfg.get("llm.model") == "omlx-model"
+
+
 def test_is_openai_managed_base_url_detects_hosts():
     assert _is_openai_managed_base_url("https://api.openai.com/v1") is True
     assert _is_openai_managed_base_url("https://gateway.openai.com/v1") is True

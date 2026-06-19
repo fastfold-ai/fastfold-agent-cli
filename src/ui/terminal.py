@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse, urlunparse
+from typing import Any
 
 from rich.console import Console
 from rich.panel import Panel
@@ -55,7 +56,8 @@ SLASH_COMMANDS = {
     "/model": "Switch LLM model/provider interactively",
     "/settings": "Configure UI and agent preferences",
     "/config": "Show active runtime configuration",
-    "/keys": "Show API key setup status by service",
+    "/keys": "Show API key status (/keys profile | /keys set-compatible)",
+    "/model-manager": "Manage OpenAI-compatible profiles (add/edit/delete)",
     "/upgrade": "Upgrade fastfold-agent-cli via uv",
     "/doctor": "Run readiness diagnostics and fix hints",
     "/autofix": "Apply automatic local fixes for common runtime issues",
@@ -95,8 +97,8 @@ AVAILABLE_MODELS = {
         ("gpt-5-nano", "GPT-5 Nano", "Cheapest GPT-5-class model for simple high-volume tasks"),
         (
             "__custom_openai_compatible__",
-            "OpenAI-compatible (custom endpoint)",
-            "Use Ollama/Unsloth/local/self-hosted OpenAI-compatible APIs",
+            "OpenAI-compatible profiles",
+            "Use, add, or edit Ollama/Unsloth/oMLX/custom OpenAI-compatible profiles",
         ),
     ],
 }
@@ -1133,21 +1135,175 @@ class InteractiveTerminal:
         }
         return names.get(model_id, model_id)
 
+    def _prompt_select_compatible_profile_id(
+        self,
+        *,
+        cfg=None,
+        allow_create: bool = False,
+        create_label: str = "Create new profile",
+    ) -> str | None:
+        """Prompt user to pick a compatible profile id."""
+        profile_cfg = cfg or self.session.config
+        profiles = profile_cfg.openai_profiles(include_cloud=False)
+        if not profiles:
+            self.console.print("  [dim]No compatible profiles configured yet.[/dim]")
+            return "__create__" if allow_create else None
+
+        rows = sorted(
+            profiles.items(),
+            key=lambda item: str(item[1].get("label") or item[0]).strip().lower(),
+        )
+        active_profile_id = profile_cfg.active_openai_profile_id()
+        self.console.print("  [cyan]Compatible profiles[/cyan]")
+        for idx, (profile_id, profile) in enumerate(rows, 1):
+            marker = " [green]*[/green]" if profile_id == active_profile_id else "  "
+            label = str(profile.get("label") or profile_id).strip()
+            backend = str(profile.get("backend") or "other").strip().lower()
+            endpoint = str(profile.get("base_url") or "—").strip()
+            self.console.print(
+                f"{marker} [{idx}] {label} [dim]({backend}, {endpoint})[/dim]"
+            )
+        create_idx = len(rows) + 1
+        if allow_create:
+            self.console.print(f"   [{create_idx}] {create_label}")
+
+        default_idx = 1
+        for idx, (profile_id, _) in enumerate(rows, 1):
+            if profile_id == active_profile_id:
+                default_idx = idx
+                break
+        if allow_create and not rows:
+            default_idx = create_idx
+
+        try:
+            raw_choice = self._plain_prompt_session.prompt(
+                [("class:prompt", f"  Select profile [{default_idx}]: ")]
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        selected = raw_choice or str(default_idx)
+        if allow_create and selected in {str(create_idx), "new", "n", "create"}:
+            return "__create__"
+        if selected.isdigit():
+            selected_idx = int(selected)
+            if 1 <= selected_idx <= len(rows):
+                return rows[selected_idx - 1][0]
+        selected_lower = selected.lower()
+        for profile_id, profile in rows:
+            profile_label = str(profile.get("label") or "").strip().lower()
+            if selected_lower in {profile_id.lower(), profile_label}:
+                return profile_id
+        self.console.print("  [dim]Invalid selection.[/dim]")
+        return None
+
+    def _prompt_profile_label(self, default_label: str) -> str | None:
+        """Prompt for a profile label with a default value."""
+        try:
+            entered = self._plain_prompt_session.prompt(
+                [("class:prompt", f"  Profile label [{default_label}]: ")]
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        label = entered or default_label
+        return label.strip() or None
+
+    def _prompt_profile_template_backend(self, default_backend: str = "ollama") -> str | None:
+        """Prompt for compatible profile template backend."""
+        normalized_default = str(default_backend or "").strip().lower()
+        if normalized_default not in {"ollama", "unsloth", "omlx", "other"}:
+            normalized_default = "ollama"
+        self.console.print("  [cyan]Profile template[/cyan]")
+        self.console.print("    [1] Ollama")
+        self.console.print("    [2] Unsloth")
+        self.console.print("    [3] oMLX")
+        self.console.print("    [4] Other compatible endpoint")
+        default_num = {"ollama": "1", "unsloth": "2", "omlx": "3", "other": "4"}[normalized_default]
+        try:
+            raw = self._plain_prompt_session.prompt(
+                [("class:prompt", f"  Select template [{default_num}]: ")]
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        selected = raw or default_num
+        if selected in {"1", "ollama", "o"}:
+            return "ollama"
+        if selected in {"2", "unsloth", "u"}:
+            return "unsloth"
+        if selected in {"3", "omlx", "m"}:
+            return "omlx"
+        if selected in {"4", "other", "custom", "k"}:
+            return "other"
+        self.console.print("  [dim]Invalid selection.[/dim]")
+        return None
+
     def _current_provider_status(self) -> tuple[str, str, str | None]:
         """Return effective provider id, user-facing label, and endpoint (if any)."""
         raw_provider = str(self.session.config.get("llm.provider", "anthropic") or "anthropic").strip().lower()
         current_model = str(self.session.current_model or "").strip()
-        openai_base_url = str(self.session.config.get("llm.openai_base_url") or "").strip()
+        profile = None
+        if hasattr(self.session.config, "get_openai_profile"):
+            try:
+                profile = self.session.config.get_openai_profile()
+            except Exception:
+                profile = None
+        if not isinstance(profile, dict):
+            profile = None
+        if not profile:
+            legacy_base_url = str(self.session.config.get("llm.openai_base_url") or "").strip()
+            legacy_backend = str(self.session.config.get("llm.openai_compatible_backend") or "").strip().lower()
+            if legacy_base_url and not _is_openai_managed_base_url(legacy_base_url):
+                if legacy_backend not in {"ollama", "unsloth", "omlx", "other"}:
+                    legacy_backend = "other"
+                profile = {
+                    "id": "legacy_compatible",
+                    "label": "OpenAI-compatible endpoint",
+                    "backend": legacy_backend,
+                    "base_url": legacy_base_url,
+                    "api_key": str(self.session.config.get("llm.openai_compatible_api_key") or "").strip(),
+                }
+            else:
+                profile = {
+                    "id": "openai_cloud",
+                    "label": "OpenAI Cloud",
+                    "backend": "openai",
+                    "base_url": "https://api.openai.com/v1",
+                    "api_key": str(self.session.config.get("llm.openai_api_key") or "").strip(),
+                }
+        profile_backend = str((profile or {}).get("backend") or "").strip().lower()
+        profile_label = str((profile or {}).get("label") or "").strip()
+        openai_base_url = ""
+        if hasattr(self.session.config, "llm_openai_base_url"):
+            try:
+                candidate_base_url = self.session.config.llm_openai_base_url()
+                if isinstance(candidate_base_url, str):
+                    openai_base_url = candidate_base_url.strip()
+            except Exception:
+                openai_base_url = ""
+        if not openai_base_url:
+            openai_base_url = str(self.session.config.get("llm.openai_base_url") or "").strip()
+        is_compat_endpoint = bool(openai_base_url) and (
+            profile_backend != "openai" or not _is_openai_managed_base_url(openai_base_url)
+        )
 
         if raw_provider == "openai":
-            if openai_base_url:
-                return "openai", "OpenAI-compatible custom endpoint", openai_base_url
+            if is_compat_endpoint:
+                label = profile_label or "OpenAI-compatible profile"
+                if label.lower() in {"openai-compatible endpoint", "openai-compatible profile"}:
+                    return "openai", "OpenAI-compatible custom endpoint", openai_base_url
+                return "openai", f"OpenAI-compatible custom endpoint ({label})", openai_base_url
             return "openai", "OpenAI", None
         if raw_provider == "anthropic":
             # If a custom OpenAI-compatible endpoint is configured and the active
             # model is not an Anthropic id, treat this as OpenAI-compatible mode.
-            if openai_base_url and current_model and current_model not in _ANTHROPIC_MODEL_IDS:
-                return "openai", "OpenAI-compatible custom endpoint", openai_base_url
+            if (
+                is_compat_endpoint
+                and current_model
+                and current_model not in _ANTHROPIC_MODEL_IDS
+            ):
+                label = profile_label or "OpenAI-compatible profile"
+                if label.lower() in {"openai-compatible endpoint", "openai-compatible profile"}:
+                    return "openai", "OpenAI-compatible custom endpoint", openai_base_url
+                return "openai", f"OpenAI-compatible custom endpoint ({label})", openai_base_url
             return "anthropic", "Anthropic", None
         if raw_provider == "local":
             return "local", "Local", None
@@ -1158,22 +1314,38 @@ class InteractiveTerminal:
     def _current_compatible_backend_label(self) -> str | None:
         """Return compatible backend label for status line, when applicable."""
         _, provider_label, endpoint = self._current_provider_status()
+        profile = None
+        if hasattr(self.session.config, "get_openai_profile"):
+            try:
+                profile = self.session.config.get_openai_profile()
+            except Exception:
+                profile = None
+        if not isinstance(profile, dict):
+            profile = None
+        backend = str((profile or {}).get("backend") or "").strip().lower()
+        if backend not in {"ollama", "unsloth", "omlx", "other", "custom"}:
+            backend = str(
+                self.session.config.get("llm.openai_compatible_backend") or ""
+            ).strip().lower()
         if not endpoint or "OpenAI-compatible" not in provider_label:
             return None
 
-        backend = str(self.session.config.get("llm.openai_compatible_backend") or "").strip().lower()
         if backend == "ollama":
             return "Ollama"
         if backend == "unsloth":
             return "Unsloth"
+        if backend == "omlx":
+            return "oMLX"
         if backend in {"other", "custom"}:
             return "Custom"
 
         # Fallback heuristics for older configs that predate backend selection.
-        key = str(self.session.config.get("llm.openai_compatible_api_key") or "").strip().lower()
+        key = str((profile or {}).get("api_key") or self.session.config.get("llm.openai_compatible_api_key") or "").strip().lower()
         endpoint_text = str(endpoint).strip().lower()
         if key.startswith("sk-unsloth-") or "8888" in endpoint_text:
             return "Unsloth"
+        if "8000" in endpoint_text or "omlx" in endpoint_text:
+            return "oMLX"
         if "11434" in endpoint_text:
             return "Ollama"
         return "Custom"
@@ -1340,6 +1512,7 @@ class InteractiveTerminal:
             if busy and (
                 cmd.startswith("/model")
                 or cmd.startswith("/settings")
+                or cmd.startswith("/model-manager")
                 or cmd.startswith("/plan")
                 or cmd.startswith("/new")
                 or cmd.startswith("/sessions")
@@ -1403,6 +1576,17 @@ class InteractiveTerminal:
                 self._change_settings()
                 self._advance_suggestion()
                 continue
+            if (
+                cmd == "model-manager"
+                or cmd.startswith("/model-manager")
+                or cmd == "model-details"
+                or cmd.startswith("/model-details")
+                or cmd == "compatible"
+                or cmd.startswith("/compatible")
+            ):
+                self._handle_model_manager_command(query)
+                self._advance_suggestion()
+                continue
             if cmd in ("plan", "/plan"):
                 self._toggle_plan_mode()
                 self._advance_suggestion()
@@ -1422,9 +1606,8 @@ class InteractiveTerminal:
                 self.console.print(Config.load().to_table())
                 self._advance_suggestion()
                 continue
-            if cmd in ("keys", "/keys"):
-                from agent.config import Config
-                self.console.print(Config.load().keys_table())
+            if cmd == "keys" or cmd.startswith("/keys"):
+                self._handle_keys_command(query)
                 self._advance_suggestion()
                 continue
             if cmd in ("upgrade", "/upgrade"):
@@ -1624,19 +1807,43 @@ class InteractiveTerminal:
 
         self.console.print(f"  [yellow]{issue}[/yellow]")
         if provider == "openai":
-            openai_base_url = str(self.session.config.get("llm.openai_base_url") or "").strip()
-            is_compat = bool(openai_base_url) and not _is_openai_managed_base_url(openai_base_url)
+            profile = None
+            if hasattr(self.session.config, "get_openai_profile"):
+                try:
+                    profile = self.session.config.get_openai_profile()
+                except Exception:
+                    profile = None
+            if not isinstance(profile, dict):
+                profile = None
+            profile_id = str((profile or {}).get("id") or "").strip() or None
+            profile_label = str((profile or {}).get("label") or "").strip() or "Compatible endpoint"
+            profile_backend = str((profile or {}).get("backend") or "").strip().lower()
+            openai_base_url = ""
+            if hasattr(self.session.config, "llm_openai_base_url"):
+                try:
+                    base_url_candidate = self.session.config.llm_openai_base_url()
+                    if isinstance(base_url_candidate, str):
+                        openai_base_url = base_url_candidate.strip()
+                except Exception:
+                    openai_base_url = ""
+            if not openai_base_url:
+                openai_base_url = str(self.session.config.get("llm.openai_base_url") or "").strip()
+            if not profile_backend and openai_base_url and not _is_openai_managed_base_url(openai_base_url):
+                profile_backend = str(
+                    self.session.config.get("llm.openai_compatible_backend", "other") or "other"
+                ).strip().lower()
+            is_compat = bool(openai_base_url) and profile_backend not in {"", "openai"}
             self.console.print(
                 "  [dim]Set OPENAI_COMPATIBLE_API_KEY (or OPENAI_API_KEY) or enter it now to continue.[/dim]"
                 if is_compat
                 else "  [dim]Set OPENAI_API_KEY or enter it now to continue.[/dim]"
             )
             prompt = (
-                "  Enter OpenAI-compatible API key (or press Enter to cancel): "
+                f"  Enter OpenAI-compatible API key for '{profile_label}' (or press Enter to cancel): "
                 if is_compat
                 else "  Enter OpenAI API key (or press Enter to cancel): "
             )
-            cfg_key = "llm.openai_compatible_api_key" if is_compat else "llm.openai_api_key"
+            cfg_key = None if is_compat else "llm.openai_api_key"
         else:
             self.console.print(
                 "  [dim]Set ANTHROPIC_API_KEY or enter it now to continue.[/dim]"
@@ -1658,7 +1865,23 @@ class InteractiveTerminal:
             return False
 
         try:
-            self.session.config.set(cfg_key, api_key)
+            from agent.config import Config
+            if (
+                provider == "openai"
+                and cfg_key is None
+                and isinstance(self.session.config, Config)
+            ):
+                self.session.config.upsert_openai_profile(
+                    profile_id=profile_id,
+                    label=profile_label,
+                    backend=profile_backend or "other",
+                    base_url=openai_base_url or "http://localhost:11434/v1",
+                    api_key=api_key,
+                    set_active=True,
+                )
+            else:
+                target_key = cfg_key or "llm.openai_compatible_api_key"
+                self.session.config.set(target_key, api_key)
         except ValueError as exc:
             self.console.print(f"  [red]{exc}[/red]")
             return False
@@ -1855,12 +2078,67 @@ class InteractiveTerminal:
 
     def _switch_model(self):
         """Interactive model switcher."""
+        from agent.config import Config
+
         provider, provider_label, provider_endpoint = self._current_provider_status()
-        models_with_provider: list[tuple[str, str, str, str]] = []
+        models_with_provider: list[dict[str, str | None]] = []
         for prov, models in AVAILABLE_MODELS.items():
             for model_id, display, desc in models:
-                models_with_provider.append((prov, model_id, display, desc))
+                if model_id == "__custom_openai_compatible__":
+                    # Profile management moved to /model-manager.
+                    continue
+                models_with_provider.append(
+                    {
+                    "provider": prov,
+                    "model_id": model_id,
+                    "display": display,
+                    "desc": desc,
+                    "profile_id": None,
+                    }
+                )
+
+        cfg = self.session.config
+        if isinstance(cfg, Config):
+            compatible_profiles = cfg.openai_profiles(include_cloud=False)
+            for profile_id, profile in sorted(
+                compatible_profiles.items(),
+                key=lambda item: str(item[1].get("label") or item[0]).strip().lower(),
+            ):
+                backend = str(profile.get("backend") or "other").strip().lower()
+                base_url = str(profile.get("base_url") or "").strip()
+                if not base_url:
+                    continue
+                profile_label = str(profile.get("label") or profile_id).strip()
+                api_key = str(profile.get("api_key") or "").strip() or None
+                discovered_models = self._fetch_compatible_models(
+                    base_url,
+                    backend=backend,
+                    api_key=api_key,
+                    quiet=True,
+                )
+                if not discovered_models and profile_id == cfg.active_openai_profile_id():
+                    fallback_model = str(profile.get("default_model") or "").strip()
+                    if fallback_model:
+                        discovered_models = [fallback_model]
+                for discovered_model in discovered_models:
+                    models_with_provider.append(
+                        {
+                            "provider": "openai",
+                            "model_id": discovered_model,
+                            "display": f"{profile_label}: {discovered_model}",
+                            "desc": f"{backend} profile model",
+                            "profile_id": profile_id,
+                            "backend": backend,
+                        }
+                    )
+
         current = self.session.current_model
+        active_profile_id = None
+        active_openai_profile = None
+        if isinstance(cfg, Config):
+            active_profile_id = cfg.active_openai_profile_id()
+            active_openai_profile = cfg.get_openai_profile(active_profile_id)
+        active_backend = str((active_openai_profile or {}).get("backend") or "").strip().lower()
 
         compat_backend = self._current_compatible_backend_label()
         backend_suffix = f" ({compat_backend})" if compat_backend else ""
@@ -1875,10 +2153,35 @@ class InteractiveTerminal:
             self.console.print("  [yellow]No model options configured[/yellow]")
             return
 
-        for i, (prov, model_id, display, desc) in enumerate(models_with_provider, 1):
-            marker = " [green]*[/green]" if model_id == current else "  "
+        for i, option in enumerate(models_with_provider, 1):
+            prov = str(option.get("provider") or "")
+            model_id = str(option.get("model_id") or "")
+            display = str(option.get("display") or model_id)
+            desc = str(option.get("desc") or "")
+            profile_id = str(option.get("profile_id") or "").strip() or None
+            backend = str(option.get("backend") or "").strip().lower()
+            is_current = False
+            if model_id == current and str(provider).strip().lower() == prov:
+                if profile_id:
+                    is_current = profile_id == (active_profile_id or "")
+                elif prov == "openai":
+                    is_current = active_backend in {"", "openai"}
+                else:
+                    is_current = True
+            marker = " [green]*[/green]" if is_current else "  "
+            if profile_id:
+                if backend == "omlx":
+                    provider_hint = "oMLX"
+                elif backend == "ollama":
+                    provider_hint = "Ollama"
+                elif backend == "unsloth":
+                    provider_hint = "Unsloth"
+                else:
+                    provider_hint = "Custom"
+            else:
+                provider_hint = prov
             self.console.print(
-                f"  {marker} [{i}] {display} [dim]({prov})[/dim] — [dim]{desc}[/dim]"
+                f"  {marker} [{i}] {display} [dim]({provider_hint})[/dim] — [dim]{desc}[/dim]"
             )
 
         self.console.print()
@@ -1895,33 +2198,108 @@ class InteractiveTerminal:
             return
 
         idx = int(choice) - 1
-        selected_provider, model_id, display, _ = models_with_provider[idx]
+        selected = models_with_provider[idx]
+        selected_provider = str(selected.get("provider") or "")
+        model_id = str(selected.get("model_id") or "")
+        display = str(selected.get("display") or model_id)
+        selected_profile_id = str(selected.get("profile_id") or "").strip() or None
 
-        if model_id == "__custom_openai_compatible__":
-            self._configure_openai_compatible_model()
-            return
-
-        if model_id == current and str(provider).strip().lower() == selected_provider:
+        same_model = model_id == current and str(provider).strip().lower() == selected_provider
+        same_profile = True
+        if selected_profile_id and isinstance(cfg, Config):
+            same_profile = selected_profile_id == (active_profile_id or "")
+        if same_model and same_profile:
             self.console.print(f"  [dim]Already using {display}.[/dim]")
             return
 
         self.session.set_model(model_id, provider=selected_provider)
         if selected_provider == "openai":
-            # Choosing one of the built-in OpenAI models means "cloud OpenAI"
-            # unless the user explicitly selected the custom-endpoint option.
-            self.session.config.unset("llm.openai_base_url")
-            self.session.config.unset("llm.openai_compatible_backend")
-        else:
-            # Prevent stale base URLs from affecting non-OpenAI providers.
-            self.session.config.unset("llm.openai_base_url")
-            self.session.config.unset("llm.openai_compatible_backend")
+            # Built-in OpenAI models should use the cloud profile by default.
+            if isinstance(cfg, Config):
+                if selected_profile_id:
+                    cfg.set_openai_active_profile(selected_profile_id)
+                    cfg.upsert_openai_profile(
+                        profile_id=selected_profile_id,
+                        default_model=model_id,
+                    )
+                else:
+                    cfg.set_openai_active_profile("openai_cloud")
+            else:
+                self.session.config.unset("llm.openai_base_url")
+                self.session.config.unset("llm.openai_compatible_backend")
         self.session.config.save()  # Persist to ~/.fastfold-cli/config.json
         self.console.print(
             f"  [green]Switched to {display}[/green] ({model_id}) [dim]provider={selected_provider}[/dim]"
         )
 
     def _configure_openai_compatible_model(self) -> None:
-        """Configure OpenAI-compatible model endpoint (e.g., Ollama local server)."""
+        """Manage compatible profiles and switch model using selected profile."""
+        from agent.config import Config
+
+        if not isinstance(self.session.config, Config):
+            self._configure_openai_compatible_model_legacy()
+            return
+
+        cfg = self.session.config
+        self.console.print("\n  [cyan]OpenAI-compatible profile setup[/cyan]")
+        self.console.print("  [dim]Switch, add, or edit Ollama/Unsloth/oMLX/custom profiles.[/dim]")
+
+        profiles = cfg.openai_profiles(include_cloud=False)
+        has_profiles = bool(profiles)
+        default_choice = "1" if has_profiles else "2"
+        self.console.print("    [1] Use existing profile")
+        self.console.print("    [2] Add new profile")
+        self.console.print("    [3] Edit existing profile")
+        self.console.print("    [4] Cancel")
+        try:
+            raw_choice = self._plain_prompt_session.prompt(
+                [("class:prompt", f"  Select action [{default_choice}]: ")]
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            self.console.print("  [dim]Cancelled.[/dim]")
+            return
+        selected_action = raw_choice or default_choice
+        if selected_action in {"4", "cancel", "c", "q"}:
+            self.console.print("  [dim]Cancelled.[/dim]")
+            return
+        if selected_action in {"2", "new", "add", "a"}:
+            profile_id = self._create_or_edit_compatible_profile()
+            if not profile_id:
+                self.console.print("  [dim]Cancelled.[/dim]")
+                return
+            self._activate_compatible_profile(profile_id)
+            return
+        if selected_action in {"3", "edit", "e"}:
+            profile_id = self._prompt_select_compatible_profile_id(cfg=cfg, allow_create=False)
+            if not profile_id:
+                self.console.print("  [dim]Cancelled.[/dim]")
+                return
+            updated_profile_id = self._create_or_edit_compatible_profile(profile_id=profile_id)
+            if not updated_profile_id:
+                self.console.print("  [dim]Cancelled.[/dim]")
+                return
+            self._activate_compatible_profile(updated_profile_id)
+            return
+
+        profile_id = self._prompt_select_compatible_profile_id(
+            cfg=cfg,
+            allow_create=True,
+            create_label="Add new profile",
+        )
+        if profile_id == "__create__":
+            created_profile_id = self._create_or_edit_compatible_profile()
+            if not created_profile_id:
+                self.console.print("  [dim]Cancelled.[/dim]")
+                return
+            self._activate_compatible_profile(created_profile_id)
+            return
+        if not profile_id:
+            self.console.print("  [dim]Cancelled.[/dim]")
+            return
+        self._activate_compatible_profile(profile_id)
+
+    def _configure_openai_compatible_model_legacy(self) -> None:
+        """Legacy single-endpoint OpenAI-compatible setup for backward compatibility."""
         existing_base_url = (
             str(self.session.config.get("llm.openai_base_url") or "").strip()
             or "http://localhost:11434/v1"
@@ -1933,7 +2311,7 @@ class InteractiveTerminal:
         current_key = str(self.session.config.get("llm.openai_compatible_api_key") or "").strip()
 
         self.console.print("\n  [cyan]OpenAI-compatible endpoint setup[/cyan]")
-        self.console.print("  [dim]Examples: Ollama, Unsloth, vLLM, LM Studio, gateway proxies[/dim]")
+        self.console.print("  [dim]Examples: Ollama, Unsloth, oMLX, vLLM, LM Studio, gateway proxies[/dim]")
 
         backend = self._prompt_openai_compatible_backend(default_base_url)
         if not backend:
@@ -1941,6 +2319,8 @@ class InteractiveTerminal:
             return
         if backend == "unsloth":
             default_base_url = "http://localhost:8888/v1"
+        elif backend == "omlx":
+            default_base_url = "http://localhost:8000/v1"
         elif backend == "ollama":
             default_base_url = "http://localhost:11434/v1"
         else:
@@ -1964,6 +2344,9 @@ class InteractiveTerminal:
         elif backend == "unsloth":
             default_key = current_key or ""
             key_hint = "  API key [Unsloth sk-unsloth-...; Enter keeps existing]: "
+        elif backend == "omlx":
+            default_key = current_key or ""
+            key_hint = "  API key [oMLX; Enter keeps existing]: "
         else:
             default_key = current_key or ""
             key_hint = "  API key [optional; Enter keeps existing/none]: "
@@ -1982,6 +2365,32 @@ class InteractiveTerminal:
             backend=backend,
             api_key=effective_key or None,
         )
+        while not discovered_models:
+            action = self._prompt_discovery_followup_action()
+            if action is None or action == "cancel":
+                self.console.print("  [dim]Cancelled.[/dim]")
+                return
+            if action == "manual":
+                break
+
+            try:
+                retry_key = self._secret_prompt_session.prompt(
+                    [("class:prompt", "  New API key [Enter to skip retry]: ")],
+                    is_password=True,
+                ).strip()
+            except (EOFError, KeyboardInterrupt):
+                self.console.print("  [dim]Cancelled.[/dim]")
+                return
+            if not retry_key:
+                self.console.print("  [dim]Retry skipped; keeping current key.[/dim]")
+                continue
+            api_key = retry_key
+            effective_key = retry_key
+            discovered_models = self._fetch_compatible_models(
+                base_url,
+                backend=backend,
+                api_key=effective_key or None,
+            )
         model_id = self._choose_model_from_discovered_tags(discovered_models, default_model)
         if not model_id:
             self.console.print("  [dim]Cancelled.[/dim]")
@@ -1993,7 +2402,6 @@ class InteractiveTerminal:
         if api_key:
             self.session.config.set("llm.openai_compatible_api_key", api_key)
         elif current_key:
-            # Enter with blank input keeps the existing key for convenience.
             pass
         else:
             self.session.config.set("llm.openai_compatible_api_key", default_key)
@@ -2005,32 +2413,200 @@ class InteractiveTerminal:
             f"[dim]model={model_id} endpoint={base_url} api_key={key_state}[/dim]"
         )
 
+    def _create_or_edit_compatible_profile(self, profile_id: str | None = None) -> str | None:
+        """Create or edit an OpenAI-compatible profile and return profile id."""
+        cfg = self.session.config
+        existing_profile = cfg.get_openai_profile(profile_id) if profile_id else None
+        existing_backend = str((existing_profile or {}).get("backend") or "").strip().lower()
+        existing_base_url = str((existing_profile or {}).get("base_url") or "").strip()
+        existing_key = str((existing_profile or {}).get("api_key") or "").strip()
+        existing_default_model = str((existing_profile or {}).get("default_model") or "").strip()
+
+        default_base_url = existing_base_url or "http://localhost:11434/v1"
+        backend = self._prompt_openai_compatible_backend(default_base_url)
+        if not backend:
+            return None
+        if backend == "unsloth":
+            default_base_url = "http://localhost:8888/v1"
+        elif backend == "omlx":
+            default_base_url = "http://localhost:8000/v1"
+        elif backend == "ollama":
+            default_base_url = "http://localhost:11434/v1"
+
+        label_defaults = {
+            "ollama": "Ollama Local",
+            "unsloth": "Unsloth Local",
+            "omlx": "oMLX Local",
+            "other": "Custom Compatible Endpoint",
+        }
+        default_label = str((existing_profile or {}).get("label") or "").strip() or label_defaults.get(
+            backend, "Compatible Endpoint"
+        )
+        label = self._prompt_profile_label(default_label)
+        if not label:
+            return None
+
+        try:
+            endpoint_input = self._plain_prompt_session.prompt(
+                [("class:prompt", f"  Endpoint base URL [{default_base_url}]: ")]
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        base_url = (endpoint_input or default_base_url).rstrip("/")
+        if not base_url:
+            return None
+
+        if backend == "ollama":
+            default_key = existing_key or "ollama"
+            key_hint = "  API key [(ollama) Enter keeps existing/default]: "
+        elif backend == "unsloth":
+            default_key = existing_key or ""
+            key_hint = "  API key [Unsloth sk-unsloth-...; Enter keeps existing]: "
+        elif backend == "omlx":
+            default_key = existing_key or ""
+            key_hint = "  API key [oMLX; Enter keeps existing]: "
+        else:
+            default_key = existing_key or ""
+            key_hint = "  API key [optional; Enter keeps existing/none]: "
+        try:
+            api_key_input = self._secret_prompt_session.prompt(
+                [("class:prompt", key_hint)],
+                is_password=True,
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        effective_key = api_key_input or default_key
+
+        profile_default_model = existing_default_model or str(self.session.current_model or "").strip() or "llama3.1"
+        if profile_default_model == "__custom_openai_compatible__":
+            profile_default_model = "llama3.1"
+
+        saved_profile_id = cfg.upsert_openai_profile(
+            profile_id=profile_id,
+            label=label,
+            backend=backend,
+            base_url=base_url,
+            api_key=effective_key or None,
+            default_model=profile_default_model,
+            set_active=(existing_backend != "openai"),
+        )
+        cfg.save()
+        return saved_profile_id
+
+    def _activate_compatible_profile(self, profile_id: str) -> None:
+        """Activate a compatible profile and select a model for it."""
+        profile = self.session.config.get_openai_profile(profile_id)
+        if not profile:
+            self.console.print("  [dim]Profile not found.[/dim]")
+            return
+
+        backend = str(profile.get("backend") or "").strip().lower() or "other"
+        base_url = str(profile.get("base_url") or "").strip()
+        current_key = str(profile.get("api_key") or "").strip()
+        default_model = str(profile.get("default_model") or "").strip() or "llama3.1"
+        profile_label = str(profile.get("label") or profile_id).strip()
+
+        discovered_models = self._fetch_compatible_models(
+            base_url,
+            backend=backend,
+            api_key=current_key or None,
+        )
+        effective_key = current_key
+        while not discovered_models:
+            action = self._prompt_discovery_followup_action()
+            if action is None or action == "cancel":
+                self.console.print("  [dim]Cancelled.[/dim]")
+                return
+            if action == "manual":
+                break
+            try:
+                retry_key = self._secret_prompt_session.prompt(
+                    [("class:prompt", "  New API key [Enter to skip retry]: ")],
+                    is_password=True,
+                ).strip()
+            except (EOFError, KeyboardInterrupt):
+                self.console.print("  [dim]Cancelled.[/dim]")
+                return
+            if not retry_key:
+                self.console.print("  [dim]Retry skipped; keeping current key.[/dim]")
+                continue
+            effective_key = retry_key
+            discovered_models = self._fetch_compatible_models(
+                base_url,
+                backend=backend,
+                api_key=effective_key or None,
+            )
+
+        model_id = self._choose_model_from_discovered_tags(discovered_models, default_model)
+        if not model_id:
+            self.console.print("  [dim]Cancelled.[/dim]")
+            return
+
+        self.session.config.upsert_openai_profile(
+            profile_id=profile_id,
+            api_key=effective_key or None,
+            default_model=model_id,
+            set_active=True,
+        )
+        self.session.set_model(model_id, provider="openai")
+        self.session.config.set("llm.provider", "openai")
+        self.session.config.save()
+        key_state = "configured" if (effective_key or "").strip() else "not set"
+        self.console.print(
+            f"  [green]Switched to {profile_label}[/green] "
+            f"[dim]model={model_id} endpoint={base_url} api_key={key_state}[/dim]"
+        )
+
     def _prompt_openai_compatible_backend(self, base_url: str) -> str | None:
         """Prompt for compatible backend type to avoid endpoint guessing."""
         default_choice = "other"
-        current_key = str(self.session.config.get("llm.openai_compatible_api_key") or "").strip()
+        current_profile = None
+        if hasattr(self.session.config, "get_openai_profile"):
+            try:
+                current_profile = self.session.config.get_openai_profile()
+            except Exception:
+                current_profile = None
+        if not isinstance(current_profile, dict):
+            current_profile = None
+        current_key = str(
+            (current_profile or {}).get("api_key")
+            or self.session.config.get("llm.openai_compatible_api_key")
+            or ""
+        ).strip()
+        current_backend = str(
+            (current_profile or {}).get("backend")
+            or self.session.config.get("llm.openai_compatible_backend")
+            or ""
+        ).strip().lower()
+        if current_backend in {"ollama", "unsloth", "omlx", "other"}:
+            default_choice = current_backend
         if current_key.startswith("sk-unsloth-"):
             default_choice = "unsloth"
+        elif "8000" in str(base_url) or "omlx" in str(base_url).lower():
+            default_choice = "omlx"
         elif "11434" in str(base_url):
             default_choice = "ollama"
 
         self.console.print("  [cyan]Endpoint type[/cyan]")
         self.console.print("    [1] Ollama (/api/tags)")
         self.console.print("    [2] Unsloth (/v1/models, auth)")
-        self.console.print("    [3] Other OpenAI-compatible (/v1/models then /api/tags)")
-        default_num = {"ollama": "1", "unsloth": "2", "other": "3"}[default_choice]
+        self.console.print("    [3] oMLX (/v1/models, auth)")
+        self.console.print("    [4] Other OpenAI-compatible (/v1/models then /api/tags)")
+        default_num = {"ollama": "1", "unsloth": "2", "omlx": "3", "other": "4"}[default_choice]
         try:
             raw = self._plain_prompt_session.prompt(
                 [("class:prompt", f"  Select endpoint type [{default_num}]: ")],
             ).strip()
         except (EOFError, KeyboardInterrupt):
             return None
-        selected = raw or default_num
-        if selected == "1":
+        selected = (raw or default_num).strip().lower()
+        if selected in {"1", "ollama", "o"}:
             return "ollama"
-        if selected == "2":
+        if selected in {"2", "unsloth", "u"}:
             return "unsloth"
-        if selected == "3":
+        if selected in {"3", "omlx", "m"}:
+            return "omlx"
+        if selected in {"4", "other", "custom", "k"}:
             return "other"
         self.console.print("  [dim]Invalid selection; using generic compatible mode.[/dim]")
         return "other"
@@ -2076,7 +2652,83 @@ class InteractiveTerminal:
             )
         )
 
-    def _fetch_openai_models(self, base_url: str, api_key: str | None = None) -> list[str]:
+    @staticmethod
+    def _truncate_discovery_detail(text: str, max_chars: int = 320) -> str:
+        value = str(text or "").strip()
+        if len(value) <= max_chars:
+            return value
+        return value[:max_chars] + f"... [{len(value)} chars total]"
+
+    @staticmethod
+    def _extract_discovery_error_message(raw: str) -> str:
+        """Extract a compact human-readable message from API error payloads."""
+        value = str(raw or "").strip()
+        if not value:
+            return ""
+        try:
+            payload = json.loads(value)
+        except Exception:
+            return value
+
+        if isinstance(payload, dict):
+            err = payload.get("error")
+            if isinstance(err, dict):
+                msg = str(err.get("message") or err.get("detail") or "").strip()
+                code = str(err.get("code") or "").strip()
+                if msg:
+                    return f"{msg} (code={code})" if code else msg
+            for key in ("message", "detail", "description", "error_description"):
+                msg = payload.get(key)
+                if isinstance(msg, str) and msg.strip():
+                    return msg.strip()
+        return value
+
+    @staticmethod
+    def _read_http_error_body(exc: urllib.error.HTTPError) -> str:
+        """Best-effort read of HTTPError response body."""
+        try:
+            body = exc.read()
+        except Exception:
+            return ""
+        if not body:
+            return ""
+        return body.decode("utf-8", errors="replace").strip()
+
+    def _report_discovery_http_error(self, endpoint: str, url: str, exc: urllib.error.HTTPError) -> None:
+        status = int(getattr(exc, "code", 0) or 0)
+        reason = str(getattr(exc, "reason", "") or getattr(exc, "msg", "")).strip()
+        body_raw = self._read_http_error_body(exc)
+        body_msg = self._extract_discovery_error_message(body_raw)
+
+        self.console.print(
+            f"  [yellow]{endpoint} request failed[/yellow] "
+            f"[dim](status={status or 'unknown'}, url={url})[/dim]"
+        )
+        if reason:
+            self.console.print(f"  [dim]Reason:[/dim] {reason}")
+        if body_msg:
+            self.console.print(
+                f"  [dim]Response:[/dim] {self._truncate_discovery_detail(body_msg)}",
+                markup=False,
+            )
+
+    def _report_discovery_exception(self, endpoint: str, url: str, exc: Exception) -> None:
+        self.console.print(
+            f"  [yellow]{endpoint} request failed[/yellow] [dim](url={url})[/dim]"
+        )
+        self.console.print(
+            f"  [dim]Error:[/dim] {self._truncate_discovery_detail(str(exc))}",
+            markup=False,
+        )
+
+    def _fetch_openai_models(
+        self,
+        base_url: str,
+        api_key: str | None = None,
+        *,
+        quiet: bool = False,
+        return_error: bool = False,
+    ) -> list[str] | tuple[list[str], str | None]:
         """Fetch model ids from OpenAI-compatible /v1/models."""
         auth_headers = {"Accept": "application/json"}
         if api_key:
@@ -2087,19 +2739,49 @@ class InteractiveTerminal:
             headers=auth_headers,
             method="GET",
         )
+        error_message: str | None = None
         try:
-            with self.console.status("[green]Discovering models from /v1/models...[/green]", spinner="dots"):
+            if quiet:
                 with urllib.request.urlopen(req_models, timeout=5.0) as resp:
                     payload = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
+            else:
+                with self.console.status("[green]Discovering models from /v1/models...[/green]", spinner="dots"):
+                    with urllib.request.urlopen(req_models, timeout=5.0) as resp:
+                        payload = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
             data = payload.get("data") if isinstance(payload, dict) else None
         except urllib.error.HTTPError as exc:
-            if exc.code in {401, 403}:
-                self.console.print(
-                    "  [yellow]/v1/models requires endpoint auth.[/yellow] "
-                    "[dim]Check API key if model list is empty.[/dim]"
-                )
+            if not quiet:
+                self._report_discovery_http_error("/v1/models", models_url, exc)
+                if exc.code in {401, 403}:
+                    self.console.print(
+                        "  [yellow]/v1/models requires endpoint auth.[/yellow] "
+                        "[dim]Check API key if model list is empty.[/dim]"
+                    )
+            body_raw = self._read_http_error_body(exc)
+            body_msg = self._extract_discovery_error_message(body_raw) if body_raw else ""
+            reason = str(getattr(exc, "reason", "") or getattr(exc, "msg", "")).strip()
+            parts = [f"status={int(getattr(exc, 'code', 0) or 0)}", f"url={models_url}"]
+            if reason:
+                parts.append(reason)
+            if body_msg:
+                parts.append(body_msg)
+            error_message = " | ".join(parts)
+            if return_error:
+                return [], error_message
             return []
-        except Exception:
+        except (urllib.error.URLError, TimeoutError) as exc:
+            if not quiet:
+                self._report_discovery_exception("/v1/models", models_url, exc)
+            error_message = str(exc)
+            if return_error:
+                return [], error_message
+            return []
+        except Exception as exc:
+            if not quiet:
+                self._report_discovery_exception("/v1/models", models_url, exc)
+            error_message = str(exc)
+            if return_error:
+                return [], error_message
             return []
 
         names: list[str] = []
@@ -2109,11 +2791,20 @@ class InteractiveTerminal:
             model_id = str(item.get("id") or "").strip()
             if model_id and model_id not in names:
                 names.append(model_id)
-        if names:
+        if names and not quiet:
             self.console.print(f"  [green]Found {len(names)} model(s) from /v1/models.[/green]")
+        if return_error:
+            return names, error_message
         return names
 
-    def _fetch_ollama_tags(self, base_url: str, api_key: str | None = None) -> list[str]:
+    def _fetch_ollama_tags(
+        self,
+        base_url: str,
+        api_key: str | None = None,
+        *,
+        quiet: bool = False,
+        return_error: bool = False,
+    ) -> list[str] | tuple[list[str], str | None]:
         """Fetch model names from Ollama /api/tags."""
         auth_headers = {"Accept": "application/json"}
         if api_key:
@@ -2124,11 +2815,43 @@ class InteractiveTerminal:
             headers=auth_headers,
             method="GET",
         )
+        error_message: str | None = None
         try:
-            with self.console.status("[green]Discovering models from /api/tags...[/green]", spinner="dots"):
+            if quiet:
                 with urllib.request.urlopen(req_tags, timeout=5.0) as resp:
                     payload = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
-        except Exception:
+            else:
+                with self.console.status("[green]Discovering models from /api/tags...[/green]", spinner="dots"):
+                    with urllib.request.urlopen(req_tags, timeout=5.0) as resp:
+                        payload = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
+        except urllib.error.HTTPError as exc:
+            if not quiet:
+                self._report_discovery_http_error("/api/tags", tags_url, exc)
+            body_raw = self._read_http_error_body(exc)
+            body_msg = self._extract_discovery_error_message(body_raw) if body_raw else ""
+            reason = str(getattr(exc, "reason", "") or getattr(exc, "msg", "")).strip()
+            parts = [f"status={int(getattr(exc, 'code', 0) or 0)}", f"url={tags_url}"]
+            if reason:
+                parts.append(reason)
+            if body_msg:
+                parts.append(body_msg)
+            error_message = " | ".join(parts)
+            if return_error:
+                return [], error_message
+            return []
+        except (urllib.error.URLError, TimeoutError) as exc:
+            if not quiet:
+                self._report_discovery_exception("/api/tags", tags_url, exc)
+            error_message = str(exc)
+            if return_error:
+                return [], error_message
+            return []
+        except Exception as exc:
+            if not quiet:
+                self._report_discovery_exception("/api/tags", tags_url, exc)
+            error_message = str(exc)
+            if return_error:
+                return [], error_message
             return []
 
         models = payload.get("models") if isinstance(payload, dict) else None
@@ -2140,31 +2863,62 @@ class InteractiveTerminal:
             name = str(raw or "").strip()
             if name and name not in names:
                 names.append(name)
-        if names:
+        if names and not quiet:
             self.console.print(f"  [green]Found {len(names)} model(s) from /api/tags.[/green]")
+        if return_error:
+            return names, error_message
         return names
 
-    def _fetch_compatible_models(self, base_url: str, backend: str, api_key: str | None = None) -> list[str]:
+    def _fetch_compatible_models(
+        self,
+        base_url: str,
+        backend: str,
+        api_key: str | None = None,
+        *,
+        quiet: bool = False,
+    ) -> list[str]:
         """Discover models based on selected endpoint type."""
         backend_type = str(backend or "").strip().lower()
-        if backend_type == "unsloth":
-            names = self._fetch_openai_models(base_url, api_key=api_key)
+        if backend_type in {"unsloth", "omlx"}:
+            names = self._fetch_openai_models(base_url, api_key=api_key, quiet=quiet)
         elif backend_type == "ollama":
-            names = self._fetch_ollama_tags(base_url, api_key=api_key)
+            names = self._fetch_ollama_tags(base_url, api_key=api_key, quiet=quiet)
             if not names:
-                names = self._fetch_openai_models(base_url, api_key=api_key)
+                names = self._fetch_openai_models(base_url, api_key=api_key, quiet=quiet)
         else:
-            names = self._fetch_openai_models(base_url, api_key=api_key)
+            names = self._fetch_openai_models(base_url, api_key=api_key, quiet=quiet)
             if not names:
-                names = self._fetch_ollama_tags(base_url, api_key=api_key)
+                names = self._fetch_ollama_tags(base_url, api_key=api_key, quiet=quiet)
 
         if names:
             return names
-        self.console.print(
-            "  [yellow]No models found from discovery endpoint(s).[/yellow] "
-            "[dim]You can still enter a model manually.[/dim]"
-        )
+        if not quiet:
+            self.console.print(
+                "  [yellow]No models found from discovery endpoint(s).[/yellow] "
+                "[dim]You can still enter a model manually.[/dim]"
+            )
         return []
+
+    def _prompt_discovery_followup_action(self) -> str | None:
+        """Prompt next step after model discovery returns no results."""
+        self.console.print("  [cyan]Model discovery options[/cyan]")
+        self.console.print("    [1] Retry discovery with a new API key")
+        self.console.print("    [2] Enter model ID manually")
+        self.console.print("    [3] Cancel")
+        try:
+            raw = self._plain_prompt_session.prompt(
+                [("class:prompt", "  Select option [2]: ")],
+            ).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            return None
+        if raw in {"1", "retry", "r"}:
+            return "retry"
+        if raw in {"3", "cancel", "c", "q"}:
+            return "cancel"
+        if raw in {"", "2", "manual", "m"}:
+            return "manual"
+        self.console.print("  [dim]Invalid selection; switching to manual model entry.[/dim]")
+        return "manual"
 
     def _choose_model_from_discovered_tags(self, discovered_models: list[str], default_model: str) -> str | None:
         """Choose a model from discovered tags or enter one manually."""
@@ -2234,12 +2988,14 @@ class InteractiveTerminal:
         from ui.status import SPINNERS
         
         cfg = Config.load()
+        self.session.config = cfg
         
         while True:
             self.console.print("\n  [cyan]Settings Menu[/cyan]")
             self.console.print("  [1] UI Loading Spinner")
             self.console.print("  [2] Agent Profile (Research/Pharma/Enterprise)")
             self.console.print("  [3] Auto-publish HTML Reports")
+            self.console.print("  [4] OpenAI-compatible Profiles")
             self.console.print("  [0] Done")
             self.console.print("\n  Select option: ", end="")
             
@@ -2335,8 +3091,396 @@ class InteractiveTerminal:
                     self.console.print(f"  [green]Auto-publish HTML disabled.[/green]")
                 else:
                     self.console.print("  [dim]Cancelled.[/dim]")
+            elif choice == "4":
+                self._manage_openai_profiles_settings(cfg)
             else:
                 self.console.print("  [dim]Invalid choice.[/dim]")
+
+    def _manage_openai_profiles_settings(self, cfg) -> None:
+        """Manage OpenAI-compatible profiles from /settings (add/edit/delete)."""
+        import sys
+
+        while True:
+            profiles = cfg.openai_profiles(include_cloud=True)
+
+            self.console.print("\n  [cyan]OpenAI Profile Manager[/cyan]")
+            for profile_id, profile in sorted(
+                profiles.items(),
+                key=lambda item: str(item[1].get("label") or item[0]).strip().lower(),
+            ):
+                label = str(profile.get("label") or profile_id).strip()
+                backend = str(profile.get("backend") or "other").strip().lower()
+                endpoint = str(profile.get("base_url") or "—").strip()
+                self.console.print(
+                    f"  - [bold]{profile_id}[/bold] · {label} [dim]({backend}, {endpoint})[/dim]"
+                )
+
+            self.console.print("\n  [1] Add compatible profile")
+            self.console.print("  [2] Edit compatible profile")
+            self.console.print("  [3] Delete compatible profile")
+            self.console.print("  [0] Back")
+            self.console.print("\n  Select option: ", end="")
+            sys.stdout.flush()
+
+            try:
+                choice = self._getch()
+            except KeyboardInterrupt:
+                self.console.print()
+                return
+            self.console.print(choice)
+
+            if choice == "0":
+                return
+            if choice == "1":
+                profile_id = self._create_or_edit_compatible_profile()
+                if profile_id:
+                    self.session.config = cfg
+                    self.console.print(f"  [green]Profile saved:[/green] {profile_id}")
+                else:
+                    self.console.print("  [dim]Cancelled.[/dim]")
+                continue
+            if choice == "2":
+                profile_id = self._prompt_select_compatible_profile_id(
+                    cfg=cfg,
+                    allow_create=False,
+                )
+                if not profile_id:
+                    self.console.print("  [dim]Cancelled.[/dim]")
+                    continue
+                updated_profile_id = self._create_or_edit_compatible_profile(profile_id=profile_id)
+                if updated_profile_id:
+                    self.session.config = cfg
+                    self.console.print(f"  [green]Profile updated:[/green] {updated_profile_id}")
+                else:
+                    self.console.print("  [dim]Cancelled.[/dim]")
+                continue
+            if choice == "3":
+                profile_id = self._prompt_select_compatible_profile_id(
+                    cfg=cfg,
+                    allow_create=False,
+                )
+                if not profile_id:
+                    self.console.print("  [dim]Cancelled.[/dim]")
+                    continue
+                if not cfg.remove_openai_profile(profile_id):
+                    self.console.print("  [yellow]Profile could not be deleted.[/yellow]")
+                    continue
+                cfg.save()
+                self.session.config = cfg
+                self.console.print(f"  [green]Deleted profile:[/green] {profile_id}")
+                continue
+            self.console.print("  [dim]Invalid choice.[/dim]")
+
+    def _handle_keys_command(self, query: str) -> None:
+        """Handle /keys with optional compatible-profile actions."""
+        from agent.config import Config
+
+        cfg = getattr(self.session, "config", None) or Config.load()
+        parts = query.strip().split()
+        if len(parts) <= 1:
+            self.console.print(cfg.keys_table())
+            return
+
+        action = str(parts[1] or "").strip().lower()
+        if action in {"profile", "use", "select"}:
+            profile_id = self._prompt_select_compatible_profile_id(
+                cfg=cfg,
+                allow_create=False,
+            )
+            if not profile_id:
+                self.console.print("  [dim]Cancelled.[/dim]")
+                return
+            try:
+                cfg.set_openai_active_profile(profile_id)
+            except ValueError as exc:
+                self.console.print(f"  [red]{exc}[/red]")
+                return
+            cfg.save()
+            self.session.config = cfg
+            self.console.print(f"  [green]Active compatible profile:[/green] {profile_id}")
+            self.console.print(cfg.keys_table())
+            return
+
+        if action in {"set-compatible", "set", "update"}:
+            profile_id_arg = str(parts[2] or "").strip() if len(parts) > 2 else ""
+            if profile_id_arg:
+                profile_id = profile_id_arg
+            else:
+                active_profile = cfg.get_openai_profile()
+                active_backend = str((active_profile or {}).get("backend") or "").strip().lower()
+                if active_backend and active_backend != "openai":
+                    profile_id = str((active_profile or {}).get("id") or "").strip()
+                else:
+                    profile_id = self._prompt_select_compatible_profile_id(
+                        cfg=cfg,
+                        allow_create=False,
+                    )
+            if not profile_id:
+                self.console.print("  [dim]Cancelled.[/dim]")
+                return
+            profile = cfg.get_openai_profile(profile_id)
+            if not profile or str(profile.get("backend") or "").strip().lower() == "openai":
+                self.console.print("  [yellow]Select a compatible profile (not OpenAI Cloud).[/yellow]")
+                return
+            label = str(profile.get("label") or profile_id).strip()
+            current_preview = str(profile.get("api_key") or "").strip()
+            current_state = "configured" if current_preview else "not set"
+            self.console.print(
+                f"  [cyan]Update API key for {label}[/cyan] [dim](currently {current_state})[/dim]"
+            )
+            try:
+                api_key = self._secret_prompt_session.prompt(
+                    [("class:prompt", "  New API key [Enter to cancel]: ")],
+                    is_password=True,
+                ).strip()
+            except (EOFError, KeyboardInterrupt):
+                self.console.print("  [dim]Cancelled.[/dim]")
+                return
+            if not api_key:
+                self.console.print("  [dim]Cancelled.[/dim]")
+                return
+            cfg.upsert_openai_profile(
+                profile_id=profile_id,
+                api_key=api_key,
+                set_active=True,
+            )
+            cfg.save()
+            self.session.config = cfg
+            self.console.print(f"  [green]Updated key for profile:[/green] {label}")
+            self.console.print(cfg.keys_table())
+            return
+
+        self.console.print(
+            "  [dim]Usage:[/dim] /keys  |  /keys profile  |  /keys set-compatible [profile_id]"
+        )
+        self.console.print(cfg.keys_table())
+
+    @staticmethod
+    def _compatible_models_path_label(backend: str) -> str:
+        """Return discovery path(s) used for a compatible backend."""
+        backend_type = str(backend or "").strip().lower()
+        if backend_type in {"unsloth", "omlx"}:
+            return "/v1/models"
+        if backend_type == "ollama":
+            return "/api/tags -> /v1/models"
+        return "/v1/models -> /api/tags"
+
+    def _probe_compatible_profile(
+        self,
+        *,
+        base_url: str,
+        backend: str,
+        api_key: str | None,
+    ) -> dict[str, Any]:
+        """Probe one compatible profile and return health/model diagnostics."""
+        backend_type = str(backend or "").strip().lower() or "other"
+        models_path = self._compatible_models_path_label(backend_type)
+        discovered: list[str] = []
+        errors: list[str] = []
+        source = ""
+
+        if backend_type in {"unsloth", "omlx"}:
+            models, err = self._fetch_openai_models(
+                base_url,
+                api_key=api_key,
+                quiet=True,
+                return_error=True,
+            )
+            discovered = list(models)
+            source = "/v1/models"
+            if err:
+                errors.append(str(err))
+        elif backend_type == "ollama":
+            models, err = self._fetch_ollama_tags(
+                base_url,
+                api_key=api_key,
+                quiet=True,
+                return_error=True,
+            )
+            discovered = list(models)
+            source = "/api/tags"
+            if err:
+                errors.append(str(err))
+            if not discovered:
+                models_fallback, err_fallback = self._fetch_openai_models(
+                    base_url,
+                    api_key=api_key,
+                    quiet=True,
+                    return_error=True,
+                )
+                discovered = list(models_fallback)
+                source = "/v1/models"
+                if err_fallback:
+                    errors.append(str(err_fallback))
+        else:
+            models, err = self._fetch_openai_models(
+                base_url,
+                api_key=api_key,
+                quiet=True,
+                return_error=True,
+            )
+            discovered = list(models)
+            source = "/v1/models"
+            if err:
+                errors.append(str(err))
+            if not discovered:
+                models_fallback, err_fallback = self._fetch_ollama_tags(
+                    base_url,
+                    api_key=api_key,
+                    quiet=True,
+                    return_error=True,
+                )
+                discovered = list(models_fallback)
+                source = "/api/tags"
+                if err_fallback:
+                    errors.append(str(err_fallback))
+
+        health = "[green]healthy[/green]" if discovered else "[yellow]no models[/yellow]"
+        if not discovered and errors:
+            health = "[red]error[/red]"
+        error_text = ""
+        if errors:
+            joined_error = "; ".join(dict.fromkeys(errors))
+            error_text = self._truncate_discovery_detail(joined_error, max_chars=120)
+
+        return {
+            "health": health,
+            "models": discovered,
+            "models_source": source,
+            "models_path": models_path,
+            "error": error_text,
+        }
+
+    def _handle_model_manager_command(self, query: str) -> None:
+        """Show and manage OpenAI-compatible profiles (add/edit/delete)."""
+        from agent.config import Config
+        from rich.table import Table
+        import sys
+
+        cfg = Config.load()
+        self.session.config = cfg
+
+        while True:
+            profiles = cfg.openai_profiles(include_cloud=False)
+            if not profiles:
+                self.console.print("  [yellow]No OpenAI-compatible profiles configured yet.[/yellow]")
+                self.console.print("  [dim]Use [1] below to add your first profile.[/dim]")
+            else:
+                table = Table(title="OpenAI-compatible Profiles")
+                table.add_column("Profile", style="bold")
+                table.add_column("Backend")
+                table.add_column("Endpoint", style="dim")
+                table.add_column("Models Path", style="dim")
+                table.add_column("Health")
+                table.add_column("API Key", style="magenta dim")
+                table.add_column("Models", style="dim")
+
+                for profile_id, profile in sorted(
+                    profiles.items(),
+                    key=lambda item: str(item[1].get("label") or item[0]).strip().lower(),
+                ):
+                    backend = str(profile.get("backend") or "other").strip().lower() or "other"
+                    endpoint = str(profile.get("base_url") or "").strip() or "—"
+                    profile_label = str(profile.get("label") or profile_id).strip()
+                    api_key = str(profile.get("api_key") or "").strip() or None
+
+                    probe = self._probe_compatible_profile(
+                        base_url=endpoint,
+                        backend=backend,
+                        api_key=api_key,
+                    )
+                    model_names = list(probe.get("models") or [])
+                    models_display = "—"
+                    if model_names:
+                        shown = model_names[:4]
+                        models_display = ", ".join(shown)
+                        if len(model_names) > 4:
+                            models_display += f" (+{len(model_names) - 4})"
+                    elif probe.get("error"):
+                        models_display = f"[dim]{probe.get('error')}[/dim]"
+
+                    backend_label = (
+                        "oMLX"
+                        if backend == "omlx"
+                        else "Ollama"
+                        if backend == "ollama"
+                        else "Unsloth"
+                        if backend == "unsloth"
+                        else "Custom"
+                    )
+                    key_preview = Config._secret_preview(api_key)
+                    table.add_row(
+                        profile_label,
+                        backend_label,
+                        endpoint,
+                        str(probe.get("models_path") or "—"),
+                        str(probe.get("health") or "—"),
+                        key_preview,
+                        models_display,
+                    )
+
+                self.console.print(table)
+
+            self.console.print("  [cyan]Model Manager options[/cyan]")
+            self.console.print("  [1] Add compatible profile")
+            self.console.print("  [2] Edit compatible profile")
+            self.console.print("  [3] Delete compatible profile")
+            self.console.print("  [0] Back")
+            self.console.print("\n  Select option: ", end="")
+            sys.stdout.flush()
+
+            try:
+                choice = self._getch()
+            except KeyboardInterrupt:
+                self.console.print()
+                return
+            self.console.print(choice)
+
+            if choice == "0":
+                return
+            if choice == "1":
+                profile_id = self._create_or_edit_compatible_profile()
+                if profile_id:
+                    self.session.config = cfg
+                    self.console.print(f"  [green]Profile saved:[/green] {profile_id}")
+                else:
+                    self.console.print("  [dim]Cancelled.[/dim]")
+                continue
+            if choice == "2":
+                profile_id = self._prompt_select_compatible_profile_id(
+                    cfg=cfg,
+                    allow_create=False,
+                )
+                if not profile_id:
+                    self.console.print("  [dim]Cancelled.[/dim]")
+                    continue
+                updated_profile_id = self._create_or_edit_compatible_profile(profile_id=profile_id)
+                if updated_profile_id:
+                    self.session.config = cfg
+                    self.console.print(f"  [green]Profile updated:[/green] {updated_profile_id}")
+                else:
+                    self.console.print("  [dim]Cancelled.[/dim]")
+                continue
+            if choice == "3":
+                profile_id = self._prompt_select_compatible_profile_id(
+                    cfg=cfg,
+                    allow_create=False,
+                )
+                if not profile_id:
+                    self.console.print("  [dim]Cancelled.[/dim]")
+                    continue
+                if not cfg.remove_openai_profile(profile_id):
+                    self.console.print("  [yellow]Profile could not be deleted.[/yellow]")
+                    continue
+                cfg.save()
+                self.session.config = cfg
+                self.console.print(f"  [green]Deleted profile:[/green] {profile_id}")
+                continue
+            self.console.print("  [dim]Invalid choice.[/dim]")
+
+    # Backward-compatible alias for older command wiring/tests.
+    def _handle_compatible_profiles_command(self, query: str) -> None:
+        self._handle_model_manager_command(query)
 
     def _toggle_plan_mode(self):
         """Toggle plan mode — agent shows plan for approval before executing."""

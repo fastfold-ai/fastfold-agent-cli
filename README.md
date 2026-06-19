@@ -22,7 +22,7 @@ You get the full open-source agent[1](#notes) with 190+ tools, 30+ database APIs
 
 - **GPU compute models & workflows**: run heavy scientific workflows like folding, protein design, and MD simulation on Fastfold Cloud, your own compute, or providers like Modal, Nebius, and more.
 - **Installable skills**: discover, add, and share workflows natively (`fastfold skills find`, `fastfold skills add <github url>`).
-- **Any model**: Anthropic, OpenAI, or local/open models like Gemma, Qwen, and DeepSeek through endpoints like **Ollama** and **Unsloth** via `/model` or `fastfold setup`.
+- **Any model**: Anthropic, OpenAI, or local/open models like Gemma, Qwen, and DeepSeek through endpoints like **Ollama**, **Unsloth**, and **oMLX** via `/model`, `/model-manager`, or `fastfold setup`.
 
 ### Quick install
 
@@ -120,13 +120,17 @@ fastfold setup --provider openai --openai-api-key sk-... --fastfold-api-key sk-.
 Local/compatible endpoints can also be configured in one line:
 
 ```bash
-fastfold setup --provider openai_compatible --openai-compatible-backend ollama --openai-base-url http://localhost:11434/v1
-fastfold setup --provider openai_compatible --openai-compatible-backend unsloth --openai-base-url http://localhost:8888/v1
+fastfold setup --provider openai_compatible --profile-label "Ollama Local" --profile-template ollama --profile-endpoint http://localhost:11434/v1 --profile-key ollama
+fastfold setup --provider openai_compatible --profile-label "Unsloth Local" --profile-template unsloth --profile-endpoint http://localhost:8888/v1 --profile-key sk-unsloth-...
+fastfold setup --provider openai_compatible --profile-label "oMLX Local" --profile-template omlx --profile-endpoint http://localhost:8000/v1 --profile-key sk-omlx-...
 ```
 
 ### Local and OpenAI-compatible models (Ollama, Unsloth, other gateways)
 
-Fastfold supports local/self-hosted OpenAI-compatible endpoints in both `fastfold setup` and interactive `/model`.
+Fastfold supports local/self-hosted OpenAI-compatible endpoints in both `fastfold setup` and interactive mode:
+
+- `/model`: model/provider selection only
+- `/model-manager`: add/edit/delete compatible profiles and inspect endpoint health/model discovery
 
 Recommended (interactive):
 
@@ -139,14 +143,28 @@ The setup wizard will guide you through:
 1. Endpoint type selection:
   - `Ollama` (`/api/tags`)
   - `Unsloth` (`/v1/models`, auth)
+  - `oMLX` (`/v1/models`, auth)
   - `Other OpenAI-compatible` (`/v1/models` then `/api/tags`)
 2. Endpoint base URL:
   - Ollama default: `http://localhost:11434/v1`
   - Unsloth default: `http://localhost:8888/v1`
+  - oMLX default: `http://localhost:8000/v1`
 3. API key prompt (backend-aware):
   - Ollama commonly uses `ollama` placeholder key
   - Unsloth uses your Unsloth Studio key
-4. Model discovery + selection from endpoint models (or manual model ID entry)
+4. Profile summary preview (label/template/endpoint), then model discovery + selection (or manual model ID entry)
+
+Scripted profile setup flags:
+
+```bash
+fastfold setup --provider openai_compatible \
+  --profile-label "Custom Gateway" \
+  --profile-template other \
+  --profile-endpoint https://gateway.example.com/v1 \
+  --profile-key sk-... \
+  --profile-default-model gpt-oss-120b \
+  --set-default-profile
+```
 
 You can also configure directly:
 
@@ -173,7 +191,10 @@ export OPENAI_BASE_URL="http://localhost:11434/v1"
 export OPENAI_COMPATIBLE_API_KEY="ollama"
 ```
 
-Inside interactive mode, run `/model` to switch providers/models and re-run endpoint/model discovery at any time.
+Inside interactive mode:
+
+- Run `/model` to switch across configured providers/models.
+- Run `/model-manager` to add/edit/delete OpenAI-compatible profiles and view endpoint health/model lists.
 
 Provider selection:
 
@@ -226,9 +247,10 @@ Inside `fastfold` interactive mode (run `/help` for the full reference):
 **Models & configuration**
 
 - `/model`: switch LLM model/provider interactively
+- `/model-manager`: manage OpenAI-compatible profiles (add/edit/delete + diagnostics)
 - `/settings`: configure UI and agent preferences
 - `/config`: show active runtime configuration
-- `/keys`: show API key setup status by service
+- `/keys`: show API key setup status by service (`/keys profile`, `/keys set-compatible <profile_id>`)
 
 **Run control**
 

@@ -31,6 +31,40 @@ VALID_LLM_PROVIDERS = frozenset({"anthropic", "openai", "local", "gluelm"})
 logger = logging.getLogger("config")
 OPENAI_API_KEY_PATTERN = re.compile(r"^sk-[A-Za-z0-9_-]{6,}$")
 ANTHROPIC_API_KEY_PATTERN = re.compile(r"^sk-ant-[A-Za-z0-9_-]{6,}$")
+OPENAI_PROFILE_BACKENDS = frozenset({"openai", "ollama", "unsloth", "omlx", "other"})
+OPENAI_PROFILE_DEFAULTS = {
+    "openai": {
+        "label": "OpenAI Cloud",
+        "base_url": "https://api.openai.com/v1",
+        "discovery": ["v1_models"],
+        "default_model": "gpt-5.5",
+    },
+    "ollama": {
+        "label": "Ollama Local",
+        "base_url": "http://localhost:11434/v1",
+        "discovery": ["ollama_tags", "v1_models"],
+        "default_model": "llama3.1",
+    },
+    "unsloth": {
+        "label": "Unsloth Local",
+        "base_url": "http://localhost:8888/v1",
+        "discovery": ["v1_models"],
+        "default_model": "gpt-oss",
+    },
+    "omlx": {
+        "label": "oMLX Local",
+        "base_url": "http://localhost:8000/v1",
+        "discovery": ["v1_models"],
+        "default_model": "diffusiongemma-26B-A4B-it-4bit",
+    },
+    "other": {
+        "label": "Custom Compatible Endpoint",
+        "base_url": "http://localhost:11434/v1",
+        "discovery": ["v1_models", "ollama_tags"],
+        "default_model": "llama3.1",
+    },
+}
+_UNSET = object()
 
 _LEGACY_DIR = Path.home() / ".ct"
 
@@ -67,6 +101,9 @@ DEFAULTS = {
     "llm.openai_compatible_api_key": None,
     "llm.openai_base_url": None,
     "llm.openai_compatible_backend": None,
+    "llm.openai_profiles": None,
+    "llm.openai_active_profile": None,
+    "llm.openai_default_profile": None,
     "llm.temperature": 0.1,
 
     "data.base": str(CONFIG_DIR / "data"),
@@ -386,8 +423,458 @@ def _validate_config(config_dict: dict) -> list[str]:
 class Config:
     """ct configuration manager."""
 
+    @staticmethod
+    def _normalize_openai_base_url(value: Any) -> Optional[str]:
+        """Normalize OpenAI-compatible base URLs for consistent comparisons."""
+        text = Config._normalized_secret(value)
+        if not text:
+            return None
+        return text.rstrip("/")
+
+    @staticmethod
+    def infer_openai_compatible_backend(base_url: Optional[str], api_key: Optional[str] = None) -> str:
+        """Infer OpenAI-compatible backend type from endpoint and key hints."""
+        endpoint = str(base_url or "").strip().lower()
+        secret = str(api_key or "").strip().lower()
+        if secret.startswith("sk-unsloth-") or "8888" in endpoint:
+            return "unsloth"
+        if "8000" in endpoint or "omlx" in endpoint:
+            return "omlx"
+        if "11434" in endpoint:
+            return "ollama"
+        return "other"
+
+    @staticmethod
+    def _infer_backend_from_model_name(model_id: Optional[str]) -> Optional[str]:
+        """Infer backend from model id hints when endpoint is unavailable."""
+        model_name = str(model_id or "").strip().lower()
+        if not model_name:
+            return None
+        if "omlx" in model_name:
+            return "omlx"
+        if "unsloth" in model_name:
+            return "unsloth"
+        if model_name.startswith("llama") or model_name.startswith("qwen") or model_name.startswith("phi"):
+            return "ollama"
+        return None
+
+    @staticmethod
+    def _looks_like_anthropic_model(model_id: Optional[str]) -> bool:
+        """Best-effort check for Anthropic model identifiers."""
+        value = str(model_id or "").strip().lower()
+        return value.startswith("claude-")
+
+    @staticmethod
+    def _slugify_profile_id(value: str) -> str:
+        """Create stable profile IDs from labels."""
+        normalized = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+        return normalized or "profile"
+
+    @classmethod
+    def _unique_profile_id(cls, base_id: str, existing: dict[str, dict]) -> str:
+        """Return a unique profile id using numeric suffixes when required."""
+        candidate = cls._slugify_profile_id(base_id)
+        if candidate not in existing:
+            return candidate
+        idx = 2
+        while f"{candidate}_{idx}" in existing:
+            idx += 1
+        return f"{candidate}_{idx}"
+
+    @classmethod
+    def _normalize_discovery_sequence(cls, backend: str, value: Any) -> list[str]:
+        """Normalize model discovery strategies for profile records."""
+        allowed = {"v1_models", "ollama_tags"}
+        if isinstance(value, list):
+            parsed = [str(item or "").strip().lower() for item in value]
+            filtered = [item for item in parsed if item in allowed]
+            if filtered:
+                deduped: list[str] = []
+                for item in filtered:
+                    if item not in deduped:
+                        deduped.append(item)
+                return deduped
+        default_seq = OPENAI_PROFILE_DEFAULTS.get(backend, OPENAI_PROFILE_DEFAULTS["other"]).get("discovery", [])
+        return [str(item) for item in default_seq]
+
+    @classmethod
+    def _normalize_profile_record(cls, profile_id: str, raw: Any) -> dict[str, Any]:
+        """Normalize an OpenAI profile record with backend defaults."""
+        payload = raw if isinstance(raw, dict) else {}
+        backend = str(payload.get("backend") or "").strip().lower()
+        if backend not in OPENAI_PROFILE_BACKENDS:
+            backend = cls.infer_openai_compatible_backend(payload.get("base_url"), payload.get("api_key"))
+        if profile_id == "openai_cloud":
+            backend = "openai"
+
+        defaults = OPENAI_PROFILE_DEFAULTS.get(backend, OPENAI_PROFILE_DEFAULTS["other"])
+
+        label_raw = str(payload.get("label") or "").strip()
+        label = label_raw or str(defaults.get("label") or "OpenAI Profile")
+
+        base_url = cls._normalize_openai_base_url(payload.get("base_url")) or str(defaults.get("base_url") or "")
+        if backend == "openai":
+            if not cls._is_openai_managed_base_url(base_url):
+                base_url = str(OPENAI_PROFILE_DEFAULTS["openai"]["base_url"])
+        else:
+            if cls._is_openai_managed_base_url(base_url):
+                base_url = str(defaults.get("base_url") or OPENAI_PROFILE_DEFAULTS["other"]["base_url"])
+
+        default_model_raw = str(payload.get("default_model") or "").strip()
+        default_model = default_model_raw or str(defaults.get("default_model") or "")
+
+        return {
+            "label": label,
+            "backend": backend,
+            "base_url": base_url.rstrip("/"),
+            "api_key": cls._normalized_secret(payload.get("api_key")),
+            "discovery": cls._normalize_discovery_sequence(backend, payload.get("discovery")),
+            "default_model": default_model,
+        }
+
+    @classmethod
+    def _ensure_openai_profiles_data(
+        cls,
+        data: dict[str, Any],
+        *,
+        apply_legacy_compat: bool = True,
+    ) -> tuple[dict[str, dict[str, Any]], str, str]:
+        """Ensure profile schema exists and migrate legacy OpenAI-compatible fields."""
+        profiles: dict[str, dict[str, Any]] = {}
+        raw_profiles = data.get("llm.openai_profiles")
+        if isinstance(raw_profiles, dict):
+            for raw_profile_id, raw_profile in raw_profiles.items():
+                profile_id = cls._slugify_profile_id(raw_profile_id)
+                profile_id = cls._unique_profile_id(profile_id, profiles)
+                profiles[profile_id] = cls._normalize_profile_record(profile_id, raw_profile)
+
+        # Always keep a cloud profile available.
+        if "openai_cloud" not in profiles:
+            profiles["openai_cloud"] = cls._normalize_profile_record(
+                "openai_cloud",
+                {
+                    "label": "OpenAI Cloud",
+                    "backend": "openai",
+                    "base_url": OPENAI_PROFILE_DEFAULTS["openai"]["base_url"],
+                    "api_key": cls._normalized_secret(data.get("llm.openai_api_key")),
+                    "default_model": OPENAI_PROFILE_DEFAULTS["openai"]["default_model"],
+                    "discovery": OPENAI_PROFILE_DEFAULTS["openai"]["discovery"],
+                },
+            )
+        else:
+            openai_key = cls._normalized_secret(data.get("llm.openai_api_key"))
+            if openai_key and not profiles["openai_cloud"].get("api_key"):
+                profiles["openai_cloud"]["api_key"] = openai_key
+
+        # Migrate legacy single-slot compatible configuration into profiles.
+        legacy_base_url = cls._normalize_openai_base_url(data.get("llm.openai_base_url"))
+        legacy_backend = str(data.get("llm.openai_compatible_backend") or "").strip().lower()
+        legacy_key = cls._normalized_secret(data.get("llm.openai_compatible_api_key"))
+        if legacy_backend not in OPENAI_PROFILE_BACKENDS:
+            legacy_backend = cls.infer_openai_compatible_backend(legacy_base_url, legacy_key)
+        if apply_legacy_compat and legacy_base_url and not cls._is_openai_managed_base_url(legacy_base_url):
+            profile_match_id = None
+            for existing_id, existing_profile in profiles.items():
+                existing_url = cls._normalize_openai_base_url(existing_profile.get("base_url"))
+                if existing_profile.get("backend") != "openai" and existing_url == legacy_base_url:
+                    profile_match_id = existing_id
+                    break
+            if not profile_match_id:
+                base_candidate = f"{legacy_backend or 'compatible'}_profile"
+                profile_match_id = cls._unique_profile_id(base_candidate, profiles)
+                profiles[profile_match_id] = cls._normalize_profile_record(
+                    profile_match_id,
+                    {
+                        "label": str(
+                            OPENAI_PROFILE_DEFAULTS.get(legacy_backend, OPENAI_PROFILE_DEFAULTS["other"]).get("label")
+                            or "Compatible Endpoint"
+                        ),
+                        "backend": legacy_backend,
+                        "base_url": legacy_base_url,
+                        "api_key": legacy_key,
+                        "default_model": data.get("llm.model"),
+                    },
+                )
+            else:
+                updated = dict(profiles[profile_match_id])
+                if legacy_backend and legacy_backend in OPENAI_PROFILE_BACKENDS:
+                    updated["backend"] = legacy_backend
+                if legacy_key:
+                    updated["api_key"] = legacy_key
+                updated["base_url"] = legacy_base_url
+                profiles[profile_match_id] = cls._normalize_profile_record(profile_match_id, updated)
+            if "llm.openai_active_profile" not in data and str(data.get("llm.provider") or "").strip().lower() == "openai":
+                data["llm.openai_active_profile"] = profile_match_id
+
+        # Bootstrap compatible profile from legacy key/model hints when endpoint
+        # is missing but users likely intended an OpenAI-compatible provider.
+        has_compatible_profiles = any(
+            str(profile.get("backend") or "").strip().lower() != "openai"
+            for profile in profiles.values()
+        )
+        configured_model = str(data.get("llm.model") or "").strip()
+        provider_raw = str(data.get("llm.provider") or "").strip().lower()
+        if apply_legacy_compat and not has_compatible_profiles and legacy_key:
+            bootstrap_backend = legacy_backend if legacy_backend in {"ollama", "unsloth", "omlx", "other"} else "other"
+            inferred_model_backend = cls._infer_backend_from_model_name(configured_model)
+            if inferred_model_backend:
+                bootstrap_backend = inferred_model_backend
+            bootstrap_defaults = OPENAI_PROFILE_DEFAULTS.get(bootstrap_backend, OPENAI_PROFILE_DEFAULTS["other"])
+            bootstrap_id = cls._unique_profile_id(f"{bootstrap_backend}_legacy", profiles)
+            profiles[bootstrap_id] = cls._normalize_profile_record(
+                bootstrap_id,
+                {
+                    "label": str(bootstrap_defaults.get("label") or "Compatible Endpoint"),
+                    "backend": bootstrap_backend,
+                    "base_url": str(bootstrap_defaults.get("base_url") or "http://localhost:11434/v1"),
+                    "api_key": legacy_key,
+                    "default_model": configured_model,
+                    "discovery": bootstrap_defaults.get("discovery"),
+                },
+            )
+            if (
+                "llm.openai_active_profile" not in data
+                or provider_raw == "openai"
+                or (configured_model and not cls._looks_like_anthropic_model(configured_model))
+            ):
+                data["llm.openai_active_profile"] = bootstrap_id
+
+        default_profile = cls._slugify_profile_id(str(data.get("llm.openai_default_profile") or "").strip())
+        if default_profile not in profiles:
+            default_profile = "openai_cloud"
+
+        active_profile = cls._slugify_profile_id(str(data.get("llm.openai_active_profile") or "").strip())
+        if active_profile not in profiles:
+            active_profile = default_profile
+            if legacy_base_url and not cls._is_openai_managed_base_url(legacy_base_url):
+                for existing_id, existing_profile in profiles.items():
+                    if cls._normalize_openai_base_url(existing_profile.get("base_url")) == legacy_base_url:
+                        active_profile = existing_id
+                        break
+
+        # Heal provider/model mismatch: if provider says Anthropic but model
+        # clearly targets a compatible backend, prefer openai provider.
+        compatible_profile_ids = [
+            profile_id
+            for profile_id, profile in profiles.items()
+            if str(profile.get("backend") or "").strip().lower() != "openai"
+        ]
+        if (
+            provider_raw == "anthropic"
+            and configured_model
+            and not cls._looks_like_anthropic_model(configured_model)
+            and compatible_profile_ids
+        ):
+            data["llm.provider"] = "openai"
+            if active_profile == "openai_cloud":
+                model_match_profile = None
+                for profile_id in compatible_profile_ids:
+                    model_hint = str((profiles.get(profile_id) or {}).get("default_model") or "").strip()
+                    if model_hint == configured_model:
+                        model_match_profile = profile_id
+                        break
+                active_profile = model_match_profile or compatible_profile_ids[0]
+
+        data["llm.openai_profiles"] = profiles
+        data["llm.openai_active_profile"] = active_profile
+        data["llm.openai_default_profile"] = default_profile
+
+        cls._project_active_profile_to_legacy_data(data)
+        return profiles, active_profile, default_profile
+
+    @classmethod
+    def _project_active_profile_to_legacy_data(cls, data: dict[str, Any]) -> None:
+        """Mirror the active OpenAI profile back into legacy flat keys."""
+        profiles = data.get("llm.openai_profiles")
+        if not isinstance(profiles, dict):
+            return
+        active_profile_id = str(data.get("llm.openai_active_profile") or "").strip()
+        active = profiles.get(active_profile_id)
+        if not isinstance(active, dict):
+            return
+
+        backend = str(active.get("backend") or "").strip().lower()
+        base_url = cls._normalize_openai_base_url(active.get("base_url"))
+        api_key = cls._normalized_secret(active.get("api_key"))
+
+        if backend == "openai":
+            data["llm.openai_base_url"] = None
+            data["llm.openai_compatible_backend"] = None
+            if api_key and "llm.openai_api_key" not in data:
+                data["llm.openai_api_key"] = api_key
+        else:
+            data["llm.openai_base_url"] = base_url
+            data["llm.openai_compatible_backend"] = backend or "other"
+            if api_key:
+                data["llm.openai_compatible_api_key"] = api_key
+
+    def _sync_openai_profile_projection(self, *, apply_legacy_compat: bool = True) -> None:
+        """Refresh legacy OpenAI-compatible fields after profile updates."""
+        self._ensure_openai_profiles_data(
+            self._data,
+            apply_legacy_compat=apply_legacy_compat,
+        )
+        self._dirty_keys.update(
+            {
+                "llm.openai_profiles",
+                "llm.openai_active_profile",
+                "llm.openai_default_profile",
+                "llm.openai_api_key",
+                "llm.openai_base_url",
+                "llm.openai_compatible_backend",
+                "llm.openai_compatible_api_key",
+            }
+        )
+        self._unset_keys.difference_update(
+            {
+                "llm.openai_profiles",
+                "llm.openai_active_profile",
+                "llm.openai_default_profile",
+                "llm.openai_api_key",
+                "llm.openai_base_url",
+                "llm.openai_compatible_backend",
+                "llm.openai_compatible_api_key",
+            }
+        )
+
+    def openai_profiles(self, *, include_cloud: bool = True) -> dict[str, dict[str, Any]]:
+        """Return configured OpenAI/OpenAI-compatible profiles."""
+        profiles, _, _ = self._ensure_openai_profiles_data(self._data)
+        if include_cloud:
+            return {profile_id: dict(profile) for profile_id, profile in profiles.items()}
+        return {
+            profile_id: dict(profile)
+            for profile_id, profile in profiles.items()
+            if str(profile.get("backend") or "").strip().lower() != "openai"
+        }
+
+    def active_openai_profile_id(self) -> str:
+        """Return active OpenAI profile id."""
+        _, active_profile_id, _ = self._ensure_openai_profiles_data(self._data)
+        return active_profile_id
+
+    def compatible_openai_profile_ids(self) -> list[str]:
+        """Return configured non-cloud OpenAI-compatible profile ids."""
+        profiles = self.openai_profiles(include_cloud=False)
+        return sorted(profiles.keys())
+
+    def default_openai_profile_id(self) -> str:
+        """Return default OpenAI profile id."""
+        _, _, default_profile_id = self._ensure_openai_profiles_data(self._data)
+        return default_profile_id
+
+    def get_openai_profile(self, profile_id: Optional[str] = None) -> Optional[dict[str, Any]]:
+        """Return an OpenAI profile by id (or active profile when omitted)."""
+        profiles, active_profile_id, _ = self._ensure_openai_profiles_data(self._data)
+        selected_profile_id = self._slugify_profile_id(profile_id or active_profile_id)
+        profile = profiles.get(selected_profile_id)
+        if not profile:
+            return None
+        return {"id": selected_profile_id, **dict(profile)}
+
+    def set_openai_active_profile(self, profile_id: str) -> None:
+        """Set active OpenAI profile and sync legacy projection fields."""
+        profiles, _, _ = self._ensure_openai_profiles_data(self._data)
+        selected_profile_id = self._slugify_profile_id(profile_id)
+        if selected_profile_id not in profiles:
+            raise ValueError(f"Unknown OpenAI profile '{profile_id}'.")
+        self._data["llm.openai_active_profile"] = selected_profile_id
+        self._sync_openai_profile_projection(apply_legacy_compat=False)
+
+    def set_openai_default_profile(self, profile_id: str) -> None:
+        """Set default OpenAI profile used for future selections."""
+        profiles, _, _ = self._ensure_openai_profiles_data(self._data)
+        selected_profile_id = self._slugify_profile_id(profile_id)
+        if selected_profile_id not in profiles:
+            raise ValueError(f"Unknown OpenAI profile '{profile_id}'.")
+        self._data["llm.openai_default_profile"] = selected_profile_id
+        self._sync_openai_profile_projection(apply_legacy_compat=False)
+
+    def upsert_openai_profile(
+        self,
+        *,
+        profile_id: Optional[str] = None,
+        label: Optional[str] = None,
+        backend: Optional[str] = None,
+        base_url: Optional[str] = None,
+        api_key: Any = _UNSET,
+        default_model: Optional[str] = None,
+        discovery: Optional[list[str]] = None,
+        set_active: bool = False,
+        set_default: bool = False,
+    ) -> str:
+        """Create or update an OpenAI profile and return its profile id."""
+        profiles, active_profile_id, default_profile_id = self._ensure_openai_profiles_data(self._data)
+        requested_backend = str(backend or "").strip().lower()
+        if requested_backend and requested_backend not in OPENAI_PROFILE_BACKENDS:
+            raise ValueError(f"Unsupported OpenAI profile backend '{backend}'.")
+
+        if profile_id:
+            resolved_profile_id = self._slugify_profile_id(profile_id)
+            existing = dict(profiles.get(resolved_profile_id) or {})
+        else:
+            inferred_backend = requested_backend or "other"
+            base_candidate = label or f"{inferred_backend}_profile"
+            resolved_profile_id = self._unique_profile_id(base_candidate, profiles)
+            existing = {}
+
+        payload = dict(existing)
+        if requested_backend:
+            payload["backend"] = requested_backend
+        if label is not None:
+            payload["label"] = str(label).strip()
+        if base_url is not None:
+            payload["base_url"] = base_url
+        if default_model is not None:
+            payload["default_model"] = str(default_model).strip()
+        if discovery is not None:
+            payload["discovery"] = list(discovery)
+        if api_key is not _UNSET:
+            payload["api_key"] = self._normalized_secret(api_key)
+
+        if not payload.get("backend"):
+            payload["backend"] = self.infer_openai_compatible_backend(
+                payload.get("base_url"),
+                payload.get("api_key"),
+            )
+
+        normalized = self._normalize_profile_record(resolved_profile_id, payload)
+        profiles[resolved_profile_id] = normalized
+        self._data["llm.openai_profiles"] = profiles
+
+        if set_default:
+            self._data["llm.openai_default_profile"] = resolved_profile_id
+        elif default_profile_id not in profiles:
+            self._data["llm.openai_default_profile"] = resolved_profile_id
+
+        if set_active:
+            self._data["llm.openai_active_profile"] = resolved_profile_id
+        elif active_profile_id not in profiles:
+            self._data["llm.openai_active_profile"] = resolved_profile_id
+
+        self._sync_openai_profile_projection(apply_legacy_compat=False)
+        return resolved_profile_id
+
+    def remove_openai_profile(self, profile_id: str) -> bool:
+        """Remove an OpenAI-compatible profile (cloud profile is protected)."""
+        profiles, active_profile_id, default_profile_id = self._ensure_openai_profiles_data(self._data)
+        selected_profile_id = self._slugify_profile_id(profile_id)
+        if selected_profile_id == "openai_cloud":
+            return False
+        if selected_profile_id not in profiles:
+            return False
+        profiles.pop(selected_profile_id, None)
+        self._data["llm.openai_profiles"] = profiles
+        if self._slugify_profile_id(active_profile_id) == selected_profile_id:
+            self._data["llm.openai_active_profile"] = self._slugify_profile_id(default_profile_id or "openai_cloud")
+        if self._slugify_profile_id(default_profile_id) == selected_profile_id:
+            self._data["llm.openai_default_profile"] = "openai_cloud"
+        self._sync_openai_profile_projection(apply_legacy_compat=False)
+        return True
+
     def __init__(self, data: dict = None):
         self._data = data or {}
+        self._ensure_openai_profiles_data(self._data)
         self._env_loaded_keys: set[str] = set()
         # Track mutations so save() only applies intentional changes.
         self._dirty_keys: set[str] = set(self._data.keys())
@@ -397,6 +884,21 @@ class Config:
         """Safe repr that masks API keys and secrets."""
         safe = {}
         for k, v in self._data.items():
+            if k == "llm.openai_profiles" and isinstance(v, dict):
+                masked_profiles: dict[str, Any] = {}
+                for profile_id, profile in v.items():
+                    if not isinstance(profile, dict):
+                        masked_profiles[str(profile_id)] = profile
+                        continue
+                    profile_copy = dict(profile)
+                    profile_secret = self._normalized_secret(profile_copy.get("api_key"))
+                    if profile_secret:
+                        profile_copy["api_key"] = (
+                            profile_secret[:4] + "..." if len(profile_secret) > 4 else "***"
+                        )
+                    masked_profiles[str(profile_id)] = profile_copy
+                safe[k] = masked_profiles
+                continue
             if ("api_key" in k or "secret" in k or k.startswith("api.")) and v:
                 safe[k] = str(v)[:4] + "..." if len(str(v)) > 4 else "***"
             else:
@@ -556,6 +1058,31 @@ class Config:
             self._data["agent.profile"] = profile
             return
 
+        if key == "llm.openai_active_profile":
+            self.set_openai_active_profile(str(value or ""))
+            return
+
+        if key == "llm.openai_default_profile":
+            self.set_openai_default_profile(str(value or ""))
+            return
+
+        if key == "llm.openai_profiles":
+            parsed_value = value
+            if isinstance(value, str):
+                stripped = value.strip()
+                if stripped:
+                    try:
+                        parsed_value = json.loads(stripped)
+                    except Exception as exc:
+                        raise ValueError("llm.openai_profiles must be valid JSON object.") from exc
+            if not isinstance(parsed_value, dict):
+                raise ValueError("llm.openai_profiles must be a JSON object.")
+            self._data[key] = parsed_value
+            self._dirty_keys.add(key)
+            self._unset_keys.discard(key)
+            self._sync_openai_profile_projection(apply_legacy_compat=False)
+            return
+
         # Type coercion
         if key in DEFAULTS and DEFAULTS[key] is not None:
             expected_type = type(DEFAULTS[key])
@@ -581,12 +1108,77 @@ class Config:
             if issue:
                 raise ValueError(issue)
 
+        if key in {
+            "llm.openai_base_url",
+            "llm.openai_compatible_backend",
+            "llm.openai_compatible_api_key",
+        }:
+            if key == "llm.openai_base_url":
+                value = self._normalize_openai_base_url(value)
+            elif key == "llm.openai_compatible_backend":
+                value = str(value or "").strip().lower() or None
+            self._data[key] = value
+            self._dirty_keys.add(key)
+            self._unset_keys.discard(key)
+            self._sync_openai_profile_projection(apply_legacy_compat=True)
+            return
+
         self._data[key] = value
         self._dirty_keys.add(key)
         self._unset_keys.discard(key)
 
+        if key == "llm.openai_api_key":
+            profiles, _, _ = self._ensure_openai_profiles_data(self._data)
+            cloud = dict(profiles.get("openai_cloud") or {})
+            cloud["backend"] = "openai"
+            cloud["label"] = cloud.get("label") or OPENAI_PROFILE_DEFAULTS["openai"]["label"]
+            cloud["base_url"] = cloud.get("base_url") or OPENAI_PROFILE_DEFAULTS["openai"]["base_url"]
+            cloud["api_key"] = self._normalized_secret(value)
+            profiles["openai_cloud"] = self._normalize_profile_record("openai_cloud", cloud)
+            self._data["llm.openai_profiles"] = profiles
+            self._sync_openai_profile_projection(apply_legacy_compat=False)
+
     def unset(self, key: str) -> None:
         """Remove a config key override, falling back to defaults/env."""
+        if key in {"llm.openai_active_profile", "llm.openai_default_profile", "llm.openai_profiles"}:
+            if key == "llm.openai_profiles":
+                self._data.pop("llm.openai_profiles", None)
+                self._data.pop("llm.openai_active_profile", None)
+                self._data.pop("llm.openai_default_profile", None)
+            else:
+                self._data.pop(key, None)
+            self._dirty_keys.discard("llm.openai_profiles")
+            self._dirty_keys.discard("llm.openai_active_profile")
+            self._dirty_keys.discard("llm.openai_default_profile")
+            self._unset_keys.update(
+                {
+                    "llm.openai_profiles",
+                    "llm.openai_active_profile",
+                    "llm.openai_default_profile",
+                }
+            )
+            self._ensure_openai_profiles_data(self._data)
+            self._sync_openai_profile_projection(apply_legacy_compat=False)
+            return
+
+        if key in {
+            "llm.openai_base_url",
+            "llm.openai_compatible_backend",
+            "llm.openai_compatible_api_key",
+        }:
+            self._data.pop(key, None)
+            self._dirty_keys.discard(key)
+            self._unset_keys.add(key)
+            self._sync_openai_profile_projection(apply_legacy_compat=True)
+            return
+
+        if key == "llm.openai_api_key":
+            profiles, _, _ = self._ensure_openai_profiles_data(self._data)
+            cloud = dict(profiles.get("openai_cloud") or {})
+            cloud["api_key"] = None
+            profiles["openai_cloud"] = self._normalize_profile_record("openai_cloud", cloud)
+            self._data["llm.openai_profiles"] = profiles
+
         self._data.pop(key, None)
         self._dirty_keys.discard(key)
         self._unset_keys.add(key)
@@ -660,11 +1252,21 @@ class Config:
         """Get the best API key for the selected provider."""
         provider = (provider or self.get("llm.provider", "anthropic")).lower()
         if provider == "openai":
-            base_url = self.llm_openai_base_url()
-            if base_url and not self._is_openai_managed_base_url(base_url):
+            profile = self.get_openai_profile()
+            backend = str((profile or {}).get("backend") or "").strip().lower()
+            profile_key = self._normalized_secret((profile or {}).get("api_key"))
+            if backend and backend != "openai":
+                env_key = self._normalized_secret(os.environ.get("OPENAI_COMPATIBLE_API_KEY"))
+                if env_key:
+                    return env_key
                 return self._normalized_secret(
-                    self.get("llm.openai_compatible_api_key") or self.get("llm.openai_api_key")
+                    profile_key
+                    or self.get("llm.openai_compatible_api_key")
+                    or self.get("llm.openai_api_key")
                 )
+            env_openai_key = self._normalized_secret(os.environ.get("OPENAI_API_KEY"))
+            if env_openai_key:
+                return env_openai_key
             return self._normalized_secret(self.get("llm.openai_api_key"))
         # Backward compatibility: legacy llm.api_key is Anthropic-only fallback.
         return self._normalized_secret(
@@ -673,10 +1275,23 @@ class Config:
 
     def llm_openai_base_url(self) -> Optional[str]:
         """Return normalized OpenAI-compatible base URL, if configured."""
-        value = self._normalized_secret(self.get("llm.openai_base_url"))
-        if not value:
+        env_override = self._normalize_openai_base_url(os.environ.get("OPENAI_BASE_URL"))
+        if env_override:
+            if self._is_openai_managed_base_url(env_override):
+                return None
+            return env_override
+
+        profile = self.get_openai_profile()
+        backend = str((profile or {}).get("backend") or "").strip().lower()
+        if backend and backend != "openai":
+            profile_base_url = self._normalize_openai_base_url((profile or {}).get("base_url"))
+            if profile_base_url:
+                return profile_base_url
+
+        value = self._normalize_openai_base_url(self.get("llm.openai_base_url"))
+        if not value or self._is_openai_managed_base_url(value):
             return None
-        return value.rstrip("/")
+        return value
 
     @staticmethod
     def _is_local_openai_base_url(base_url: Optional[str]) -> bool:
@@ -776,6 +1391,18 @@ class Config:
         table.add_column("Config Key", style="cyan dim")
         table.add_column("Sign Up", style="dim")
 
+        profiles = self.openai_profiles(include_cloud=True)
+        active_profile = self.get_openai_profile()
+        active_profile_id = str((active_profile or {}).get("id") or "").strip()
+        active_profile_label = str((active_profile or {}).get("label") or "").strip()
+        active_profile_backend = str((active_profile or {}).get("backend") or "").strip().lower()
+        active_profile_endpoint = self._normalize_openai_base_url((active_profile or {}).get("base_url")) or "—"
+        compatible_profiles = {
+            profile_id: profile
+            for profile_id, profile in profiles.items()
+            if str(profile.get("backend") or "").strip().lower() != "openai"
+        }
+
         for config_key, info in API_KEYS.items():
             if config_key == "llm.anthropic_api_key":
                 val = self.llm_api_key("anthropic")
@@ -788,11 +1415,62 @@ class Config:
                 else:
                     status = "[green]configured[/green]" if val else "[red]not set[/red]"
             elif config_key == "llm.openai_api_key":
-                val = self._normalized_secret(self.get("llm.openai_api_key"))
+                val = self._normalized_secret(
+                    os.environ.get("OPENAI_API_KEY")
+                    or self.get("llm.openai_api_key")
+                    or (profiles.get("openai_cloud") or {}).get("api_key")
+                )
                 status = "[green]configured[/green]" if val else "[red]not set[/red]"
+                if active_profile_backend == "openai":
+                    status = f"{status} [dim](active: {active_profile_label or 'OpenAI Cloud'})[/dim]"
             elif config_key == "llm.openai_compatible_api_key":
-                val = self._normalized_secret(self.get("llm.openai_compatible_api_key"))
-                status = "[green]configured[/green]" if val else "[red]not set[/red]"
+                profile_rows: list[tuple[str, str, str, str]] = []
+                for profile_id, profile in sorted(
+                    compatible_profiles.items(),
+                    key=lambda item: str(item[1].get("label") or item[0]).strip().lower(),
+                ):
+                    profile_label = str(profile.get("label") or profile_id).strip()
+                    profile_backend = str(profile.get("backend") or "other").strip().lower()
+                    profile_endpoint = self._normalize_openai_base_url(profile.get("base_url")) or "—"
+                    profile_key = self._normalized_secret(profile.get("api_key"))
+                    profile_status = (
+                        "[green]configured[/green]"
+                        if profile_key
+                        else "[red]not set[/red]"
+                    )
+                    if profile_id == active_profile_id:
+                        profile_status = f"{profile_status} [dim](active)[/dim]"
+                    profile_rows.append(
+                        (
+                            f"OpenAI-compatible: {profile_label}",
+                            profile_status,
+                            self._secret_preview(profile_key),
+                            f"{profile_backend} endpoint ({profile_endpoint})",
+                        )
+                    )
+
+                if active_profile_backend != "openai":
+                    val = self._normalized_secret(
+                        os.environ.get("OPENAI_COMPATIBLE_API_KEY")
+                        or (active_profile or {}).get("api_key")
+                        or self.get("llm.openai_compatible_api_key")
+                    )
+                    status = "[green]configured[/green]" if val else "[red]not set[/red]"
+                    status = (
+                        f"{status} [dim](active: {active_profile_label or active_profile_id}, "
+                        f"endpoint: {active_profile_endpoint})[/dim]"
+                    )
+                else:
+                    compatible_keys = [
+                        self._normalized_secret(profile.get("api_key"))
+                        for profile in compatible_profiles.values()
+                    ]
+                    compatible_keys = [key for key in compatible_keys if key]
+                    val = compatible_keys[0] if compatible_keys else None
+                    profile_count = len(compatible_profiles)
+                    count_label = f"{profile_count} profile" if profile_count == 1 else f"{profile_count} profiles"
+                    status = "[green]configured[/green]" if val else "[red]not set[/red]"
+                    status = f"{status} [dim]({count_label}, active: {active_profile_label or 'OpenAI Cloud'})[/dim]"
             else:
                 val = self._normalized_secret(self.get(config_key))
                 status = "[green]configured[/green]" if val else "[red]not set[/red]"
@@ -806,6 +1484,17 @@ class Config:
                 config_key,
                 info["url"] + free_tag,
             )
+
+            if config_key == "llm.openai_compatible_api_key" and profile_rows:
+                for profile_service, profile_status, profile_preview, profile_unlocks in profile_rows:
+                    table.add_row(
+                        profile_service,
+                        profile_status,
+                        profile_preview,
+                        profile_unlocks,
+                        "llm.openai_profiles.<id>.api_key",
+                        info["url"] + free_tag,
+                    )
 
         return table
 

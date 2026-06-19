@@ -211,6 +211,41 @@ def test_keys_table_includes_preview_column_and_masked_openai_value():
     assert "..." in preview_col[openai_idx]
 
 
+def test_keys_table_lists_compatible_profiles_dynamically():
+    cfg = Config(data={"llm.provider": "openai"})
+    cfg.upsert_openai_profile(
+        profile_id="omlx_local",
+        label="oMLX Local",
+        backend="omlx",
+        base_url="http://localhost:8000/v1",
+        api_key="sk-omlx-example",
+        set_active=True,
+    )
+    cfg.upsert_openai_profile(
+        profile_id="unsloth_lab",
+        label="Unsloth Lab",
+        backend="unsloth",
+        base_url="http://localhost:8888/v1",
+        api_key=None,
+    )
+
+    table = cfg.keys_table()
+    service_col = list(getattr(table.columns[0], "_cells", []))
+    status_col = list(getattr(table.columns[1], "_cells", []))
+    unlocks_col = list(getattr(table.columns[3], "_cells", []))
+
+    assert "OpenAI-compatible: oMLX Local" in service_col
+    assert "OpenAI-compatible: Unsloth Lab" in service_col
+
+    omlx_idx = service_col.index("OpenAI-compatible: oMLX Local")
+    unsloth_idx = service_col.index("OpenAI-compatible: Unsloth Lab")
+    assert "configured" in status_col[omlx_idx]
+    assert "active" in status_col[omlx_idx]
+    assert "not set" in status_col[unsloth_idx]
+    assert "omlx endpoint" in unlocks_col[omlx_idx]
+    assert "unsloth endpoint" in unlocks_col[unsloth_idx]
+
+
 def test_set_openai_key_rejects_invalid_format():
     cfg = Config(data={})
     with pytest.raises(ValueError, match="Invalid OpenAI API key format"):
@@ -270,6 +305,112 @@ def test_llm_api_key_prefers_compatible_key_for_custom_endpoint():
         }
     )
     assert cfg.llm_api_key("openai") == "ollama"
+
+
+def test_load_bootstraps_compatible_profile_when_legacy_key_exists_without_endpoint(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.json"
+    backup_path = tmp_path / "config.json.bak"
+    config_path.write_text(
+        json.dumps(
+            {
+                "llm.provider": "anthropic",
+                "llm.model": "omlx-model",
+                "llm.openai_compatible_api_key": "fresh-key",
+                "llm.openai_active_profile": "openai_cloud",
+            }
+        )
+    )
+    monkeypatch.setattr(config_mod, "CONFIG_FILE", config_path)
+    monkeypatch.setattr(config_mod, "CONFIG_BACKUP_FILE", backup_path)
+
+    cfg = Config.load()
+    compatible_profiles = cfg.openai_profiles(include_cloud=False)
+    assert compatible_profiles
+    active_profile = cfg.get_openai_profile()
+    assert active_profile is not None
+    assert active_profile["backend"] == "omlx"
+    assert active_profile["default_model"] == "omlx-model"
+    assert cfg.get("llm.provider") == "openai"
+    assert cfg.llm_openai_base_url() == "http://localhost:8000/v1"
+
+
+def test_upsert_profile_key_does_not_get_overwritten_by_stale_legacy_projection():
+    cfg = Config(
+        data={
+            "llm.provider": "openai",
+            "llm.openai_profiles": {
+                "openai_cloud": {
+                    "label": "OpenAI Cloud",
+                    "backend": "openai",
+                    "base_url": "https://api.openai.com/v1",
+                    "api_key": None,
+                    "default_model": "gpt-5.5",
+                },
+                "omlx_local": {
+                    "label": "oMLX Local",
+                    "backend": "omlx",
+                    "base_url": "http://127.0.0.1:8005/v1",
+                    "api_key": "sk-omlx-old",
+                    "default_model": "omlx-model",
+                },
+                "unsloth_local": {
+                    "label": "Unsloth Local",
+                    "backend": "unsloth",
+                    "base_url": "http://localhost:8888/v1",
+                    "api_key": "sk-omlx-wrong",
+                    "default_model": "unsloth-model",
+                },
+            },
+            "llm.openai_active_profile": "unsloth_local",
+            "llm.openai_base_url": "http://localhost:8888/v1",
+            "llm.openai_compatible_backend": "unsloth",
+            "llm.openai_compatible_api_key": "sk-omlx-wrong",
+        }
+    )
+
+    cfg.upsert_openai_profile(
+        profile_id="unsloth_local",
+        api_key="sk-unsloth-new",
+        set_active=True,
+    )
+
+    unsloth_profile = cfg.get_openai_profile("unsloth_local")
+    assert unsloth_profile is not None
+    assert unsloth_profile["api_key"] == "sk-unsloth-new"
+    assert cfg.get("llm.openai_compatible_api_key") == "sk-unsloth-new"
+
+
+def test_set_legacy_compatible_key_updates_active_profile_key():
+    cfg = Config(
+        data={
+            "llm.provider": "openai",
+            "llm.openai_profiles": {
+                "openai_cloud": {
+                    "label": "OpenAI Cloud",
+                    "backend": "openai",
+                    "base_url": "https://api.openai.com/v1",
+                    "api_key": None,
+                    "default_model": "gpt-5.5",
+                },
+                "unsloth_local": {
+                    "label": "Unsloth Local",
+                    "backend": "unsloth",
+                    "base_url": "http://localhost:8888/v1",
+                    "api_key": "sk-unsloth-old",
+                    "default_model": "unsloth-model",
+                },
+            },
+            "llm.openai_active_profile": "unsloth_local",
+            "llm.openai_base_url": "http://localhost:8888/v1",
+            "llm.openai_compatible_backend": "unsloth",
+            "llm.openai_compatible_api_key": "sk-unsloth-old",
+        }
+    )
+
+    cfg.set("llm.openai_compatible_api_key", "sk-unsloth-fresh")
+    profile = cfg.get_openai_profile("unsloth_local")
+    assert profile is not None
+    assert profile["api_key"] == "sk-unsloth-fresh"
 
 
 def test_set_anthropic_key_rejects_invalid_format():

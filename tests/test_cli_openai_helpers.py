@@ -217,6 +217,27 @@ class TestPromptCompatibleModel:
         monkeypatch.setattr("builtins.input", lambda _: "2")
         assert _prompt_compatible_model_for_setup(cfg, "http://x/v1", "ollama") == "beta"
 
+    def test_retry_discovery_with_new_key_returns_override(self, captured_console, monkeypatch):
+        console, _ = captured_console
+        monkeypatch.setattr("cli.console", console)
+        cfg = Config(data={"llm.model": "fallback-model"})
+        calls = []
+
+        def _fake_fetch(base_url, backend, api_key=None):
+            calls.append(api_key)
+            if len(calls) == 1:
+                return []
+            return ["omlx-model"]
+
+        monkeypatch.setattr("cli._fetch_compatible_models_for_setup", _fake_fetch)
+        monkeypatch.setattr("cli._prompt_openai_compatible_api_key", lambda backend="other": "sk-omlx-retry")
+        answers = iter(["1", "1"])  # retry, then pick discovered model
+        monkeypatch.setattr("builtins.input", lambda _: next(answers))
+
+        result = _prompt_compatible_model_for_setup(cfg, "http://localhost:8000/v1", "omlx")
+        assert result == ("omlx-model", "sk-omlx-retry")
+        assert calls == [None, "sk-omlx-retry"]
+
 
 class TestResolveProviderKey:
     def test_cli_key_anthropic_valid(self, captured_console, monkeypatch):

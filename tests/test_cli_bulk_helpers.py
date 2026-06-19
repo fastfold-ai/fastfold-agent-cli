@@ -1,9 +1,11 @@
 """Direct unit tests for cli.py pure helpers not covered elsewhere."""
 
 import json
+import io
 import re
 import subprocess
 import sys
+import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -205,6 +207,25 @@ class TestOpenAICompatibleSetupFetch:
             lambda *a, **k: (_ for _ in ()).throw(TimeoutError()),
         )
         assert _fetch_openai_models_for_setup("http://bad") == []
+
+    def test_fetch_openai_models_reports_http_error_body(self, captured_console, monkeypatch):
+        console, buf = captured_console
+        monkeypatch.setattr("cli.console", console)
+        err = urllib.error.HTTPError(
+            url="http://localhost:8000/v1/models",
+            code=401,
+            msg="Unauthorized",
+            hdrs=None,
+            fp=io.BytesIO(b'{"error":{"message":"invalid token","code":"invalid_api_key"}}'),
+        )
+        monkeypatch.setattr(
+            "cli.urllib.request.urlopen",
+            lambda *a, **k: (_ for _ in ()).throw(err),
+        )
+        assert _fetch_openai_models_for_setup("http://localhost:8000/v1", api_key="bad") == []
+        plain = re.sub(r"\x1b\[[0-9;]*m", "", buf.getvalue())
+        assert "/v1/models request failed" in plain
+        assert "invalid token" in plain
 
 
 class TestTraceAndReportHelpers:

@@ -192,7 +192,7 @@ class TestTerminalMethods:
         terminal.session.set_model.assert_not_called()
         terminal.session.config.save.assert_not_called()
 
-    def test_switch_model_custom_openai_compatible_endpoint(self, terminal):
+    def test_configure_openai_compatible_model_custom_endpoint(self, terminal):
         def _cfg_get(key, default=None):
             values = {
                 "llm.provider": "anthropic",
@@ -202,12 +202,9 @@ class TestTerminalMethods:
             return values.get(key, default)
 
         terminal.session.config.get.side_effect = _cfg_get
-        terminal._prompt_session = MagicMock()
         terminal._plain_prompt_session = MagicMock()
         terminal._secret_prompt_session = MagicMock()
         terminal._fetch_compatible_models = MagicMock(return_value=["qwen3.6:27b", "llama3.1"])
-        # 12th option is "__custom_openai_compatible__" (after 3 Anthropic + 8 OpenAI + custom)
-        terminal._prompt_session.prompt.side_effect = ["12"]
         terminal._plain_prompt_session.prompt.side_effect = [
             "1",  # backend type (Ollama)
             "http://localhost:11434/v1",  # endpoint
@@ -215,7 +212,7 @@ class TestTerminalMethods:
         ]
         terminal._secret_prompt_session.prompt.return_value = ""  # keep default key
 
-        terminal._switch_model()
+        terminal._configure_openai_compatible_model()
 
         terminal.session.set_model.assert_called_once_with("qwen3.6:27b", provider="openai")
         terminal.session.config.set.assert_any_call("llm.openai_base_url", "http://localhost:11434/v1")
@@ -223,7 +220,7 @@ class TestTerminalMethods:
         terminal.session.config.set.assert_any_call("llm.openai_compatible_api_key", "ollama")
         terminal.session.config.save.assert_called_once()
 
-    def test_switch_model_unsloth_defaults_to_8888_endpoint(self, terminal):
+    def test_configure_openai_compatible_model_unsloth_defaults_to_8888_endpoint(self, terminal):
         def _cfg_get(key, default=None):
             values = {
                 "llm.provider": "anthropic",
@@ -233,11 +230,9 @@ class TestTerminalMethods:
             return values.get(key, default)
 
         terminal.session.config.get.side_effect = _cfg_get
-        terminal._prompt_session = MagicMock()
         terminal._plain_prompt_session = MagicMock()
         terminal._secret_prompt_session = MagicMock()
         terminal._fetch_compatible_models = MagicMock(return_value=["gpt-oss:20b"])
-        terminal._prompt_session.prompt.side_effect = ["12"]
         terminal._plain_prompt_session.prompt.side_effect = [
             "2",  # backend type (Unsloth)
             "",  # accept default endpoint (should use 8888)
@@ -245,7 +240,7 @@ class TestTerminalMethods:
         ]
         terminal._secret_prompt_session.prompt.return_value = "sk-unsloth-test"  # custom key
 
-        terminal._switch_model()
+        terminal._configure_openai_compatible_model()
 
         terminal.session.config.set.assert_any_call("llm.openai_compatible_backend", "unsloth")
         terminal._fetch_compatible_models.assert_called_once_with(
@@ -254,7 +249,7 @@ class TestTerminalMethods:
             api_key="sk-unsloth-test",
         )
 
-    def test_switch_model_unsloth_replaces_ollama_default_endpoint(self, terminal):
+    def test_configure_openai_compatible_model_unsloth_replaces_ollama_default_endpoint(self, terminal):
         def _cfg_get(key, default=None):
             values = {
                 "llm.provider": "openai",
@@ -264,11 +259,9 @@ class TestTerminalMethods:
             return values.get(key, default)
 
         terminal.session.config.get.side_effect = _cfg_get
-        terminal._prompt_session = MagicMock()
         terminal._plain_prompt_session = MagicMock()
         terminal._secret_prompt_session = MagicMock()
         terminal._fetch_compatible_models = MagicMock(return_value=["gpt-oss:20b"])
-        terminal._prompt_session.prompt.side_effect = ["12"]
         terminal._plain_prompt_session.prompt.side_effect = [
             "2",  # backend type (Unsloth)
             "",  # accept default endpoint (must be 8888, not prior 11434)
@@ -276,7 +269,7 @@ class TestTerminalMethods:
         ]
         terminal._secret_prompt_session.prompt.return_value = "sk-unsloth-test"  # key
 
-        terminal._switch_model()
+        terminal._configure_openai_compatible_model()
 
         terminal._fetch_compatible_models.assert_called_once_with(
             "http://localhost:8888/v1",
