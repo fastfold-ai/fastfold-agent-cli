@@ -104,7 +104,7 @@ class TestTerminalOpenAICompatibleHelpers:
 
     def test_prompt_openai_compatible_backend_lm_studio_option(self):
         term, _ = _mk_terminal_stub()
-        term._plain_prompt_session.prompt = MagicMock(return_value="7")
+        term._plain_prompt_session.prompt = MagicMock(return_value="6")
         assert term._prompt_openai_compatible_backend("http://localhost:11434/v1") == "lm_studio"
 
     def test_choose_model_from_discovered_tags_manual(self):

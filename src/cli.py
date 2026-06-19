@@ -1111,7 +1111,7 @@ def _compatible_install_url(backend: str) -> str:
         "ds4": "https://github.com/antirez/ds4",
         "llama_cpp": "https://github.com/ggml-org/llama.cpp",
         "lm_studio": "https://lmstudio.ai/docs/developer/openai-compat",
-        "other": "https://docs.ollama.com/api/introduction",
+        "other": "",
     }
     return urls.get(backend_type, urls["other"])
 
@@ -1270,20 +1270,18 @@ def _prompt_openai_compatible_backend(default_backend: str = "ollama") -> str:
     console.print(f"    [1] Ollama (/api/tags) - {_compatible_install_url('ollama')}")
     console.print(f"    [2] Unsloth (/v1/models, auth) - {_compatible_install_url('unsloth')}")
     console.print(f"    [3] oMLX (/v1/models, auth) - {_compatible_install_url('omlx')}")
-    console.print(
-        f"    [4] Other OpenAI-compatible (/v1/models then /api/tags) - {_compatible_install_url('other')}"
-    )
-    console.print(f"    [5] DS4 (DeepSeek v4, /v1/models) - {_compatible_install_url('ds4')}")
-    console.print(f"    [6] llama.cpp (/v1/models) - {_compatible_install_url('llama_cpp')}")
-    console.print(f"    [7] LM Studio (/v1/models) - {_compatible_install_url('lm_studio')}")
+    console.print(f"    [4] DS4 (DeepSeek v4, /v1/models) - {_compatible_install_url('ds4')}")
+    console.print(f"    [5] llama.cpp (/v1/models) - {_compatible_install_url('llama_cpp')}")
+    console.print(f"    [6] LM Studio (/v1/models) - {_compatible_install_url('lm_studio')}")
+    console.print("    [7] Other OpenAI-compatible (/v1/models then /api/tags)")
     default_num = {
         "ollama": "1",
         "unsloth": "2",
         "omlx": "3",
-        "other": "4",
-        "ds4": "5",
-        "llama_cpp": "6",
-        "lm_studio": "7",
+        "ds4": "4",
+        "llama_cpp": "5",
+        "lm_studio": "6",
+        "other": "7",
     }[normalized_default]
     try:
         raw = input(f"  Select endpoint type [{default_num}]: ").strip().lower()
@@ -1298,14 +1296,14 @@ def _prompt_openai_compatible_backend(default_backend: str = "ollama") -> str:
         return "unsloth"
     if raw in {"3", "omlx", "m"}:
         return "omlx"
-    if raw in {"4", "other", "custom", "k"}:
-        return "other"
-    if raw in {"5", "ds4", "deepseek", "deepseek-v4"}:
+    if raw in {"4", "ds4", "deepseek", "deepseek-v4"}:
         return "ds4"
-    if raw in {"6", "llama.cpp", "llama_cpp", "llama-cpp", "llamacpp"}:
+    if raw in {"5", "llama.cpp", "llama_cpp", "llama-cpp", "llamacpp"}:
         return "llama_cpp"
-    if raw in {"7", "lmstudio", "lm_studio", "lm-studio", "lm studio"}:
+    if raw in {"6", "lmstudio", "lm_studio", "lm-studio", "lm studio"}:
         return "lm_studio"
+    if raw in {"7", "other", "custom", "k"}:
+        return "other"
     console.print("  [dim]Invalid selection; using generic compatible mode.[/dim]")
     return "other"
 

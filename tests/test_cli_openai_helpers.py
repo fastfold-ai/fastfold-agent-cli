@@ -145,8 +145,14 @@ class TestPromptOpenAIHelpers:
     def test_prompt_compatible_backend_numeric_lm_studio(self, captured_console, monkeypatch):
         console, _ = captured_console
         monkeypatch.setattr("cli.console", console)
-        monkeypatch.setattr("builtins.input", lambda _: "7")
+        monkeypatch.setattr("builtins.input", lambda _: "6")
         assert _prompt_openai_compatible_backend() == "lm_studio"
+
+    def test_prompt_compatible_backend_numeric_other_last(self, captured_console, monkeypatch):
+        console, _ = captured_console
+        monkeypatch.setattr("cli.console", console)
+        monkeypatch.setattr("builtins.input", lambda _: "7")
+        assert _prompt_openai_compatible_backend() == "other"
 
 
 class TestResolveOpenAIEndpoints:

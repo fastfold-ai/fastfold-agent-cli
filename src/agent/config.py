@@ -89,7 +89,7 @@ OPENAI_PROFILE_DEFAULTS = {
         "base_url": "http://localhost:11434/v1",
         "discovery": ["v1_models", "ollama_tags"],
         "default_model": "llama3.1",
-        "install_url": "https://docs.ollama.com/api/introduction",
+        "install_url": "",
     },
 }
 _UNSET = object()
@@ -1410,15 +1410,10 @@ class Config:
     def compatible_backend_install_url(backend: Optional[str]) -> str:
         """Return install/reference URL for a compatible backend template."""
         backend_type = str(backend or "").strip().lower()
-        defaults = OPENAI_PROFILE_DEFAULTS.get(
-            backend_type,
-            OPENAI_PROFILE_DEFAULTS["other"],
-        )
-        return str(
-            defaults.get("install_url")
-            or OPENAI_PROFILE_DEFAULTS["other"].get("install_url")
-            or API_KEYS["llm.openai_compatible_api_key"]["url"]
-        )
+        if backend_type in {"other", "custom"}:
+            return ""
+        defaults = OPENAI_PROFILE_DEFAULTS.get(backend_type, {})
+        return str(defaults.get("install_url") or "")
 
     def llm_preflight_issue(self) -> Optional[str]:
         """Return a human-readable LLM config issue, or None when ready."""
@@ -1602,7 +1597,7 @@ class Config:
                         profile_preview,
                         profile_unlocks,
                         "llm.openai_profiles.<id>.api_key",
-                        profile_install_url + free_tag,
+                        profile_install_url + free_tag if profile_install_url else "—",
                     )
 
         return table

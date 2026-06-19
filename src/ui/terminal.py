@@ -1223,25 +1223,25 @@ class InteractiveTerminal:
             f"    [3] oMLX - {self._compatible_install_url('omlx')}"
         )
         self.console.print(
-            f"    [4] Other compatible endpoint - {self._compatible_install_url('other')}"
+            f"    [4] DS4 (DeepSeek v4) - {self._compatible_install_url('ds4')}"
         )
         self.console.print(
-            f"    [5] DS4 (DeepSeek v4) - {self._compatible_install_url('ds4')}"
+            f"    [5] llama.cpp - {self._compatible_install_url('llama_cpp')}"
         )
         self.console.print(
-            f"    [6] llama.cpp - {self._compatible_install_url('llama_cpp')}"
+            f"    [6] LM Studio - {self._compatible_install_url('lm_studio')}"
         )
         self.console.print(
-            f"    [7] LM Studio - {self._compatible_install_url('lm_studio')}"
+            "    [7] Other compatible endpoint"
         )
         default_num = {
             "ollama": "1",
             "unsloth": "2",
             "omlx": "3",
-            "other": "4",
-            "ds4": "5",
-            "llama_cpp": "6",
-            "lm_studio": "7",
+            "ds4": "4",
+            "llama_cpp": "5",
+            "lm_studio": "6",
+            "other": "7",
         }[normalized_default]
         try:
             raw = self._plain_prompt_session.prompt(
@@ -1256,14 +1256,14 @@ class InteractiveTerminal:
             return "unsloth"
         if selected in {"3", "omlx", "m"}:
             return "omlx"
-        if selected in {"4", "other", "custom", "k"}:
-            return "other"
-        if selected in {"5", "ds4", "deepseek", "deepseek-v4"}:
+        if selected in {"4", "ds4", "deepseek", "deepseek-v4"}:
             return "ds4"
-        if selected in {"6", "llama.cpp", "llama_cpp", "llamacpp", "llama-cpp"}:
+        if selected in {"5", "llama.cpp", "llama_cpp", "llamacpp", "llama-cpp"}:
             return "llama_cpp"
-        if selected in {"7", "lmstudio", "lm_studio", "lm-studio", "lm studio"}:
+        if selected in {"6", "lmstudio", "lm_studio", "lm-studio", "lm studio"}:
             return "lm_studio"
+        if selected in {"7", "other", "custom", "k"}:
+            return "other"
         self.console.print("  [dim]Invalid selection.[/dim]")
         return None
 
@@ -1391,7 +1391,7 @@ class InteractiveTerminal:
             return Config.compatible_backend_install_url(backend)
         except Exception:
             backend_type = str(backend or "").strip().lower()
-            fallback = "https://docs.ollama.com/api/introduction"
+            fallback = ""
             urls = {
                 "ollama": "https://github.com/ollama/ollama",
                 "unsloth": "https://github.com/unslothai/unsloth",
@@ -2804,25 +2804,23 @@ class InteractiveTerminal:
             f"    [3] oMLX (/v1/models, auth) - {self._compatible_install_url('omlx')}"
         )
         self.console.print(
-            f"    [4] Other OpenAI-compatible (/v1/models then /api/tags) - {self._compatible_install_url('other')}"
+            f"    [4] DS4 (DeepSeek v4, /v1/models) - {self._compatible_install_url('ds4')}"
         )
         self.console.print(
-            f"    [5] DS4 (DeepSeek v4, /v1/models) - {self._compatible_install_url('ds4')}"
+            f"    [5] llama.cpp (/v1/models) - {self._compatible_install_url('llama_cpp')}"
         )
         self.console.print(
-            f"    [6] llama.cpp (/v1/models) - {self._compatible_install_url('llama_cpp')}"
+            f"    [6] LM Studio (/v1/models) - {self._compatible_install_url('lm_studio')}"
         )
-        self.console.print(
-            f"    [7] LM Studio (/v1/models) - {self._compatible_install_url('lm_studio')}"
-        )
+        self.console.print("    [7] Other OpenAI-compatible (/v1/models then /api/tags)")
         default_num = {
             "ollama": "1",
             "unsloth": "2",
             "omlx": "3",
-            "other": "4",
-            "ds4": "5",
-            "llama_cpp": "6",
-            "lm_studio": "7",
+            "ds4": "4",
+            "llama_cpp": "5",
+            "lm_studio": "6",
+            "other": "7",
         }[default_choice]
         try:
             raw = self._plain_prompt_session.prompt(
@@ -2837,14 +2835,14 @@ class InteractiveTerminal:
             return "unsloth"
         if selected in {"3", "omlx", "m"}:
             return "omlx"
-        if selected in {"4", "other", "custom", "k"}:
-            return "other"
-        if selected in {"5", "ds4", "deepseek", "deepseek-v4"}:
+        if selected in {"4", "ds4", "deepseek", "deepseek-v4"}:
             return "ds4"
-        if selected in {"6", "llama.cpp", "llama_cpp", "llamacpp", "llama-cpp"}:
+        if selected in {"5", "llama.cpp", "llama_cpp", "llamacpp", "llama-cpp"}:
             return "llama_cpp"
-        if selected in {"7", "lmstudio", "lm_studio", "lm-studio", "lm studio"}:
+        if selected in {"6", "lmstudio", "lm_studio", "lm-studio", "lm studio"}:
             return "lm_studio"
+        if selected in {"7", "other", "custom", "k"}:
+            return "other"
         self.console.print("  [dim]Invalid selection; using generic compatible mode.[/dim]")
         return "other"
 

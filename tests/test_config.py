@@ -274,6 +274,13 @@ def test_keys_table_uses_template_install_links_for_compatible_profiles():
         base_url="http://localhost:8080/v1",
         api_key=None,
     )
+    cfg.upsert_openai_profile(
+        profile_id="custom_other",
+        label="Custom Other",
+        backend="other",
+        base_url="http://localhost:9999/v1",
+        api_key=None,
+    )
 
     table = cfg.keys_table()
     service_col = list(getattr(table.columns[0], "_cells", []))
@@ -281,9 +288,11 @@ def test_keys_table_uses_template_install_links_for_compatible_profiles():
 
     ds4_idx = service_col.index("OpenAI-compatible: DS4 Local")
     llama_idx = service_col.index("OpenAI-compatible: llama.cpp Local")
+    custom_idx = service_col.index("OpenAI-compatible: Custom Other")
 
     assert "github.com/antirez/ds4" in signup_col[ds4_idx]
     assert "github.com/ggml-org/llama.cpp" in signup_col[llama_idx]
+    assert signup_col[custom_idx] == "—"
 
 
 def test_set_openai_key_rejects_invalid_format():

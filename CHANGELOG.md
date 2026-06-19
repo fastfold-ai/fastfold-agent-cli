@@ -7,6 +7,16 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.0.56] - 2026-06-19
+
+### Changed
+- Reordered OpenAI-compatible endpoint/template selectors so `Other` now appears
+  as the final option after the standard templates.
+- Removed install/reference links for `Other` endpoint options in `/model-manager`
+  and `fastfold setup` menus, keeping links only for known templates.
+- Updated `/keys` profile rows so `other` backends show `—` in the **Sign Up**
+  column instead of a generic install URL.
+
 ## [0.0.55] - 2026-06-19
 
 ### Changed
