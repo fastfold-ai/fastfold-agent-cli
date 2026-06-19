@@ -22,7 +22,7 @@ You get the full open-source agent[1](#notes) with 190+ tools, 30+ database APIs
 
 - **GPU compute models & workflows**: run heavy scientific workflows like folding, protein design, and MD simulation on Fastfold Cloud, your own compute, or providers like Modal, Nebius, and more.
 - **Installable skills**: discover, add, and share workflows natively (`fastfold skills find`, `fastfold skills add <github url>`).
-- **Any model**: Anthropic, OpenAI, or local/open models like Gemma, Qwen, and DeepSeek through endpoints like **Ollama**, **Unsloth**, and **oMLX** via `/model`, `/model-manager`, or `fastfold setup`.
+- **Any model**: Anthropic, OpenAI, or local/open models like Gemma, Qwen, and DeepSeek through endpoints like **Ollama**, **Unsloth**, **oMLX**, **DS4**, **llama.cpp**, and **LM Studio** via `/model`, `/model-manager`, or `fastfold setup`.
 
 ### Quick install
 
@@ -123,9 +123,12 @@ Local/compatible endpoints can also be configured in one line:
 fastfold setup --provider openai_compatible --profile-label "Ollama Local" --profile-template ollama --profile-endpoint http://localhost:11434/v1 --profile-key ollama
 fastfold setup --provider openai_compatible --profile-label "Unsloth Local" --profile-template unsloth --profile-endpoint http://localhost:8888/v1 --profile-key sk-unsloth-...
 fastfold setup --provider openai_compatible --profile-label "oMLX Local" --profile-template omlx --profile-endpoint http://localhost:8000/v1 --profile-key sk-omlx-...
+fastfold setup --provider openai_compatible --profile-label "DS4 Local" --profile-template ds4 --profile-endpoint http://localhost:8000/v1 --profile-key dsv4-local
+fastfold setup --provider openai_compatible --profile-label "llama.cpp Local" --profile-template llama_cpp --profile-endpoint http://localhost:8080/v1
+fastfold setup --provider openai_compatible --profile-label "LM Studio Local" --profile-template lm_studio --profile-endpoint http://localhost:1234/v1
 ```
 
-### Local and OpenAI-compatible models (Ollama, Unsloth, other gateways)
+### Local and OpenAI-compatible models (Ollama, Unsloth, oMLX, DS4, llama.cpp, LM Studio, and other gateways)
 
 Fastfold supports local/self-hosted OpenAI-compatible endpoints in both `fastfold setup` and interactive mode:
 
@@ -144,15 +147,33 @@ The setup wizard will guide you through:
   - `Ollama` (`/api/tags`)
   - `Unsloth` (`/v1/models`, auth)
   - `oMLX` (`/v1/models`, auth)
+  - `DS4` (`/v1/models`)
+  - `llama.cpp` (`/v1/models`)
+  - `LM Studio` (`/v1/models`)
   - `Other OpenAI-compatible` (`/v1/models` then `/api/tags`)
 2. Endpoint base URL:
   - Ollama default: `http://localhost:11434/v1`
   - Unsloth default: `http://localhost:8888/v1`
   - oMLX default: `http://localhost:8000/v1`
+  - DS4 default: `http://localhost:8000/v1`
+  - llama.cpp default: `http://localhost:8080/v1`
+  - LM Studio default: `http://localhost:1234/v1`
 3. API key prompt (backend-aware):
   - Ollama commonly uses `ollama` placeholder key
   - Unsloth uses your Unsloth Studio key
+  - DS4, llama.cpp, and LM Studio can use optional/custom keys depending on your local server configuration
 4. Profile summary preview (label/template/endpoint), then model discovery + selection (or manual model ID entry)
+
+### Inference engine install references
+
+Use these upstream projects/docs to install and run local or self-hosted LLM inference engines before adding profiles in Fastfold:
+
+- **DS4 (DeepSeek v4 Flash/PRO engine):** [antirez/ds4](https://github.com/antirez/ds4)
+- **llama.cpp:** [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp)
+- **LM Studio OpenAI-compatible server:** [LM Studio OpenAI Compatibility](https://lmstudio.ai/docs/developer/openai-compat)
+- **Ollama:** [ollama/ollama](https://github.com/ollama/ollama)
+- **oMLX:** [jundot/omlx](https://github.com/jundot/omlx)
+- **Unsloth:** [unslothai/unsloth](https://github.com/unslothai/unsloth)
 
 Scripted profile setup flags:
 

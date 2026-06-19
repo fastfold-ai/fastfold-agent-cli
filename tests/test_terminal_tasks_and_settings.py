@@ -102,6 +102,11 @@ class TestTerminalOpenAICompatibleHelpers:
         assert term._prompt_openai_compatible_backend("http://localhost:11434/v1") == "unsloth"
         assert term._prompt_openai_compatible_backend("http://localhost:11434/v1") == "other"
 
+    def test_prompt_openai_compatible_backend_lm_studio_option(self):
+        term, _ = _mk_terminal_stub()
+        term._plain_prompt_session.prompt = MagicMock(return_value="7")
+        assert term._prompt_openai_compatible_backend("http://localhost:11434/v1") == "lm_studio"
+
     def test_choose_model_from_discovered_tags_manual(self):
         term, _ = _mk_terminal_stub()
         term._plain_prompt_session.prompt = MagicMock(side_effect=["9", "my-model"])
@@ -168,6 +173,15 @@ class TestTerminalOpenAICompatibleHelpers:
         names = term._fetch_compatible_models("http://localhost:11434/v1", backend="other")
         assert names == []
         term.console.print.assert_called()
+
+    def test_fetch_compatible_models_lm_studio_uses_openai_only(self):
+        term, _ = _mk_terminal_stub()
+        term._fetch_openai_models = MagicMock(return_value=["local-model"])
+        term._fetch_ollama_tags = MagicMock(return_value=["should-not-run"])
+        names = term._fetch_compatible_models("http://localhost:1234/v1", backend="lm_studio")
+        assert names == ["local-model"]
+        term._fetch_openai_models.assert_called_once()
+        term._fetch_ollama_tags.assert_not_called()
 
     def test_prompt_discovery_followup_action_defaults_to_manual(self):
         term, _ = _mk_terminal_stub()

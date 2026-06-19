@@ -1210,14 +1210,25 @@ class InteractiveTerminal:
     def _prompt_profile_template_backend(self, default_backend: str = "ollama") -> str | None:
         """Prompt for compatible profile template backend."""
         normalized_default = str(default_backend or "").strip().lower()
-        if normalized_default not in {"ollama", "unsloth", "omlx", "other"}:
+        if normalized_default not in {"ollama", "unsloth", "omlx", "ds4", "llama_cpp", "lm_studio", "other"}:
             normalized_default = "ollama"
         self.console.print("  [cyan]Profile template[/cyan]")
         self.console.print("    [1] Ollama")
         self.console.print("    [2] Unsloth")
         self.console.print("    [3] oMLX")
         self.console.print("    [4] Other compatible endpoint")
-        default_num = {"ollama": "1", "unsloth": "2", "omlx": "3", "other": "4"}[normalized_default]
+        self.console.print("    [5] DS4 (DeepSeek v4)")
+        self.console.print("    [6] llama.cpp")
+        self.console.print("    [7] LM Studio")
+        default_num = {
+            "ollama": "1",
+            "unsloth": "2",
+            "omlx": "3",
+            "other": "4",
+            "ds4": "5",
+            "llama_cpp": "6",
+            "lm_studio": "7",
+        }[normalized_default]
         try:
             raw = self._plain_prompt_session.prompt(
                 [("class:prompt", f"  Select template [{default_num}]: ")]
@@ -1233,6 +1244,12 @@ class InteractiveTerminal:
             return "omlx"
         if selected in {"4", "other", "custom", "k"}:
             return "other"
+        if selected in {"5", "ds4", "deepseek", "deepseek-v4"}:
+            return "ds4"
+        if selected in {"6", "llama.cpp", "llama_cpp", "llamacpp", "llama-cpp"}:
+            return "llama_cpp"
+        if selected in {"7", "lmstudio", "lm_studio", "lm-studio", "lm studio"}:
+            return "lm_studio"
         self.console.print("  [dim]Invalid selection.[/dim]")
         return None
 
@@ -1252,7 +1269,15 @@ class InteractiveTerminal:
             legacy_base_url = str(self.session.config.get("llm.openai_base_url") or "").strip()
             legacy_backend = str(self.session.config.get("llm.openai_compatible_backend") or "").strip().lower()
             if legacy_base_url and not _is_openai_managed_base_url(legacy_base_url):
-                if legacy_backend not in {"ollama", "unsloth", "omlx", "other"}:
+                if legacy_backend not in {
+                    "ollama",
+                    "unsloth",
+                    "omlx",
+                    "ds4",
+                    "llama_cpp",
+                    "lm_studio",
+                    "other",
+                }:
                     legacy_backend = "other"
                 profile = {
                     "id": "legacy_compatible",
@@ -1311,6 +1336,38 @@ class InteractiveTerminal:
             return "gluelm", "GlueLM", None
         return raw_provider or "anthropic", (raw_provider or "anthropic"), None
 
+    @staticmethod
+    def _compatible_backend_display_name(backend: str) -> str:
+        """Return user-facing backend label."""
+        backend_type = str(backend or "").strip().lower()
+        if backend_type == "omlx":
+            return "oMLX"
+        if backend_type == "ollama":
+            return "Ollama"
+        if backend_type == "unsloth":
+            return "Unsloth"
+        if backend_type == "ds4":
+            return "DS4"
+        if backend_type == "llama_cpp":
+            return "llama.cpp"
+        if backend_type == "lm_studio":
+            return "LM Studio"
+        return "Custom"
+
+    @staticmethod
+    def _compatible_default_base_url(backend: str, fallback: str = "http://localhost:11434/v1") -> str:
+        """Return default endpoint for a compatible backend."""
+        backend_type = str(backend or "").strip().lower()
+        defaults = {
+            "ollama": "http://localhost:11434/v1",
+            "unsloth": "http://localhost:8888/v1",
+            "omlx": "http://localhost:8000/v1",
+            "ds4": "http://localhost:8000/v1",
+            "llama_cpp": "http://localhost:8080/v1",
+            "lm_studio": "http://localhost:1234/v1",
+        }
+        return defaults.get(backend_type, fallback)
+
     def _current_compatible_backend_label(self) -> str | None:
         """Return compatible backend label for status line, when applicable."""
         _, provider_label, endpoint = self._current_provider_status()
@@ -1323,19 +1380,15 @@ class InteractiveTerminal:
         if not isinstance(profile, dict):
             profile = None
         backend = str((profile or {}).get("backend") or "").strip().lower()
-        if backend not in {"ollama", "unsloth", "omlx", "other", "custom"}:
+        if backend not in {"ollama", "unsloth", "omlx", "ds4", "llama_cpp", "lm_studio", "other", "custom"}:
             backend = str(
                 self.session.config.get("llm.openai_compatible_backend") or ""
             ).strip().lower()
         if not endpoint or "OpenAI-compatible" not in provider_label:
             return None
 
-        if backend == "ollama":
-            return "Ollama"
-        if backend == "unsloth":
-            return "Unsloth"
-        if backend == "omlx":
-            return "oMLX"
+        if backend in {"ollama", "unsloth", "omlx", "ds4", "llama_cpp", "lm_studio"}:
+            return self._compatible_backend_display_name(backend)
         if backend in {"other", "custom"}:
             return "Custom"
 
@@ -1344,6 +1397,22 @@ class InteractiveTerminal:
         endpoint_text = str(endpoint).strip().lower()
         if key.startswith("sk-unsloth-") or "8888" in endpoint_text:
             return "Unsloth"
+        if (
+            key.startswith("dsv4-")
+            or key.startswith("sk-ds4-")
+            or "ds4" in endpoint_text
+            or "deepseek-v4" in endpoint_text
+        ):
+            return "DS4"
+        if "1234" in endpoint_text or "lmstudio" in endpoint_text or "lm-studio" in endpoint_text:
+            return "LM Studio"
+        if (
+            "8080" in endpoint_text
+            or "llama.cpp" in endpoint_text
+            or "llama-cpp" in endpoint_text
+            or "llamacpp" in endpoint_text
+        ):
+            return "llama.cpp"
         if "8000" in endpoint_text or "omlx" in endpoint_text:
             return "oMLX"
         if "11434" in endpoint_text:
@@ -2082,6 +2151,7 @@ class InteractiveTerminal:
 
         provider, provider_label, provider_endpoint = self._current_provider_status()
         models_with_provider: list[dict[str, str | None]] = []
+        profile_discovery_warnings: list[str] = []
         for prov, models in AVAILABLE_MODELS.items():
             for model_id, display, desc in models:
                 if model_id == "__custom_openai_compatible__":
@@ -2116,6 +2186,24 @@ class InteractiveTerminal:
                     api_key=api_key,
                     quiet=True,
                 )
+                if not discovered_models:
+                    backend_label = self._compatible_backend_display_name(backend)
+                    issue = ""
+                    probe = self._probe_compatible_profile(
+                        base_url=base_url,
+                        backend=backend,
+                        api_key=api_key,
+                    )
+                    if isinstance(probe, dict):
+                        issue = str(probe.get("error") or "").strip()
+                    if issue:
+                        profile_discovery_warnings.append(
+                            f"{profile_label} ({backend_label}): {issue}"
+                        )
+                    else:
+                        profile_discovery_warnings.append(
+                            f"{profile_label} ({backend_label}): no models discovered"
+                        )
                 if not discovered_models and profile_id == cfg.active_openai_profile_id():
                     fallback_model = str(profile.get("default_model") or "").strip()
                     if fallback_model:
@@ -2170,18 +2258,35 @@ class InteractiveTerminal:
                     is_current = True
             marker = " [green]*[/green]" if is_current else "  "
             if profile_id:
-                if backend == "omlx":
-                    provider_hint = "oMLX"
-                elif backend == "ollama":
-                    provider_hint = "Ollama"
-                elif backend == "unsloth":
-                    provider_hint = "Unsloth"
-                else:
-                    provider_hint = "Custom"
+                provider_hint = self._compatible_backend_display_name(backend)
             else:
                 provider_hint = prov
             self.console.print(
                 f"  {marker} [{i}] {display} [dim]({provider_hint})[/dim] — [dim]{desc}[/dim]"
+            )
+
+        if profile_discovery_warnings:
+            self.console.print(
+                "  Warning: some compatible providers are unhealthy or returned no models.",
+                style="yellow",
+            )
+            for warning in profile_discovery_warnings[:3]:
+                self.console.print(
+                    f"    - {self._truncate_discovery_detail(warning, max_chars=160)}",
+                    style="dim",
+                    markup=False,
+                )
+            remaining = len(profile_discovery_warnings) - 3
+            if remaining > 0:
+                self.console.print(
+                    f"    - (+{remaining} more profiles)",
+                    style="dim",
+                    markup=False,
+                )
+            self.console.print(
+                "    Run /model-manager to inspect health and provider config.",
+                style="dim",
+                markup=False,
             )
 
         self.console.print()
@@ -2311,20 +2416,21 @@ class InteractiveTerminal:
         current_key = str(self.session.config.get("llm.openai_compatible_api_key") or "").strip()
 
         self.console.print("\n  [cyan]OpenAI-compatible endpoint setup[/cyan]")
-        self.console.print("  [dim]Examples: Ollama, Unsloth, oMLX, vLLM, LM Studio, gateway proxies[/dim]")
+        self.console.print(
+            "  [dim]Examples: Ollama, Unsloth, oMLX, DS4, llama.cpp, LM Studio, vLLM, gateway proxies[/dim]"
+        )
 
         backend = self._prompt_openai_compatible_backend(default_base_url)
         if not backend:
             self.console.print("  [dim]Cancelled.[/dim]")
             return
-        if backend == "unsloth":
-            default_base_url = "http://localhost:8888/v1"
-        elif backend == "omlx":
-            default_base_url = "http://localhost:8000/v1"
-        elif backend == "ollama":
-            default_base_url = "http://localhost:11434/v1"
-        else:
+        if backend == "other":
             default_base_url = existing_base_url
+        else:
+            default_base_url = self._compatible_default_base_url(
+                backend,
+                fallback=existing_base_url,
+            )
 
         try:
             endpoint_input = self._plain_prompt_session.prompt(
@@ -2347,6 +2453,15 @@ class InteractiveTerminal:
         elif backend == "omlx":
             default_key = current_key or ""
             key_hint = "  API key [oMLX; Enter keeps existing]: "
+        elif backend == "ds4":
+            default_key = current_key or ""
+            key_hint = "  API key [DS4 token (optional); Enter keeps existing]: "
+        elif backend == "llama_cpp":
+            default_key = current_key or ""
+            key_hint = "  API key [llama.cpp key (optional); Enter keeps existing]: "
+        elif backend == "lm_studio":
+            default_key = current_key or ""
+            key_hint = "  API key [LM Studio key (optional); Enter keeps existing]: "
         else:
             default_key = current_key or ""
             key_hint = "  API key [optional; Enter keeps existing/none]: "
@@ -2426,17 +2541,19 @@ class InteractiveTerminal:
         backend = self._prompt_openai_compatible_backend(default_base_url)
         if not backend:
             return None
-        if backend == "unsloth":
-            default_base_url = "http://localhost:8888/v1"
-        elif backend == "omlx":
-            default_base_url = "http://localhost:8000/v1"
-        elif backend == "ollama":
-            default_base_url = "http://localhost:11434/v1"
+        if backend != "other":
+            default_base_url = self._compatible_default_base_url(
+                backend,
+                fallback=default_base_url,
+            )
 
         label_defaults = {
             "ollama": "Ollama Local",
             "unsloth": "Unsloth Local",
             "omlx": "oMLX Local",
+            "ds4": "DS4 Local",
+            "llama_cpp": "llama.cpp Local",
+            "lm_studio": "LM Studio Local",
             "other": "Custom Compatible Endpoint",
         }
         default_label = str((existing_profile or {}).get("label") or "").strip() or label_defaults.get(
@@ -2465,6 +2582,15 @@ class InteractiveTerminal:
         elif backend == "omlx":
             default_key = existing_key or ""
             key_hint = "  API key [oMLX; Enter keeps existing]: "
+        elif backend == "ds4":
+            default_key = existing_key or ""
+            key_hint = "  API key [DS4 token (optional); Enter keeps existing]: "
+        elif backend == "llama_cpp":
+            default_key = existing_key or ""
+            key_hint = "  API key [llama.cpp key (optional); Enter keeps existing]: "
+        elif backend == "lm_studio":
+            default_key = existing_key or ""
+            key_hint = "  API key [LM Studio key (optional); Enter keeps existing]: "
         else:
             default_key = existing_key or ""
             key_hint = "  API key [optional; Enter keeps existing/none]: "
@@ -2578,10 +2704,26 @@ class InteractiveTerminal:
             or self.session.config.get("llm.openai_compatible_backend")
             or ""
         ).strip().lower()
-        if current_backend in {"ollama", "unsloth", "omlx", "other"}:
+        if current_backend in {"ollama", "unsloth", "omlx", "ds4", "llama_cpp", "lm_studio", "other"}:
             default_choice = current_backend
         if current_key.startswith("sk-unsloth-"):
             default_choice = "unsloth"
+        elif (
+            current_key.lower().startswith("dsv4-")
+            or current_key.lower().startswith("sk-ds4-")
+            or "ds4" in str(base_url).lower()
+            or "deepseek-v4" in str(base_url).lower()
+        ):
+            default_choice = "ds4"
+        elif "1234" in str(base_url) or "lmstudio" in str(base_url).lower() or "lm-studio" in str(base_url).lower():
+            default_choice = "lm_studio"
+        elif (
+            "8080" in str(base_url)
+            or "llama.cpp" in str(base_url).lower()
+            or "llama-cpp" in str(base_url).lower()
+            or "llamacpp" in str(base_url).lower()
+        ):
+            default_choice = "llama_cpp"
         elif "8000" in str(base_url) or "omlx" in str(base_url).lower():
             default_choice = "omlx"
         elif "11434" in str(base_url):
@@ -2592,7 +2734,18 @@ class InteractiveTerminal:
         self.console.print("    [2] Unsloth (/v1/models, auth)")
         self.console.print("    [3] oMLX (/v1/models, auth)")
         self.console.print("    [4] Other OpenAI-compatible (/v1/models then /api/tags)")
-        default_num = {"ollama": "1", "unsloth": "2", "omlx": "3", "other": "4"}[default_choice]
+        self.console.print("    [5] DS4 (DeepSeek v4, /v1/models)")
+        self.console.print("    [6] llama.cpp (/v1/models)")
+        self.console.print("    [7] LM Studio (/v1/models)")
+        default_num = {
+            "ollama": "1",
+            "unsloth": "2",
+            "omlx": "3",
+            "other": "4",
+            "ds4": "5",
+            "llama_cpp": "6",
+            "lm_studio": "7",
+        }[default_choice]
         try:
             raw = self._plain_prompt_session.prompt(
                 [("class:prompt", f"  Select endpoint type [{default_num}]: ")],
@@ -2608,6 +2761,12 @@ class InteractiveTerminal:
             return "omlx"
         if selected in {"4", "other", "custom", "k"}:
             return "other"
+        if selected in {"5", "ds4", "deepseek", "deepseek-v4"}:
+            return "ds4"
+        if selected in {"6", "llama.cpp", "llama_cpp", "llamacpp", "llama-cpp"}:
+            return "llama_cpp"
+        if selected in {"7", "lmstudio", "lm_studio", "lm-studio", "lm studio"}:
+            return "lm_studio"
         self.console.print("  [dim]Invalid selection; using generic compatible mode.[/dim]")
         return "other"
 
@@ -2879,7 +3038,7 @@ class InteractiveTerminal:
     ) -> list[str]:
         """Discover models based on selected endpoint type."""
         backend_type = str(backend or "").strip().lower()
-        if backend_type in {"unsloth", "omlx"}:
+        if backend_type in {"unsloth", "omlx", "ds4", "llama_cpp", "lm_studio"}:
             names = self._fetch_openai_models(base_url, api_key=api_key, quiet=quiet)
         elif backend_type == "ollama":
             names = self._fetch_ollama_tags(base_url, api_key=api_key, quiet=quiet)
@@ -3259,7 +3418,7 @@ class InteractiveTerminal:
     def _compatible_models_path_label(backend: str) -> str:
         """Return discovery path(s) used for a compatible backend."""
         backend_type = str(backend or "").strip().lower()
-        if backend_type in {"unsloth", "omlx"}:
+        if backend_type in {"unsloth", "omlx", "ds4", "llama_cpp", "lm_studio"}:
             return "/v1/models"
         if backend_type == "ollama":
             return "/api/tags -> /v1/models"
@@ -3279,7 +3438,7 @@ class InteractiveTerminal:
         errors: list[str] = []
         source = ""
 
-        if backend_type in {"unsloth", "omlx"}:
+        if backend_type in {"unsloth", "omlx", "ds4", "llama_cpp", "lm_studio"}:
             models, err = self._fetch_openai_models(
                 base_url,
                 api_key=api_key,
@@ -3399,15 +3558,7 @@ class InteractiveTerminal:
                     elif probe.get("error"):
                         models_display = f"[dim]{probe.get('error')}[/dim]"
 
-                    backend_label = (
-                        "oMLX"
-                        if backend == "omlx"
-                        else "Ollama"
-                        if backend == "ollama"
-                        else "Unsloth"
-                        if backend == "unsloth"
-                        else "Custom"
-                    )
+                    backend_label = self._compatible_backend_display_name(backend)
                     key_preview = Config._secret_preview(api_key)
                     table.add_row(
                         profile_label,

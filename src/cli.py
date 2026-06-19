@@ -554,7 +554,7 @@ def setup_cmd(
     openai_compatible_backend: Optional[str] = typer.Option(
         None,
         "--openai-compatible-backend",
-        help="Compatible backend type: ollama, unsloth, omlx, or other",
+        help="Compatible backend type: ollama, unsloth, omlx, ds4, llama_cpp, lm_studio, or other",
     ),
     profile_label: Optional[str] = typer.Option(
         None,
@@ -564,7 +564,7 @@ def setup_cmd(
     profile_template: Optional[str] = typer.Option(
         None,
         "--profile-template",
-        help="OpenAI-compatible template: ollama, unsloth, omlx, or other",
+        help="OpenAI-compatible template: ollama, unsloth, omlx, ds4, llama_cpp, lm_studio, or other",
     ),
     profile_endpoint: Optional[str] = typer.Option(
         None,
@@ -637,6 +637,7 @@ def setup_cmd(
         openai_base_url = profile_endpoint
     if profile_template and not openai_compatible_backend:
         openai_compatible_backend = profile_template
+    openai_compatible_backend = _normalize_compatible_backend_name(openai_compatible_backend) or None
 
     cfg = Config.load()
 
@@ -694,15 +695,7 @@ def setup_cmd(
                 selected_profile_endpoint = str(
                     selected_compatible_profile.get("base_url") or ""
                 ).strip()
-                backend_name = (
-                    "oMLX"
-                    if selected_profile_backend == "omlx"
-                    else "Ollama"
-                    if selected_profile_backend == "ollama"
-                    else "Unsloth"
-                    if selected_profile_backend == "unsloth"
-                    else "Custom"
-                )
+                backend_name = _compatible_backend_display_name(selected_profile_backend)
                 endpoint_text = selected_profile_endpoint or "—"
                 console.print(
                     f"  [dim]Using existing compatible profile:[/dim] {selected_profile_label} "
@@ -734,6 +727,9 @@ def setup_cmd(
                 "ollama": "Ollama Local",
                 "unsloth": "Unsloth Local",
                 "omlx": "oMLX Local",
+                "ds4": "DS4 Local",
+                "llama_cpp": "llama.cpp Local",
+                "lm_studio": "LM Studio Local",
                 "other": "Custom Compatible Endpoint",
             }
             resolved_compatible_profile_label = label_defaults.get(
@@ -971,7 +967,7 @@ def _prompt_openai_api_key() -> str:
 
 def _prompt_openai_compatible_api_key(backend: str = "other") -> str:
     """Prompt for OpenAI-compatible API key with backend-aware hints."""
-    backend_type = str(backend or "").strip().lower()
+    backend_type = _normalize_compatible_backend_name(backend)
     if backend_type == "unsloth":
         console.print(
             "  Unsloth Studio: [link=http://localhost:8888]http://localhost:8888[/link]"
@@ -986,6 +982,21 @@ def _prompt_openai_compatible_api_key(backend: str = "other") -> str:
             "  oMLX endpoint: [link=http://localhost:8000]http://localhost:8000[/link]"
         )
         console.print("  [dim]Use your oMLX key if your endpoint requires auth.[/dim]")
+    elif backend_type == "ds4":
+        console.print(
+            "  DS4 endpoint: [link=http://localhost:8000]http://localhost:8000[/link]"
+        )
+        console.print("  [dim]Use your DS4 token if your server requires auth.[/dim]")
+    elif backend_type == "llama_cpp":
+        console.print(
+            "  llama.cpp endpoint: [link=http://localhost:8080]http://localhost:8080[/link]"
+        )
+        console.print("  [dim]llama.cpp servers often run without auth, but API keys are supported.[/dim]")
+    elif backend_type == "lm_studio":
+        console.print(
+            "  LM Studio endpoint: [link=http://localhost:1234]http://localhost:1234[/link]"
+        )
+        console.print("  [dim]LM Studio OpenAI-compatible server usually uses /v1 models discovery.[/dim]")
     else:
         console.print(
             "  [dim]Using a custom OpenAI-compatible endpoint key.[/dim]"
@@ -1031,6 +1042,63 @@ def _is_openai_managed_base_url(base_url: Optional[str]) -> bool:
 def _normalize_openai_base_url(base_url: Optional[str]) -> Optional[str]:
     value = str(base_url or "").strip().rstrip("/")
     return value or None
+
+
+def _normalize_compatible_backend_name(backend: Optional[str]) -> str:
+    """Normalize backend aliases to canonical compatible backend ids."""
+    value = str(backend or "").strip().lower()
+    aliases = {
+        "ollama": "ollama",
+        "unsloth": "unsloth",
+        "omlx": "omlx",
+        "ds4": "ds4",
+        "deepseek": "ds4",
+        "deepseek-v4": "ds4",
+        "deepseek_4": "ds4",
+        "llama.cpp": "llama_cpp",
+        "llama_cpp": "llama_cpp",
+        "llama-cpp": "llama_cpp",
+        "llamacpp": "llama_cpp",
+        "lmstudio": "lm_studio",
+        "lm_studio": "lm_studio",
+        "lm-studio": "lm_studio",
+        "lm studio": "lm_studio",
+        "custom": "other",
+        "generic": "other",
+        "other": "other",
+    }
+    return aliases.get(value, value)
+
+
+def _compatible_backend_display_name(backend: Optional[str]) -> str:
+    """Return user-facing backend label."""
+    backend_type = _normalize_compatible_backend_name(backend)
+    if backend_type == "omlx":
+        return "oMLX"
+    if backend_type == "ollama":
+        return "Ollama"
+    if backend_type == "unsloth":
+        return "Unsloth"
+    if backend_type == "ds4":
+        return "DS4"
+    if backend_type == "llama_cpp":
+        return "llama.cpp"
+    if backend_type == "lm_studio":
+        return "LM Studio"
+    return "Custom"
+
+
+def _compatible_default_endpoint(backend: str, fallback: str = "http://localhost:11434/v1") -> str:
+    """Return the default endpoint URL for a compatible backend."""
+    defaults = {
+        "unsloth": "http://localhost:8888/v1",
+        "omlx": "http://localhost:8000/v1",
+        "ds4": "http://localhost:8000/v1",
+        "llama_cpp": "http://localhost:8080/v1",
+        "lm_studio": "http://localhost:1234/v1",
+        "ollama": "http://localhost:11434/v1",
+    }
+    return defaults.get(_normalize_compatible_backend_name(backend), fallback)
 
 
 def _prompt_openai_endpoint_mode(default_mode: str = "cloud") -> str:
@@ -1130,7 +1198,9 @@ def _resolve_openai_base_url(
         return None
     default_endpoint = existing if (existing and not _is_openai_managed_base_url(existing)) else "http://localhost:11434/v1"
     console.print("\n  [cyan]OpenAI endpoint setup[/cyan]")
-    console.print("  [dim]Examples: OpenAI cloud, Ollama, vLLM, LM Studio, proxy gateways[/dim]")
+    console.print(
+        "  [dim]Examples: OpenAI cloud, Ollama, Unsloth, oMLX, DS4, llama.cpp, LM Studio, vLLM, proxy gateways[/dim]"
+    )
 
     try:
         entered = input(f"  Endpoint base URL [{default_endpoint}]: ").strip()
@@ -1149,17 +1219,36 @@ def _infer_openai_compatible_backend(base_url: Optional[str], key: Optional[str]
     secret = str(key or "").strip().lower()
     if secret.startswith("sk-unsloth-") or "8888" in endpoint:
         return "unsloth"
-    if "8000" in endpoint or "omlx" in endpoint:
+    if (
+        secret.startswith("dsv4-")
+        or secret.startswith("sk-ds4-")
+        or "deepseek-v4" in endpoint
+        or "deepseek4" in endpoint
+        or "ds4" in endpoint
+    ):
+        return "ds4"
+    if "1234" in endpoint or "lmstudio" in endpoint or "lm-studio" in endpoint:
+        return "lm_studio"
+    if (
+        "8080" in endpoint
+        or "llama.cpp" in endpoint
+        or "llama-cpp" in endpoint
+        or "llamacpp" in endpoint
+    ):
+        return "llama_cpp"
+    if secret.startswith("sk-omlx-") or "omlx" in endpoint:
         return "omlx"
-    if "11434" in endpoint:
+    if "11434" in endpoint or "ollama" in endpoint:
         return "ollama"
+    if "8000" in endpoint:
+        return "omlx"
     return "other"
 
 
 def _prompt_openai_compatible_backend(default_backend: str = "ollama") -> str:
     """Prompt backend type for OpenAI-compatible setup."""
-    normalized_default = str(default_backend or "").strip().lower()
-    if normalized_default not in {"ollama", "unsloth", "omlx", "other"}:
+    normalized_default = _normalize_compatible_backend_name(default_backend)
+    if normalized_default not in {"ollama", "unsloth", "omlx", "ds4", "llama_cpp", "lm_studio", "other"}:
         normalized_default = "ollama"
 
     console.print("\n  [cyan]Endpoint type[/cyan]")
@@ -1167,7 +1256,18 @@ def _prompt_openai_compatible_backend(default_backend: str = "ollama") -> str:
     console.print("    [2] Unsloth (/v1/models, auth)")
     console.print("    [3] oMLX (/v1/models, auth)")
     console.print("    [4] Other OpenAI-compatible (/v1/models then /api/tags)")
-    default_num = {"ollama": "1", "unsloth": "2", "omlx": "3", "other": "4"}[normalized_default]
+    console.print("    [5] DS4 (DeepSeek v4, /v1/models)")
+    console.print("    [6] llama.cpp (/v1/models)")
+    console.print("    [7] LM Studio (/v1/models)")
+    default_num = {
+        "ollama": "1",
+        "unsloth": "2",
+        "omlx": "3",
+        "other": "4",
+        "ds4": "5",
+        "llama_cpp": "6",
+        "lm_studio": "7",
+    }[normalized_default]
     try:
         raw = input(f"  Select endpoint type [{default_num}]: ").strip().lower()
     except (EOFError, KeyboardInterrupt):
@@ -1183,6 +1283,12 @@ def _prompt_openai_compatible_backend(default_backend: str = "ollama") -> str:
         return "omlx"
     if raw in {"4", "other", "custom", "k"}:
         return "other"
+    if raw in {"5", "ds4", "deepseek", "deepseek-v4"}:
+        return "ds4"
+    if raw in {"6", "llama.cpp", "llama_cpp", "llama-cpp", "llamacpp"}:
+        return "llama_cpp"
+    if raw in {"7", "lmstudio", "lm_studio", "lm-studio", "lm studio"}:
+        return "lm_studio"
     console.print("  [dim]Invalid selection; using generic compatible mode.[/dim]")
     return "other"
 
@@ -1195,41 +1301,37 @@ def _resolve_openai_compatible_endpoint(
     """Resolve compatible endpoint URL and backend type for setup."""
     existing = _normalize_openai_base_url(cfg.get("llm.openai_base_url"))
     existing_key = cfg.get("llm.openai_compatible_api_key")
-    configured_backend = str(cfg.get("llm.openai_compatible_backend") or "").strip().lower()
+    configured_backend = _normalize_compatible_backend_name(
+        str(cfg.get("llm.openai_compatible_backend") or "").strip().lower()
+    )
     inferred_backend = _infer_openai_compatible_backend(existing, existing_key)
     default_backend = (
-        configured_backend if configured_backend in {"ollama", "unsloth", "omlx", "other"} else inferred_backend
+        configured_backend
+        if configured_backend in {"ollama", "unsloth", "omlx", "ds4", "llama_cpp", "lm_studio", "other"}
+        else inferred_backend
     )
-    selected_backend = str(cli_backend or "").strip().lower()
-    if selected_backend not in {"ollama", "unsloth", "omlx", "other"}:
+    selected_backend = _normalize_compatible_backend_name(cli_backend)
+    if selected_backend not in {"ollama", "unsloth", "omlx", "ds4", "llama_cpp", "lm_studio", "other"}:
         selected_backend = _prompt_openai_compatible_backend(default_backend=default_backend)
-
-    default_endpoint_by_backend = {
-        "unsloth": "http://localhost:8888/v1",
-        "omlx": "http://localhost:8000/v1",
-        "ollama": "http://localhost:11434/v1",
-    }
 
     if cli_base_url is not None:
         chosen = _normalize_openai_base_url(cli_base_url)
         if not chosen:
-            chosen = default_endpoint_by_backend.get(selected_backend, "http://localhost:11434/v1")
+            chosen = _compatible_default_endpoint(selected_backend)
         if _is_openai_managed_base_url(chosen):
             console.print("  [yellow]OpenAI cloud URL detected; using compatible default endpoint instead.[/yellow]")
-            chosen = default_endpoint_by_backend.get(selected_backend, "http://localhost:11434/v1")
+            chosen = _compatible_default_endpoint(selected_backend)
         return chosen, selected_backend
 
-    if selected_backend == "unsloth":
-        default_endpoint = "http://localhost:8888/v1"
-    elif selected_backend == "omlx":
-        default_endpoint = "http://localhost:8000/v1"
-    elif selected_backend == "ollama":
-        default_endpoint = "http://localhost:11434/v1"
+    if selected_backend != "other":
+        default_endpoint = _compatible_default_endpoint(selected_backend)
     else:
         default_endpoint = existing if (existing and not _is_openai_managed_base_url(existing)) else "http://localhost:11434/v1"
 
     console.print("\n  [cyan]OpenAI endpoint setup[/cyan]")
-    console.print("  [dim]Examples: Ollama, Unsloth, oMLX, vLLM, LM Studio, proxy gateways[/dim]")
+    console.print(
+        "  [dim]Examples: Ollama, Unsloth, oMLX, DS4, llama.cpp, LM Studio, vLLM, proxy gateways[/dim]"
+    )
     try:
         entered = input(f"  Endpoint base URL [{default_endpoint}]: ").strip()
     except (EOFError, KeyboardInterrupt):
@@ -1276,11 +1378,14 @@ def _prompt_setup_compatible_profile_id(cfg) -> Optional[str]:
     console.print("\n  [cyan]OpenAI-compatible profile[/cyan]")
     for idx, (profile_id, profile) in enumerate(rows, 1):
         marker = " [green]*[/green]" if profile_id == active_profile_id else ""
-        backend = str(profile.get("backend") or "other").strip().lower()
+        backend = _normalize_compatible_backend_name(
+            str(profile.get("backend") or "other").strip().lower()
+        )
+        backend_label = _compatible_backend_display_name(backend)
         endpoint = str(profile.get("base_url") or "").strip() or "—"
         label = str(profile.get("label") or profile_id).strip()
         console.print(
-            f"    [{idx}] {label} [dim]({backend}, {endpoint})[/dim]{marker}"
+            f"    [{idx}] {label} [dim]({backend_label}, {endpoint})[/dim]{marker}"
         )
     create_idx = len(rows) + 1
     console.print(f"    [{create_idx}] Create new profile")
@@ -1466,8 +1571,8 @@ def _fetch_ollama_tags_for_setup(base_url: str, api_key: Optional[str] = None) -
 
 def _fetch_compatible_models_for_setup(base_url: str, backend: str, api_key: Optional[str] = None) -> list[str]:
     """Discover compatible models based on selected backend."""
-    backend_type = str(backend or "").strip().lower()
-    if backend_type in {"unsloth", "omlx"}:
+    backend_type = _normalize_compatible_backend_name(backend)
+    if backend_type in {"unsloth", "omlx", "ds4", "llama_cpp", "lm_studio"}:
         names = _fetch_openai_models_for_setup(base_url, api_key=api_key)
     elif backend_type == "ollama":
         names = _fetch_ollama_tags_for_setup(base_url, api_key=api_key)
@@ -1752,8 +1857,8 @@ def _resolve_provider_key(
         prompt_fn = _prompt_openai_api_key
         label = "OpenAI-compatible" if is_compat else "OpenAI"
         config_key = key_config_key
-        backend = str(compatible_backend or "").strip().lower()
-        if backend not in {"ollama", "unsloth", "omlx", "other"}:
+        backend = _normalize_compatible_backend_name(compatible_backend)
+        if backend not in {"ollama", "unsloth", "omlx", "ds4", "llama_cpp", "lm_studio", "other"}:
             backend = _infer_openai_compatible_backend(openai_base_url, existing_key)
         default_compat_key = "ollama" if (is_compat and backend == "ollama") else None
         if is_compat and not default_compat_key:

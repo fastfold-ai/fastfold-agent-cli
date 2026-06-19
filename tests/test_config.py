@@ -181,6 +181,18 @@ def test_llm_api_key_prefers_new_anthropic_key():
     assert cfg.llm_api_key("anthropic") == "new-anthropic-key"
 
 
+def test_infer_openai_compatible_backend_new_template_ports():
+    assert Config.infer_openai_compatible_backend("http://localhost:1234/v1") == "lm_studio"
+    assert Config.infer_openai_compatible_backend("http://localhost:8080/v1") == "llama_cpp"
+    assert Config.infer_openai_compatible_backend("http://localhost:8000/v1/ds4") == "ds4"
+
+
+def test_set_openai_compatible_backend_normalizes_aliases():
+    cfg = Config(data={"llm.openai_base_url": "http://localhost:1234/v1"})
+    cfg.set("llm.openai_compatible_backend", "lmstudio")
+    assert cfg.get("llm.openai_compatible_backend") == "lm_studio"
+
+
 def test_llm_api_key_legacy_fallback_for_anthropic():
     cfg = Config(
         data={

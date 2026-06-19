@@ -31,7 +31,9 @@ VALID_LLM_PROVIDERS = frozenset({"anthropic", "openai", "local", "gluelm"})
 logger = logging.getLogger("config")
 OPENAI_API_KEY_PATTERN = re.compile(r"^sk-[A-Za-z0-9_-]{6,}$")
 ANTHROPIC_API_KEY_PATTERN = re.compile(r"^sk-ant-[A-Za-z0-9_-]{6,}$")
-OPENAI_PROFILE_BACKENDS = frozenset({"openai", "ollama", "unsloth", "omlx", "other"})
+OPENAI_PROFILE_BACKENDS = frozenset(
+    {"openai", "ollama", "unsloth", "omlx", "ds4", "llama_cpp", "lm_studio", "other"}
+)
 OPENAI_PROFILE_DEFAULTS = {
     "openai": {
         "label": "OpenAI Cloud",
@@ -56,6 +58,24 @@ OPENAI_PROFILE_DEFAULTS = {
         "base_url": "http://localhost:8000/v1",
         "discovery": ["v1_models"],
         "default_model": "diffusiongemma-26B-A4B-it-4bit",
+    },
+    "ds4": {
+        "label": "DS4 Local",
+        "base_url": "http://localhost:8000/v1",
+        "discovery": ["v1_models"],
+        "default_model": "deepseek-v4-flash",
+    },
+    "llama_cpp": {
+        "label": "llama.cpp Local",
+        "base_url": "http://localhost:8080/v1",
+        "discovery": ["v1_models"],
+        "default_model": "llama3.1",
+    },
+    "lm_studio": {
+        "label": "LM Studio Local",
+        "base_url": "http://localhost:1234/v1",
+        "discovery": ["v1_models"],
+        "default_model": "llama3.1",
     },
     "other": {
         "label": "Custom Compatible Endpoint",
@@ -286,7 +306,7 @@ API_KEYS = {
     "llm.openai_compatible_api_key": {
         "name": "OpenAI-compatible",
         "env_var": "OPENAI_COMPATIBLE_API_KEY",
-        "description": "Custom OpenAI-compatible endpoints (Ollama/vLLM/LM Studio/proxy)",
+        "description": "Custom OpenAI-compatible endpoints (Ollama/Unsloth/oMLX/DS4/llama.cpp/LM Studio/proxy)",
         "url": "https://docs.ollama.com/api/introduction",
         "free": True,
     },
@@ -432,16 +452,63 @@ class Config:
         return text.rstrip("/")
 
     @staticmethod
+    def _normalize_compatible_backend_name(value: Any) -> str:
+        """Normalize backend aliases to canonical compatible backend ids."""
+        text = str(value or "").strip().lower()
+        aliases = {
+            "ollama": "ollama",
+            "unsloth": "unsloth",
+            "omlx": "omlx",
+            "ds4": "ds4",
+            "deepseek": "ds4",
+            "deepseek-v4": "ds4",
+            "deepseek_4": "ds4",
+            "llama.cpp": "llama_cpp",
+            "llama_cpp": "llama_cpp",
+            "llama-cpp": "llama_cpp",
+            "llamacpp": "llama_cpp",
+            "lmstudio": "lm_studio",
+            "lm_studio": "lm_studio",
+            "lm-studio": "lm_studio",
+            "lm studio": "lm_studio",
+            "custom": "other",
+            "generic": "other",
+            "other": "other",
+            "openai": "openai",
+        }
+        return aliases.get(text, text)
+
+    @staticmethod
     def infer_openai_compatible_backend(base_url: Optional[str], api_key: Optional[str] = None) -> str:
         """Infer OpenAI-compatible backend type from endpoint and key hints."""
         endpoint = str(base_url or "").strip().lower()
         secret = str(api_key or "").strip().lower()
         if secret.startswith("sk-unsloth-") or "8888" in endpoint:
             return "unsloth"
-        if "8000" in endpoint or "omlx" in endpoint:
+        if (
+            secret.startswith("dsv4-")
+            or secret.startswith("sk-ds4-")
+            or "deepseek-v4" in endpoint
+            or "deepseek4" in endpoint
+            or "ds4" in endpoint
+        ):
+            return "ds4"
+        if "1234" in endpoint or "lmstudio" in endpoint or "lm-studio" in endpoint:
+            return "lm_studio"
+        if (
+            "8080" in endpoint
+            or "llama.cpp" in endpoint
+            or "llama-cpp" in endpoint
+            or "llamacpp" in endpoint
+        ):
+            return "llama_cpp"
+        if secret.startswith("sk-omlx-") or "omlx" in endpoint:
             return "omlx"
-        if "11434" in endpoint:
+        if "11434" in endpoint or "ollama" in endpoint:
             return "ollama"
+        # Keep legacy 8000-port inference for oMLX profiles without explicit hints.
+        if "8000" in endpoint:
+            return "omlx"
         return "other"
 
     @staticmethod
@@ -450,6 +517,12 @@ class Config:
         model_name = str(model_id or "").strip().lower()
         if not model_name:
             return None
+        if (
+            "deepseek-v4" in model_name
+            or model_name.startswith("deepseek-v4")
+            or model_name.startswith("ds4")
+        ):
+            return "ds4"
         if "omlx" in model_name:
             return "omlx"
         if "unsloth" in model_name:
@@ -501,7 +574,7 @@ class Config:
     def _normalize_profile_record(cls, profile_id: str, raw: Any) -> dict[str, Any]:
         """Normalize an OpenAI profile record with backend defaults."""
         payload = raw if isinstance(raw, dict) else {}
-        backend = str(payload.get("backend") or "").strip().lower()
+        backend = cls._normalize_compatible_backend_name(payload.get("backend"))
         if backend not in OPENAI_PROFILE_BACKENDS:
             backend = cls.infer_openai_compatible_backend(payload.get("base_url"), payload.get("api_key"))
         if profile_id == "openai_cloud":
@@ -568,7 +641,9 @@ class Config:
 
         # Migrate legacy single-slot compatible configuration into profiles.
         legacy_base_url = cls._normalize_openai_base_url(data.get("llm.openai_base_url"))
-        legacy_backend = str(data.get("llm.openai_compatible_backend") or "").strip().lower()
+        legacy_backend = cls._normalize_compatible_backend_name(
+            data.get("llm.openai_compatible_backend")
+        )
         legacy_key = cls._normalized_secret(data.get("llm.openai_compatible_api_key"))
         if legacy_backend not in OPENAI_PROFILE_BACKENDS:
             legacy_backend = cls.infer_openai_compatible_backend(legacy_base_url, legacy_key)
@@ -615,7 +690,11 @@ class Config:
         configured_model = str(data.get("llm.model") or "").strip()
         provider_raw = str(data.get("llm.provider") or "").strip().lower()
         if apply_legacy_compat and not has_compatible_profiles and legacy_key:
-            bootstrap_backend = legacy_backend if legacy_backend in {"ollama", "unsloth", "omlx", "other"} else "other"
+            bootstrap_backend = (
+                legacy_backend
+                if legacy_backend in {"ollama", "unsloth", "omlx", "ds4", "llama_cpp", "lm_studio", "other"}
+                else "other"
+            )
             inferred_model_backend = cls._infer_backend_from_model_name(configured_model)
             if inferred_model_backend:
                 bootstrap_backend = inferred_model_backend
@@ -693,7 +772,7 @@ class Config:
         if not isinstance(active, dict):
             return
 
-        backend = str(active.get("backend") or "").strip().lower()
+        backend = cls._normalize_compatible_backend_name(active.get("backend"))
         base_url = cls._normalize_openai_base_url(active.get("base_url"))
         api_key = cls._normalized_secret(active.get("api_key"))
 
@@ -1116,7 +1195,7 @@ class Config:
             if key == "llm.openai_base_url":
                 value = self._normalize_openai_base_url(value)
             elif key == "llm.openai_compatible_backend":
-                value = str(value or "").strip().lower() or None
+                value = self._normalize_compatible_backend_name(value) or None
             self._data[key] = value
             self._dirty_keys.add(key)
             self._unset_keys.discard(key)

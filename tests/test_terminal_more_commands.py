@@ -164,6 +164,45 @@ class TestOpenAICompatibleSetupAndFetch:
         assert "(oMLX)" in rendered
         assert "(openai:omlx_local)" not in rendered
 
+    def test_switch_model_warns_when_configured_compatible_profile_has_no_models(self):
+        term = _mk_terminal()
+        cfg = Config(data={"llm.provider": "openai", "llm.model": "gpt-5.5"})
+        cfg.upsert_openai_profile(
+            profile_id="unsloth_local",
+            label="Unsloth Local",
+            backend="unsloth",
+            base_url="http://localhost:8888/v1",
+            api_key="sk-unsloth-test",
+            default_model="unsloth-default",
+        )
+        term.session.config = cfg
+        term.session.config.save = MagicMock()
+        term.session.current_model = "gpt-5.5"
+        term._prompt_session.prompt.return_value = "x"
+        term._fetch_compatible_models = MagicMock(return_value=[])
+        term._probe_compatible_profile = MagicMock(
+            return_value={
+                "health": "[red]error[/red]",
+                "models_path": "/v1/models",
+                "models": [],
+                "error": "url=http://localhost:8888/v1/models | connection refused",
+            }
+        )
+
+        term._switch_model()
+
+        rendered = "\n".join(
+            str(call.args[0]) for call in term.console.print.call_args_list if call.args
+        )
+        assert "Warning: some compatible providers are unhealthy or returned no models." in rendered
+        assert "Run /model-manager to inspect health and provider config." in rendered
+        term._probe_compatible_profile.assert_called_once_with(
+            base_url="http://localhost:8888/v1",
+            backend="unsloth",
+            api_key="sk-unsloth-test",
+        )
+        term.session.set_model.assert_not_called()
+
     def test_handle_model_manager_command_renders_diagnostics_table(self):
         term = _mk_terminal()
         cfg = Config(data={"llm.provider": "openai", "llm.model": "gpt-5.5"})

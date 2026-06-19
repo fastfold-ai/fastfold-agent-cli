@@ -53,6 +53,15 @@ class TestInferBackend:
     def test_unsloth_from_key(self):
         assert _infer_openai_compatible_backend("http://localhost:8888/v1", "sk-unsloth-abc") == "unsloth"
 
+    def test_lm_studio_from_port(self):
+        assert _infer_openai_compatible_backend("http://localhost:1234/v1") == "lm_studio"
+
+    def test_llama_cpp_from_port(self):
+        assert _infer_openai_compatible_backend("http://localhost:8080/v1") == "llama_cpp"
+
+    def test_ds4_from_endpoint_hint(self):
+        assert _infer_openai_compatible_backend("http://localhost:8000/v1/ds4") == "ds4"
+
     def test_other_fallback(self):
         assert _infer_openai_compatible_backend("http://proxy.local/v1") == "other"
 
@@ -133,6 +142,12 @@ class TestPromptOpenAIHelpers:
         monkeypatch.setattr("builtins.input", lambda _: "2")
         assert _prompt_openai_compatible_backend() == "unsloth"
 
+    def test_prompt_compatible_backend_numeric_lm_studio(self, captured_console, monkeypatch):
+        console, _ = captured_console
+        monkeypatch.setattr("cli.console", console)
+        monkeypatch.setattr("builtins.input", lambda _: "7")
+        assert _prompt_openai_compatible_backend() == "lm_studio"
+
 
 class TestResolveOpenAIEndpoints:
     def test_resolve_base_url_cli_managed_returns_none(self):
@@ -169,6 +184,15 @@ class TestResolveOpenAIEndpoints:
         assert backend == "ollama"
         assert url == "http://localhost:11434/v1"
 
+    def test_resolve_compatible_endpoint_lm_studio_alias(self, captured_console, monkeypatch):
+        console, _ = captured_console
+        monkeypatch.setattr("cli.console", console)
+        cfg = Config(data={})
+        monkeypatch.setattr("builtins.input", lambda _: "")
+        url, backend = _resolve_openai_compatible_endpoint(cfg, cli_backend="lmstudio")
+        assert backend == "lm_studio"
+        assert url == "http://localhost:1234/v1"
+
 
 class TestFetchCompatibleModels:
     def test_unsloth_uses_openai_models(self, monkeypatch):
@@ -177,6 +201,23 @@ class TestFetchCompatibleModels:
             lambda base_url, api_key=None: ["model-a"],
         )
         assert _fetch_compatible_models_for_setup("http://x/v1", "unsloth") == ["model-a"]
+
+    def test_lm_studio_uses_openai_models(self, monkeypatch):
+        calls = []
+
+        def fake_openai(*args, **kwargs):
+            calls.append("openai")
+            return ["local-model"]
+
+        def fake_ollama(*args, **kwargs):
+            calls.append("ollama")
+            return ["should-not-be-used"]
+
+        monkeypatch.setattr("cli._fetch_openai_models_for_setup", fake_openai)
+        monkeypatch.setattr("cli._fetch_ollama_tags_for_setup", fake_ollama)
+        names = _fetch_compatible_models_for_setup("http://localhost:1234/v1", "lm_studio")
+        assert names == ["local-model"]
+        assert calls == ["openai"]
 
     def test_ollama_falls_back_to_openai_models(self, monkeypatch):
         calls = []
@@ -270,3 +311,16 @@ class TestResolveProviderKey:
             compatible_backend="ollama",
         )
         assert key == "ollama"
+
+    def test_openai_compatible_lm_studio_uses_compatible_prompt(self, captured_console, monkeypatch):
+        console, _ = captured_console
+        monkeypatch.setattr("cli.console", console)
+        cfg = Config(data={})
+        monkeypatch.setattr("cli._prompt_openai_compatible_api_key", lambda backend="other": "lm-key")
+        key = _resolve_provider_key(
+            cfg,
+            "openai_compatible",
+            openai_base_url="http://localhost:1234/v1",
+            compatible_backend="lm_studio",
+        )
+        assert key == "lm-key"
