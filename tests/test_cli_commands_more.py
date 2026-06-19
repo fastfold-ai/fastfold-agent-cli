@@ -1,6 +1,8 @@
 """Additional Typer CliRunner tests for uncovered cli.py commands."""
 
 import json
+import sys
+import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -176,6 +178,82 @@ class TestReportPublish:
         assert result.exit_code == 0
         mock_publish.assert_called_once()
         assert "brief.html" in result.stdout or "publish" in result.stdout.lower()
+
+
+class TestReportShow:
+    def test_report_show_auto_publishes_latest_markdown(self, tmp_path):
+        reports = tmp_path / "reports"
+        reports.mkdir()
+        md = reports / "latest.md"
+        md.write_text("# Report\n\nBody")
+        html = reports / "latest.html"
+        cfg = Config(data={"sandbox.output_dir": str(tmp_path)})
+
+        def _publish(_path):
+            html.write_text("<html>ok</html>")
+            return html
+
+        with patch("agent.config.Config.load", return_value=cfg), patch(
+            "cli._latest_report_path", return_value=md
+        ), patch("reports.html.publish_report", side_effect=_publish) as mock_publish, patch(
+            "webbrowser.open"
+        ) as mock_open:
+            result = runner.invoke(app, ["report", "show"])
+
+        assert result.exit_code == 0
+        mock_publish.assert_called_once_with(md)
+        mock_open.assert_called_once()
+        assert "Auto-published" in result.stdout
+
+    def test_report_show_missing_path_exits(self, tmp_path):
+        missing = tmp_path / "missing.html"
+        result = runner.invoke(app, ["report", "show", "--path", str(missing)])
+        assert result.exit_code == 2
+        assert "File not found" in result.stdout
+
+
+class TestBenchCommand:
+    def test_bench_force_clears_outputs_then_dry_run(self, tmp_path):
+        out_dir = tmp_path / "bench-out"
+        (out_dir / "results").mkdir(parents=True)
+        (out_dir / "evals").mkdir(parents=True)
+        (out_dir / ".preview_cache").mkdir(parents=True)
+        (out_dir / "all_results.json").write_text("{}")
+        (out_dir / "llm_eval.json").write_text("{}")
+
+        manifest = tmp_path / "manifest.json"
+        manifest.write_text(
+            json.dumps(
+                [
+                    {
+                        "question_id": "q1",
+                        "question": "What is TP53?",
+                        "ideal": "tumor suppressor",
+                        "data_dir": "",
+                    }
+                ]
+            )
+        )
+
+        fake_runner_mod = types.SimpleNamespace(BenchRunner=MagicMock())
+        with patch.dict(sys.modules, {"bench": types.SimpleNamespace(), "bench.runner": fake_runner_mod}):
+            result = runner.invoke(
+                app,
+                [
+                    "bench",
+                    "--force",
+                    "--dry-run",
+                    "--manifest",
+                    str(manifest),
+                    "--output",
+                    str(out_dir),
+                ],
+            )
+
+        assert result.exit_code == 0
+        assert "Cleared" in result.stdout
+        assert not (out_dir / "results").exists()
+        assert not (out_dir / "all_results.json").exists()
 
 
 class TestTraceExport:

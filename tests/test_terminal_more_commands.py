@@ -759,3 +759,162 @@ class TestTerminalSessionAndCommandBranches:
             term._handle_case_study_command("/case-study list", {})
             term._handle_case_study_command("/case-study unknown", {})
         assert term.console.print.called
+
+
+class TestTerminalUsageAndSpinnerHelpers:
+    def test_coerce_helpers_and_spinner_markup(self):
+        term = _mk_terminal()
+
+        assert term._coerce_token_count("12.9") == 12
+        assert term._coerce_token_count(True) == 1
+        assert term._coerce_token_count("bad") == 0
+        assert term._coerce_cost("2.50") == 2.5
+        assert term._coerce_cost(False) == 0.0
+        assert term._estimate_output_tokens_from_chars(21) == 5
+
+        term._toolbar_frames = ["A", "B"]
+        term._toolbar_frame_interval_s = 0.25
+        term._toolbar_spinner_palette = ["#111111", "#222222"]
+        with patch("ui.terminal.time.time", return_value=1.0):
+            markup = term._toolbar_spinner_markup()
+        assert "style fg" in markup
+        assert "A" in markup or "B" in markup
+
+    def test_record_sdk_usage_handles_missing_and_split_costs(self):
+        term = _mk_terminal()
+        term._persist_usage_to_trajectory = MagicMock()
+        term.session.current_model = "fallback-model"
+
+        term._record_sdk_usage(SimpleNamespace(metadata="invalid"))
+        assert term._session_sdk_calls == 0
+
+        term._record_sdk_usage(
+            SimpleNamespace(
+                metadata={
+                    "sdk_input_tokens": 100,
+                    "sdk_output_tokens": 40,
+                    "sdk_cache_read_input_tokens": 10,
+                    "sdk_cache_creation_input_tokens": 8,
+                    "sdk_turns": 1,
+                    "sdk_cost_split_known": True,
+                    "sdk_total_cost_usd": 0.12,
+                    "sdk_model_usage_cost_usd": 0.1,
+                    "sdk_model": "claude-sonnet-4-5-20250929",
+                }
+            )
+        )
+
+        assert term._session_sdk_calls == 1
+        assert term._session_sdk_extra_server_tool_cost_usd == pytest.approx(0.02)
+        assert "claude-sonnet-4-5-20250929" in term._session_sdk_models
+        term._persist_usage_to_trajectory.assert_called_once()
+
+    def test_restore_usage_from_trajectory_invalid_payloads(self):
+        term = _mk_terminal()
+
+        term.agent = SimpleNamespace(trajectory=SimpleNamespace(get_usage_data=lambda: "bad"))
+        term._restore_usage_from_trajectory()
+        assert term._session_sdk_calls == 0
+
+        payload = {
+            "sdk_calls": "2",
+            "sdk_input_tokens": "33",
+            "sdk_output_tokens": "9",
+            "sdk_cache_read_tokens": "4",
+            "sdk_cache_creation_tokens": "1",
+            "sdk_cost_usd": "0.15",
+            "sdk_total_cost_usd": "0.19",
+            "sdk_extra_server_tool_cost_usd": "0.04",
+            "sdk_models": ["gpt-4o", ""],
+            "sdk_turn_rows": [{"turn": 1}, "bad-row"],
+        }
+        term.agent = SimpleNamespace(trajectory=SimpleNamespace(get_usage_data=lambda: payload))
+        term._restore_usage_from_trajectory()
+
+        assert term._session_sdk_calls == 2
+        assert term._session_sdk_input_tokens == 33
+        assert term._session_sdk_models == {"gpt-4o"}
+        assert term._session_sdk_turn_rows == [{"turn": 1}]
+
+
+class TestTerminalCompatibleProfilePrompts:
+    def test_prompt_select_compatible_profile_empty_and_create(self):
+        term = _mk_terminal()
+        cfg = MagicMock()
+        cfg.openai_profiles.return_value = {}
+
+        assert term._prompt_select_compatible_profile_id(cfg=cfg, allow_create=True) == "__create__"
+        assert term._prompt_select_compatible_profile_id(cfg=cfg, allow_create=False) is None
+
+    def test_prompt_select_compatible_profile_selection_paths(self):
+        term = _mk_terminal()
+        cfg = MagicMock()
+        cfg.openai_profiles.return_value = {
+            "p1": {"label": "First", "backend": "omlx", "base_url": "http://localhost:8000/v1"},
+            "p2": {"label": "Second", "backend": "unsloth", "base_url": "http://localhost:8888/v1"},
+        }
+        cfg.active_openai_profile_id.return_value = "p2"
+
+        term._plain_prompt_session.prompt.side_effect = [
+            "1",        # by index
+            "Second",   # by label
+            "3",        # create new
+            "invalid",  # invalid entry
+            KeyboardInterrupt(),
+        ]
+
+        assert term._prompt_select_compatible_profile_id(cfg=cfg, allow_create=True) == "p1"
+        assert term._prompt_select_compatible_profile_id(cfg=cfg, allow_create=True) == "p2"
+        assert term._prompt_select_compatible_profile_id(cfg=cfg, allow_create=True) == "__create__"
+        assert term._prompt_select_compatible_profile_id(cfg=cfg, allow_create=True) is None
+        assert term._prompt_select_compatible_profile_id(cfg=cfg, allow_create=True) is None
+
+    def test_prompt_profile_label_and_template_backend(self):
+        term = _mk_terminal()
+        term._plain_prompt_session.prompt.side_effect = ["  custom label  ", EOFError()]
+        assert term._prompt_profile_label("Default Label") == "custom label"
+        assert term._prompt_profile_label("Default Label") is None
+
+        term = _mk_terminal()
+        term._plain_prompt_session.prompt.side_effect = [
+            "",          # default other
+            "5",         # llama_cpp
+            "invalid",   # invalid
+            KeyboardInterrupt(),
+        ]
+        assert term._prompt_profile_template_backend(default_backend="other") == "other"
+        assert term._prompt_profile_template_backend(default_backend="bad-backend") == "llama_cpp"
+        assert term._prompt_profile_template_backend(default_backend="ollama") is None
+        assert term._prompt_profile_template_backend(default_backend="ollama") is None
+
+    def test_current_provider_status_handles_legacy_compat_and_modes(self):
+        term = _mk_terminal()
+        values = {
+            "llm.provider": "openai",
+            "llm.openai_base_url": "http://localhost:8000/v1",
+            "llm.openai_compatible_backend": "omlx",
+            "llm.openai_compatible_api_key": "sk-omlx",
+            "llm.openai_api_key": "sk-openai",
+        }
+        cfg = MagicMock()
+        cfg.get.side_effect = lambda key, default=None: values.get(key, default)
+        cfg.get_openai_profile.side_effect = RuntimeError("profile read failed")
+        cfg.llm_openai_base_url.return_value = "http://localhost:8000/v1"
+        term.session.config = cfg
+        term.session.current_model = "custom-model"
+
+        provider, label, endpoint = term._current_provider_status()
+        assert provider == "openai"
+        assert "OpenAI-compatible custom endpoint" in label
+        assert endpoint == "http://localhost:8000/v1"
+
+        values["llm.provider"] = "anthropic"
+        provider2, label2, endpoint2 = term._current_provider_status()
+        assert provider2 == "openai"
+        assert "OpenAI-compatible custom endpoint" in label2
+        assert endpoint2 == "http://localhost:8000/v1"
+
+        values["llm.provider"] = "local"
+        assert term._current_provider_status() == ("local", "Local", None)
+        values["llm.provider"] = "gluelm"
+        assert term._current_provider_status() == ("gluelm", "GlueLM", None)

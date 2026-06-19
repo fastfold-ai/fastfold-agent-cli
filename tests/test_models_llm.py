@@ -1,5 +1,8 @@
 """Tests for models/llm.py helpers, dataclasses, and client init paths."""
 
+import sys
+import types
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -181,3 +184,182 @@ class TestLLMClientInit:
         with patch("models.llm.time.sleep"):
             assert client._retry(_flaky, max_retries=3) == "ok"
         assert calls["n"] == 2
+
+    def test_get_client_uses_anthropic_foundry_when_env_present(self, monkeypatch):
+        fake_anthropic = types.SimpleNamespace(
+            AnthropicFoundry=MagicMock(return_value="foundry-client"),
+            Anthropic=MagicMock(return_value="cloud-client"),
+        )
+        monkeypatch.setenv("ANTHROPIC_FOUNDRY_API_KEY", "foundry-key")
+        with patch.dict(sys.modules, {"anthropic": fake_anthropic}):
+            client = LLMClient(provider="anthropic", model="claude-sonnet-4-5-20250929")
+            resolved = client._get_client()
+        assert resolved == "foundry-client"
+        fake_anthropic.AnthropicFoundry.assert_called_once()
+        fake_anthropic.Anthropic.assert_not_called()
+
+    def test_stream_openai_records_usage_from_usage_chunk(self):
+        client = LLMClient(provider="openai", model="gpt-4o", api_key="sk-test")
+        chunk1 = SimpleNamespace(
+            choices=[SimpleNamespace(delta=SimpleNamespace(content="hello"))],
+            usage=None,
+        )
+        chunk2 = SimpleNamespace(
+            choices=[SimpleNamespace(delta=SimpleNamespace(content=None))],
+            usage=SimpleNamespace(prompt_tokens=12, completion_tokens=5),
+        )
+        mock_openai = MagicMock()
+        mock_openai.chat.completions.create.return_value = [chunk1, chunk2]
+        client._client = mock_openai
+
+        chunks = list(client.stream("system", [{"role": "user", "content": "hi"}], max_tokens=64))
+        assert chunks == ["hello"]
+        assert client.usage.total_input_tokens == 12
+        assert client.usage.total_output_tokens == 5
+
+    def test_stream_anthropic_records_usage_on_stream_finalize(self):
+        client = LLMClient(provider="anthropic", model="claude-sonnet-4-5-20250929")
+
+        class _FakeStream:
+            def __init__(self):
+                self.text_stream = ["A", "B"]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def get_final_message(self):
+                return SimpleNamespace(
+                    usage=SimpleNamespace(input_tokens=7, output_tokens=4),
+                )
+
+        mock_anthropic = MagicMock()
+        mock_anthropic.messages.stream.return_value = _FakeStream()
+        client._client = mock_anthropic
+
+        out = list(client.stream("sys", [{"role": "user", "content": "q"}]))
+        assert out == ["A", "B"]
+        assert client.usage.total_input_tokens == 7
+        assert client.usage.total_output_tokens == 4
+
+    def test_stream_anthropic_finalize_failure_is_tolerated(self):
+        client = LLMClient(provider="anthropic", model="claude-sonnet-4-5-20250929")
+
+        class _FakeStream:
+            def __init__(self):
+                self.text_stream = ["chunk"]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def get_final_message(self):
+                raise RuntimeError("final message unavailable")
+
+        mock_anthropic = MagicMock()
+        mock_anthropic.messages.stream.return_value = _FakeStream()
+        client._client = mock_anthropic
+
+        assert list(client.stream("sys", [{"role": "user", "content": "q"}])) == ["chunk"]
+        assert client.usage.total_tokens == 0
+
+    def test_init_local_prefers_vllm_when_available(self, monkeypatch):
+        fake_vllm = types.SimpleNamespace(LLM=MagicMock(return_value="vllm-client"))
+        with patch.dict(sys.modules, {"vllm": fake_vllm}):
+            client = LLMClient(provider="local", model="m-local")
+            resolved = client._init_local()
+        assert resolved == "vllm-client"
+        fake_vllm.LLM.assert_called_once_with(model="m-local")
+
+    def test_init_local_falls_back_to_transformers_pipeline(self, monkeypatch):
+        fake_transformers = types.SimpleNamespace(
+            pipeline=MagicMock(return_value="hf-pipeline")
+        )
+        real_import = __import__
+
+        def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "vllm":
+                raise ImportError("vllm missing")
+            return real_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.setattr("builtins.__import__", _fake_import)
+        with patch.dict(sys.modules, {"transformers": fake_transformers}):
+            client = LLMClient(provider="local", model="m-local")
+            resolved = client._init_local()
+        assert resolved == "hf-pipeline"
+        fake_transformers.pipeline.assert_called_once_with(
+            "text-generation", model="m-local", device_map="auto"
+        )
+
+    def test_init_local_raises_when_no_backends_available(self, monkeypatch):
+        real_import = __import__
+
+        def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name in {"vllm", "transformers"}:
+                raise ImportError("missing backend")
+            return real_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.setattr("builtins.__import__", _fake_import)
+        client = LLMClient(provider="local", model="m-local")
+        with pytest.raises(ImportError, match="Install vllm or transformers"):
+            client._init_local()
+
+    def test_chat_local_covers_vllm_and_transformers_paths(self):
+        client = LLMClient(provider="local", model="m-local")
+
+        fake_vllm_client = SimpleNamespace(
+            generate=lambda prompts, params: [
+                SimpleNamespace(outputs=[SimpleNamespace(text="vllm-answer")])
+            ]
+        )
+        with patch.dict(
+            sys.modules,
+            {
+                "vllm": types.SimpleNamespace(
+                    SamplingParams=lambda **kwargs: SimpleNamespace(**kwargs)
+                )
+            },
+        ):
+            resp_vllm = client._chat_local(
+                fake_vllm_client,
+                "sys",
+                [{"role": "user", "content": "question"}],
+                0.1,
+                128,
+            )
+        assert resp_vllm.content == "vllm-answer"
+
+        class _PipelineClient:
+            def __call__(self, prompt, max_new_tokens, temperature):
+                return [{"generated_text": prompt + "pipeline-answer"}]
+
+        resp_pipeline = client._chat_local(
+            _PipelineClient(),
+            "sys",
+            [{"role": "user", "content": "question"}],
+            0.2,
+            32,
+        )
+        assert resp_pipeline.content == "pipeline-answer"
+
+    def test_init_gluelm_import_error_and_chat_gluelm(self, monkeypatch):
+        real_import = __import__
+
+        def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "gluelm":
+                raise ImportError("gluelm missing")
+            return real_import(name, globals, locals, fromlist, level)
+
+        monkeypatch.setattr("builtins.__import__", _fake_import)
+        client = LLMClient(provider="gluelm", model="glue-model")
+        with pytest.raises(ImportError, match="GlueLM not installed"):
+            client._init_gluelm()
+
+        fake_glue = SimpleNamespace(predict=lambda q: {"label": "hit", "query": q})
+        resp = client._chat_gluelm(fake_glue, "sys", [{"role": "user", "content": "degradation?"}], 0.1, 64)
+        assert "degradation?" in resp.content
+        assert resp.model == "gluelm"

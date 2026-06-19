@@ -338,6 +338,47 @@ class TestRunQueryAndBanner:
 
         fake_orch.run.assert_called_once()
 
+    def test_run_query_triggers_setup_then_continues(self, monkeypatch, tmp_path):
+        cfg = Config(data={"agent.use_sdk": True})
+        issues = iter(["OpenAI API key not configured", None, None])
+        monkeypatch.setattr(cfg, "llm_preflight_issue", lambda: next(issues))
+        monkeypatch.setattr("agent.config.Config.load", lambda: cfg)
+
+        fake_result = MagicMock()
+        fake_result.to_markdown.return_value = "# report"
+        fake_agent = MagicMock()
+        fake_agent.run.return_value = fake_result
+
+        with patch("cli.print_banner"), patch("cli.setup_cmd") as mock_setup, patch(
+            "agent.runner.AgentRunner", return_value=fake_agent
+        ):
+            run_query("after setup", {}, tmp_path / "out", "gpt-4o", False)
+
+        mock_setup.assert_called_once()
+        fake_agent.run.assert_called_once_with("after setup", {})
+        assert (tmp_path / "out" / "report.md").exists()
+
+    def test_run_query_agent_loop_clarification_path(self, monkeypatch):
+        from agent.loop import Clarification, ClarificationNeeded
+
+        cfg = Config(data={"agent.use_sdk": False, "llm.api_key": "sk-ant-test"})
+        monkeypatch.setattr("agent.config.Config.load", lambda: cfg)
+        monkeypatch.setattr(cfg, "llm_preflight_issue", lambda: None)
+
+        fake_loop = MagicMock()
+        fake_loop.run.side_effect = ClarificationNeeded(
+            Clarification(
+                question="Need a target",
+                missing=["target"],
+                suggestions=["KRAS", "TP53"],
+            )
+        )
+
+        with patch("cli.print_banner"), patch("agent.loop.AgentLoop", return_value=fake_loop):
+            run_query("clarify me", {}, None, None, False)
+
+        fake_loop.run.assert_called_once()
+
     def test_print_banner_renders_metadata(self, captured_console, monkeypatch):
         console, buf = captured_console
         monkeypatch.setattr("cli.console", console)

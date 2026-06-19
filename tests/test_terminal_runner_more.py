@@ -18,6 +18,7 @@ class _FakeBuffer:
         self.cancel_called = False
         self.validated = False
         self.complete_state = None
+        self.applied_completion = None
 
     def insert_text(self, text: str):
         self.inserted.append(text)
@@ -33,6 +34,14 @@ class _FakeBuffer:
 
     def validate_and_handle(self):
         self.validated = True
+
+    def go_to_completion(self, idx: int):
+        if self.complete_state is not None:
+            self.complete_state.complete_index = idx
+            self.complete_state.current_completion = self.complete_state.completions[idx]
+
+    def apply_completion(self, completion):
+        self.applied_completion = completion
 
 
 def _build_terminal_for_bindings(active_query: bool = False):
@@ -157,6 +166,61 @@ class TestTerminalKeyBindings:
         assert terminal._merged_completer.mention_completer._active_tab == 1
         _handler(kb, "_mention_tab_left")(event)
         assert terminal._merged_completer.mention_completer._active_tab == 0
+
+    def test_enter_accepts_slash_completion_and_submits(self):
+        terminal = _build_terminal_for_bindings()
+        kb = _build_key_bindings(terminal)
+        buf = _FakeBuffer(text="/he")
+        buf.complete_state = SimpleNamespace(
+            completions=["/help", "/hello"],
+            complete_index=None,
+            current_completion=None,
+        )
+        event = SimpleNamespace(app=SimpleNamespace(current_buffer=buf))
+
+        _handler(kb, "_accept_first_completion")(event)
+
+        assert buf.applied_completion == "/help"
+        assert buf.validated is True
+
+    def test_enter_non_slash_submits_without_completion(self):
+        terminal = _build_terminal_for_bindings()
+        kb = _build_key_bindings(terminal)
+        buf = _FakeBuffer(text="hello")
+        buf.complete_state = SimpleNamespace(
+            completions=["ignored"],
+            complete_index=0,
+            current_completion="ignored",
+        )
+        event = SimpleNamespace(app=SimpleNamespace(current_buffer=buf))
+
+        _handler(kb, "_accept_first_completion")(event)
+
+        assert buf.cancel_called is True
+        assert buf.validated is True
+
+    def test_newline_bindings_insert_newline_text(self):
+        terminal = _build_terminal_for_bindings()
+        kb = _build_key_bindings(terminal)
+        buf = _FakeBuffer(text="line1")
+        event = SimpleNamespace(app=SimpleNamespace(current_buffer=buf))
+
+        _handler(kb, "_insert_newline")(event)
+        _handler(kb, "_insert_newline_alt")(event)
+
+        assert buf.inserted == ["\n", "\n"]
+
+    def test_mention_tab_handlers_noop_without_completer(self):
+        terminal = _build_terminal_for_bindings()
+        terminal._merged_completer = None
+        kb = _build_key_bindings(terminal)
+        buf = _FakeBuffer(text="@x")
+        event = SimpleNamespace(app=SimpleNamespace(current_buffer=buf))
+
+        _handler(kb, "_mention_tab_right")(event)
+        _handler(kb, "_mention_tab_left")(event)
+
+        assert buf.cancel_called is False
 
 
 class TestRunnerAdditionalHelpers:

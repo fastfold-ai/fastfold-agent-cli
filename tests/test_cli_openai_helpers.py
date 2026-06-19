@@ -16,8 +16,10 @@ from cli import (
     _ollama_tags_url_from_base,
     _parse_provider_list,
     _prompt_compatible_model_for_setup,
+    _prompt_fastfold_cloud_api_key,
     _prompt_openai_compatible_backend,
     _prompt_openai_endpoint_mode,
+    _prompt_setup_compatible_profile_id,
     _provider_label_for_source,
     _resolve_openai_base_url,
     _resolve_openai_compatible_endpoint,
@@ -330,3 +332,64 @@ class TestResolveProviderKey:
             compatible_backend="lm_studio",
         )
         assert key == "lm-key"
+
+
+class TestCompatibleProfilePrompt:
+    def test_prompt_setup_profile_non_tty_uses_active_compatible_profile(self, captured_console, monkeypatch):
+        console, _ = captured_console
+        monkeypatch.setattr("cli.console", console)
+        monkeypatch.setattr("cli.sys.stdin.isatty", lambda: False)
+        monkeypatch.setattr("cli.sys.stdout.isatty", lambda: False)
+
+        cfg = Config(data={"llm.provider": "openai"})
+        cfg.upsert_openai_profile(
+            profile_id="unsloth_local",
+            label="Unsloth Local",
+            backend="unsloth",
+            base_url="http://localhost:8888/v1",
+            api_key="sk-unsloth",
+            set_active=True,
+        )
+        assert _prompt_setup_compatible_profile_id(cfg) == "unsloth_local"
+
+    def test_prompt_setup_profile_tty_invalid_selection_falls_back_to_new(self, captured_console, monkeypatch):
+        console, _ = captured_console
+        monkeypatch.setattr("cli.console", console)
+        monkeypatch.setattr("cli.sys.stdin.isatty", lambda: True)
+        monkeypatch.setattr("cli.sys.stdout.isatty", lambda: True)
+        monkeypatch.setattr("builtins.input", lambda _: "bogus")
+
+        cfg = Config(data={"llm.provider": "openai"})
+        cfg.upsert_openai_profile(
+            profile_id="omlx_local",
+            label="oMLX Local",
+            backend="omlx",
+            base_url="http://localhost:8000/v1",
+            api_key="sk-omlx",
+            set_active=True,
+        )
+        assert _prompt_setup_compatible_profile_id(cfg) is None
+
+
+class TestPromptFastfoldCloudApiKey:
+    def test_keeps_existing_key(self, captured_console, monkeypatch):
+        console, _ = captured_console
+        monkeypatch.setattr("cli.console", console)
+        cfg = Config(data={"api.fastfold_cloud_key": "sk-fastfold-123456"})
+        monkeypatch.setattr("builtins.input", lambda _: "y")
+        assert _prompt_fastfold_cloud_api_key(cfg, None) == "sk-fastfold-123456"
+
+    def test_skip_and_interrupt_paths(self, captured_console, monkeypatch):
+        console, _ = captured_console
+        monkeypatch.setattr("cli.console", console)
+        cfg = Config(data={})
+
+        monkeypatch.setattr("cli._prompt_masked_secret", lambda _message: "")
+        assert _prompt_fastfold_cloud_api_key(cfg, None) is None
+
+        monkeypatch.setattr(
+            "cli._prompt_masked_secret",
+            lambda _message: (_ for _ in ()).throw(KeyboardInterrupt()),
+        )
+        with pytest.raises(typer.Exit):
+            _prompt_fastfold_cloud_api_key(cfg, None)

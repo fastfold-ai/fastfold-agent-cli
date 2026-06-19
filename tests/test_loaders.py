@@ -123,3 +123,106 @@ def test_load_prism_from_explicit_path(mock_config, tmp_path):
     mock_config[0].set("data.prism", str(csv_path))
     df = loaders.load_prism()
     assert df.iloc[0]["compound"] == "A"
+
+
+def test_data_path_falls_back_to_default_when_base_missing(monkeypatch):
+    cfg = Config(data={})
+    monkeypatch.setattr(
+        loaders.Config,
+        "load",
+        classmethod(lambda cls: cfg),
+    )
+    path = loaders._data_path("depmap")
+    assert str(path).endswith(".fastfold-cli/data/depmap")
+
+
+def test_load_model_metadata_success_and_missing(mock_config, tmp_path, monkeypatch):
+    model_csv = tmp_path / "Model.csv"
+    pd.DataFrame({"ModelID": ["ACH-1"], "CCLEName": ["A"]}).to_csv(model_csv, index=False)
+    monkeypatch.setattr(loaders, "_find_file", lambda name, subdirs=None: model_csv)
+    df = loaders.load_model_metadata()
+    assert list(df.columns) == ["ModelID", "CCLEName"]
+
+    loaders.load_model_metadata.cache_clear()
+    monkeypatch.setattr(loaders, "_find_file", lambda name, subdirs=None: None)
+    with pytest.raises(FileNotFoundError, match="Model metadata not found"):
+        loaders.load_model_metadata()
+
+
+def test_load_proteomics_explicit_directory_and_missing(mock_config, tmp_path, monkeypatch):
+    prot_dir = tmp_path / "proteomics"
+    prot_dir.mkdir()
+    prot_csv = prot_dir / "proteomics_log2fc_matrix.csv"
+    pd.DataFrame({"Gene": ["TP53"], "ACH-1": [1.2]}).to_csv(prot_csv, index=False)
+    mock_config[0].set("data.proteomics", str(prot_dir))
+    df = loaders.load_proteomics()
+    assert "ACH-1" in df.columns
+    assert "TP53" in df.index
+
+    loaders.load_proteomics.cache_clear()
+    mock_config[0].set("data.proteomics", str(tmp_path / "missing-proteomics"))
+    monkeypatch.setattr(loaders, "_find_file", lambda name, subdirs=None: None)
+    with pytest.raises(FileNotFoundError, match="Proteomics data not found"):
+        loaders.load_proteomics()
+
+
+def test_load_l1000_explicit_config_and_legacy_search(mock_config, tmp_path, monkeypatch):
+    l1000_dir = tmp_path / "l1000"
+    l1000_dir.mkdir()
+    explicit_file = l1000_dir / "l1000_landmark_only.csv"
+    pd.DataFrame({"GATA3": [0.1], "MYC": [-0.2]}, index=["cmpd-a"]).to_csv(explicit_file)
+    mock_config[0].set("data.l1000", str(l1000_dir))
+    df_explicit = loaders.load_l1000()
+    assert "GATA3" in df_explicit.columns
+
+    loaders.load_l1000.cache_clear()
+    fallback_file = tmp_path / "L1000_landmark_LFC.csv"
+    pd.DataFrame({"TP53": [1.0]}, index=["cmpd-b"]).to_csv(fallback_file)
+    mock_config[0].set("data.l1000", None)
+    monkeypatch.setattr(loaders, "_find_file", lambda name, subdirs=None: fallback_file)
+    df_fallback = loaders.load_l1000()
+    assert "TP53" in df_fallback.columns
+
+
+def test_load_l1000_missing_raises(mock_config, monkeypatch):
+    mock_config[0].set("data.l1000", None)
+    mock_config[0].set("data.base", None)
+    monkeypatch.setattr(loaders, "_find_file", lambda name, subdirs=None: None)
+    with pytest.raises(FileNotFoundError, match="L1000 data not found"):
+        loaders.load_l1000()
+
+
+def test_load_prism_missing_raises(mock_config, monkeypatch):
+    monkeypatch.setattr(loaders, "_find_file", lambda name, subdirs=None: None)
+    with pytest.raises(FileNotFoundError, match="PRISM data not found"):
+        loaders.load_prism()
+
+
+def test_load_mutations_uses_unnamed_index_when_modelid_missing(mock_config, tmp_path, monkeypatch):
+    csv_path = tmp_path / "OmicsSomaticMutationsMatrixDamaging.csv"
+    pd.DataFrame(
+        {
+            "Unnamed: 0": ["ACH-000010", "ACH-000011"],
+            "TP53 (7157)": [1, 0],
+            "IsDefaultEntryForModel": ["Yes", "Yes"],
+        }
+    ).to_csv(csv_path, index=False)
+    monkeypatch.setattr(loaders, "_find_file", lambda name, subdirs=None: csv_path)
+    df = loaders.load_mutations()
+    assert df.index.name == "ModelID"
+    assert "TP53" in df.columns
+
+
+def test_load_msigdb_supports_alternate_pattern(mock_config, tmp_path, monkeypatch):
+    alt_path = tmp_path / "c2.v2024.1.Hs.json"
+    payload = {"SET_A": ["A", "B"]}
+    alt_path.write_text(json.dumps(payload))
+
+    def _lookup(pattern, subdirs=None):
+        if pattern == "c2.v2024.1.Hs.json":
+            return alt_path
+        return None
+
+    monkeypatch.setattr(loaders, "_find_file", _lookup)
+    data = loaders.load_msigdb("c2")
+    assert data["SET_A"] == ["A", "B"]
