@@ -1101,6 +1101,21 @@ def _compatible_default_endpoint(backend: str, fallback: str = "http://localhost
     return defaults.get(_normalize_compatible_backend_name(backend), fallback)
 
 
+def _compatible_install_url(backend: str) -> str:
+    """Return install/reference URL for a compatible backend template."""
+    backend_type = _normalize_compatible_backend_name(backend)
+    urls = {
+        "ollama": "https://github.com/ollama/ollama",
+        "unsloth": "https://github.com/unslothai/unsloth",
+        "omlx": "https://github.com/jundot/omlx",
+        "ds4": "https://github.com/antirez/ds4",
+        "llama_cpp": "https://github.com/ggml-org/llama.cpp",
+        "lm_studio": "https://lmstudio.ai/docs/developer/openai-compat",
+        "other": "https://docs.ollama.com/api/introduction",
+    }
+    return urls.get(backend_type, urls["other"])
+
+
 def _prompt_openai_endpoint_mode(default_mode: str = "cloud") -> str:
     """Prompt whether to use OpenAI cloud or custom compatible endpoint."""
     default_mode = "compatible" if str(default_mode).strip().lower() == "compatible" else "cloud"
@@ -1252,13 +1267,15 @@ def _prompt_openai_compatible_backend(default_backend: str = "ollama") -> str:
         normalized_default = "ollama"
 
     console.print("\n  [cyan]Endpoint type[/cyan]")
-    console.print("    [1] Ollama (/api/tags)")
-    console.print("    [2] Unsloth (/v1/models, auth)")
-    console.print("    [3] oMLX (/v1/models, auth)")
-    console.print("    [4] Other OpenAI-compatible (/v1/models then /api/tags)")
-    console.print("    [5] DS4 (DeepSeek v4, /v1/models)")
-    console.print("    [6] llama.cpp (/v1/models)")
-    console.print("    [7] LM Studio (/v1/models)")
+    console.print(f"    [1] Ollama (/api/tags) - {_compatible_install_url('ollama')}")
+    console.print(f"    [2] Unsloth (/v1/models, auth) - {_compatible_install_url('unsloth')}")
+    console.print(f"    [3] oMLX (/v1/models, auth) - {_compatible_install_url('omlx')}")
+    console.print(
+        f"    [4] Other OpenAI-compatible (/v1/models then /api/tags) - {_compatible_install_url('other')}"
+    )
+    console.print(f"    [5] DS4 (DeepSeek v4, /v1/models) - {_compatible_install_url('ds4')}")
+    console.print(f"    [6] llama.cpp (/v1/models) - {_compatible_install_url('llama_cpp')}")
+    console.print(f"    [7] LM Studio (/v1/models) - {_compatible_install_url('lm_studio')}")
     default_num = {
         "ollama": "1",
         "unsloth": "2",

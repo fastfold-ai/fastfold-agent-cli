@@ -258,6 +258,34 @@ def test_keys_table_lists_compatible_profiles_dynamically():
     assert "unsloth endpoint" in unlocks_col[unsloth_idx]
 
 
+def test_keys_table_uses_template_install_links_for_compatible_profiles():
+    cfg = Config(data={"llm.provider": "openai"})
+    cfg.upsert_openai_profile(
+        profile_id="ds4_local",
+        label="DS4 Local",
+        backend="ds4",
+        base_url="http://localhost:8000/v1",
+        api_key=None,
+    )
+    cfg.upsert_openai_profile(
+        profile_id="llama_cpp_local",
+        label="llama.cpp Local",
+        backend="llama_cpp",
+        base_url="http://localhost:8080/v1",
+        api_key=None,
+    )
+
+    table = cfg.keys_table()
+    service_col = list(getattr(table.columns[0], "_cells", []))
+    signup_col = list(getattr(table.columns[5], "_cells", []))
+
+    ds4_idx = service_col.index("OpenAI-compatible: DS4 Local")
+    llama_idx = service_col.index("OpenAI-compatible: llama.cpp Local")
+
+    assert "github.com/antirez/ds4" in signup_col[ds4_idx]
+    assert "github.com/ggml-org/llama.cpp" in signup_col[llama_idx]
+
+
 def test_set_openai_key_rejects_invalid_format():
     cfg = Config(data={})
     with pytest.raises(ValueError, match="Invalid OpenAI API key format"):

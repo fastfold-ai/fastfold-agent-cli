@@ -210,14 +210,14 @@ class TestTerminalMethods:
             "http://localhost:11434/v1",  # endpoint
             "1",  # select discovered model
         ]
-        terminal._secret_prompt_session.prompt.return_value = ""  # keep default key
+        terminal._secret_prompt_session.prompt.return_value = ""  # blank key accepted
 
         terminal._configure_openai_compatible_model()
 
         terminal.session.set_model.assert_called_once_with("qwen3.6:27b", provider="openai")
         terminal.session.config.set.assert_any_call("llm.openai_base_url", "http://localhost:11434/v1")
         terminal.session.config.set.assert_any_call("llm.openai_compatible_backend", "ollama")
-        terminal.session.config.set.assert_any_call("llm.openai_compatible_api_key", "ollama")
+        terminal.session.config.unset.assert_any_call("llm.openai_compatible_api_key")
         terminal.session.config.save.assert_called_once()
 
     def test_configure_openai_compatible_model_unsloth_defaults_to_8888_endpoint(self, terminal):

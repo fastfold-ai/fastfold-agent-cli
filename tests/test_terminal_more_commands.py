@@ -279,7 +279,7 @@ class TestOpenAICompatibleSetupAndFetch:
         }
         cfg.remove_openai_profile.assert_called_once_with("omlx_local")
 
-    def test_configure_openai_compatible_model_sets_default_ollama_key(self):
+    def test_configure_openai_compatible_model_allows_blank_ollama_key(self):
         term = _mk_terminal()
         term.session.config.get.side_effect = lambda key, default=None: {
             "llm.openai_base_url": "http://localhost:11434/v1",
@@ -293,7 +293,7 @@ class TestOpenAICompatibleSetupAndFetch:
 
         term._configure_openai_compatible_model()
 
-        term.session.config.set.assert_any_call("llm.openai_compatible_api_key", "ollama")
+        term.session.config.unset.assert_any_call("llm.openai_compatible_api_key")
         term.session.set_model.assert_called_once_with("llama3.1", provider="openai")
 
     def test_configure_openai_compatible_model_cancelled_backend(self):
@@ -302,7 +302,7 @@ class TestOpenAICompatibleSetupAndFetch:
         term._configure_openai_compatible_model()
         term.session.set_model.assert_not_called()
 
-    def test_configure_openai_compatible_model_keeps_existing_key_when_blank(self):
+    def test_configure_openai_compatible_model_clears_existing_key_when_blank(self):
         term = _mk_terminal()
         term.session.config.get.side_effect = lambda key, default=None: {
             "llm.openai_base_url": "http://localhost:8888/v1",
@@ -316,8 +316,7 @@ class TestOpenAICompatibleSetupAndFetch:
 
         term._configure_openai_compatible_model()
 
-        key_sets = [c for c in term.session.config.set.call_args_list if c.args and c.args[0] == "llm.openai_compatible_api_key"]
-        assert key_sets == []
+        term.session.config.unset.assert_any_call("llm.openai_compatible_api_key")
 
     def test_configure_openai_compatible_model_retry_with_new_api_key(self):
         term = _mk_terminal()

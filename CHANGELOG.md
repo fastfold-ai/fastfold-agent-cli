@@ -7,6 +7,18 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.0.55] - 2026-06-19
+
+### Changed
+- OpenAI-compatible key prompts now allow blank input to save a profile with no
+  key (clear/unset key), with `:keep` to preserve an existing key and
+  `:default` to use backend defaults like `ollama`.
+- `/keys` now shows backend-specific install/reference URLs in the **Sign Up**
+  column for each OpenAI-compatible profile row (Ollama, Unsloth, oMLX, DS4,
+  llama.cpp, LM Studio, custom).
+- `/model-manager` and setup endpoint-type selectors now print install links
+  next to each compatible backend option.
+
 ## [0.0.54] - 2026-06-19
 
 ### Added

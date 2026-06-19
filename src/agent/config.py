@@ -40,48 +40,56 @@ OPENAI_PROFILE_DEFAULTS = {
         "base_url": "https://api.openai.com/v1",
         "discovery": ["v1_models"],
         "default_model": "gpt-5.5",
+        "install_url": "https://platform.openai.com/api-keys",
     },
     "ollama": {
         "label": "Ollama Local",
         "base_url": "http://localhost:11434/v1",
         "discovery": ["ollama_tags", "v1_models"],
         "default_model": "llama3.1",
+        "install_url": "https://github.com/ollama/ollama",
     },
     "unsloth": {
         "label": "Unsloth Local",
         "base_url": "http://localhost:8888/v1",
         "discovery": ["v1_models"],
         "default_model": "gpt-oss",
+        "install_url": "https://github.com/unslothai/unsloth",
     },
     "omlx": {
         "label": "oMLX Local",
         "base_url": "http://localhost:8000/v1",
         "discovery": ["v1_models"],
         "default_model": "diffusiongemma-26B-A4B-it-4bit",
+        "install_url": "https://github.com/jundot/omlx",
     },
     "ds4": {
         "label": "DS4 Local",
         "base_url": "http://localhost:8000/v1",
         "discovery": ["v1_models"],
         "default_model": "deepseek-v4-flash",
+        "install_url": "https://github.com/antirez/ds4",
     },
     "llama_cpp": {
         "label": "llama.cpp Local",
         "base_url": "http://localhost:8080/v1",
         "discovery": ["v1_models"],
         "default_model": "llama3.1",
+        "install_url": "https://github.com/ggml-org/llama.cpp",
     },
     "lm_studio": {
         "label": "LM Studio Local",
         "base_url": "http://localhost:1234/v1",
         "discovery": ["v1_models"],
         "default_model": "llama3.1",
+        "install_url": "https://lmstudio.ai/docs/developer/openai-compat",
     },
     "other": {
         "label": "Custom Compatible Endpoint",
         "base_url": "http://localhost:11434/v1",
         "discovery": ["v1_models", "ollama_tags"],
         "default_model": "llama3.1",
+        "install_url": "https://docs.ollama.com/api/introduction",
     },
 }
 _UNSET = object()
@@ -1398,6 +1406,20 @@ class Config:
             return False
         return host == "api.openai.com" or host.endswith(".openai.com")
 
+    @staticmethod
+    def compatible_backend_install_url(backend: Optional[str]) -> str:
+        """Return install/reference URL for a compatible backend template."""
+        backend_type = str(backend or "").strip().lower()
+        defaults = OPENAI_PROFILE_DEFAULTS.get(
+            backend_type,
+            OPENAI_PROFILE_DEFAULTS["other"],
+        )
+        return str(
+            defaults.get("install_url")
+            or OPENAI_PROFILE_DEFAULTS["other"].get("install_url")
+            or API_KEYS["llm.openai_compatible_api_key"]["url"]
+        )
+
     def llm_preflight_issue(self) -> Optional[str]:
         """Return a human-readable LLM config issue, or None when ready."""
         provider_raw = self.get("llm.provider", "anthropic")
@@ -1503,7 +1525,7 @@ class Config:
                 if active_profile_backend == "openai":
                     status = f"{status} [dim](active: {active_profile_label or 'OpenAI Cloud'})[/dim]"
             elif config_key == "llm.openai_compatible_api_key":
-                profile_rows: list[tuple[str, str, str, str]] = []
+                profile_rows: list[tuple[str, str, str, str, str]] = []
                 for profile_id, profile in sorted(
                     compatible_profiles.items(),
                     key=lambda item: str(item[1].get("label") or item[0]).strip().lower(),
@@ -1512,6 +1534,7 @@ class Config:
                     profile_backend = str(profile.get("backend") or "other").strip().lower()
                     profile_endpoint = self._normalize_openai_base_url(profile.get("base_url")) or "—"
                     profile_key = self._normalized_secret(profile.get("api_key"))
+                    profile_install_url = self.compatible_backend_install_url(profile_backend)
                     profile_status = (
                         "[green]configured[/green]"
                         if profile_key
@@ -1525,6 +1548,7 @@ class Config:
                             profile_status,
                             self._secret_preview(profile_key),
                             f"{profile_backend} endpoint ({profile_endpoint})",
+                            profile_install_url,
                         )
                     )
 
@@ -1565,14 +1589,20 @@ class Config:
             )
 
             if config_key == "llm.openai_compatible_api_key" and profile_rows:
-                for profile_service, profile_status, profile_preview, profile_unlocks in profile_rows:
+                for (
+                    profile_service,
+                    profile_status,
+                    profile_preview,
+                    profile_unlocks,
+                    profile_install_url,
+                ) in profile_rows:
                     table.add_row(
                         profile_service,
                         profile_status,
                         profile_preview,
                         profile_unlocks,
                         "llm.openai_profiles.<id>.api_key",
-                        info["url"] + free_tag,
+                        profile_install_url + free_tag,
                     )
 
         return table

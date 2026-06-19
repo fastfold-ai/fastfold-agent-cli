@@ -1213,13 +1213,27 @@ class InteractiveTerminal:
         if normalized_default not in {"ollama", "unsloth", "omlx", "ds4", "llama_cpp", "lm_studio", "other"}:
             normalized_default = "ollama"
         self.console.print("  [cyan]Profile template[/cyan]")
-        self.console.print("    [1] Ollama")
-        self.console.print("    [2] Unsloth")
-        self.console.print("    [3] oMLX")
-        self.console.print("    [4] Other compatible endpoint")
-        self.console.print("    [5] DS4 (DeepSeek v4)")
-        self.console.print("    [6] llama.cpp")
-        self.console.print("    [7] LM Studio")
+        self.console.print(
+            f"    [1] Ollama - {self._compatible_install_url('ollama')}"
+        )
+        self.console.print(
+            f"    [2] Unsloth - {self._compatible_install_url('unsloth')}"
+        )
+        self.console.print(
+            f"    [3] oMLX - {self._compatible_install_url('omlx')}"
+        )
+        self.console.print(
+            f"    [4] Other compatible endpoint - {self._compatible_install_url('other')}"
+        )
+        self.console.print(
+            f"    [5] DS4 (DeepSeek v4) - {self._compatible_install_url('ds4')}"
+        )
+        self.console.print(
+            f"    [6] llama.cpp - {self._compatible_install_url('llama_cpp')}"
+        )
+        self.console.print(
+            f"    [7] LM Studio - {self._compatible_install_url('lm_studio')}"
+        )
         default_num = {
             "ollama": "1",
             "unsloth": "2",
@@ -1367,6 +1381,47 @@ class InteractiveTerminal:
             "lm_studio": "http://localhost:1234/v1",
         }
         return defaults.get(backend_type, fallback)
+
+    @staticmethod
+    def _compatible_install_url(backend: str) -> str:
+        """Return install/reference URL for a compatible backend template."""
+        try:
+            from agent.config import Config
+
+            return Config.compatible_backend_install_url(backend)
+        except Exception:
+            backend_type = str(backend or "").strip().lower()
+            fallback = "https://docs.ollama.com/api/introduction"
+            urls = {
+                "ollama": "https://github.com/ollama/ollama",
+                "unsloth": "https://github.com/unslothai/unsloth",
+                "omlx": "https://github.com/jundot/omlx",
+                "ds4": "https://github.com/antirez/ds4",
+                "llama_cpp": "https://github.com/ggml-org/llama.cpp",
+                "lm_studio": "https://lmstudio.ai/docs/developer/openai-compat",
+                "other": fallback,
+            }
+            return urls.get(backend_type, fallback)
+
+    @staticmethod
+    def _resolve_optional_api_key_input(
+        raw_input: str,
+        *,
+        existing_key: str = "",
+        default_key: str = "",
+    ) -> str | None:
+        """Resolve optional key input where blank means unset/clear."""
+        normalized = str(raw_input or "").strip()
+        lowered = normalized.lower()
+        if lowered in {":keep", "keep"}:
+            kept = str(existing_key or default_key or "").strip()
+            return kept or None
+        if lowered in {":default", "default"}:
+            chosen = str(default_key or "").strip()
+            return chosen or None
+        if not normalized:
+            return None
+        return normalized
 
     def _current_compatible_backend_label(self) -> str | None:
         """Return compatible backend label for status line, when applicable."""
@@ -2446,27 +2501,29 @@ class InteractiveTerminal:
 
         if backend == "ollama":
             default_key = "ollama"
-            key_hint = "  API key [(ollama) Enter to keep default, or enter custom key]: "
+            key_hint = (
+                "  API key [(optional) Enter leaves blank; :default uses ollama; :keep keeps existing]: "
+            )
         elif backend == "unsloth":
             default_key = current_key or ""
-            key_hint = "  API key [Unsloth sk-unsloth-...; Enter keeps existing]: "
+            key_hint = "  API key [Unsloth sk-unsloth-...; Enter leaves blank; :keep keeps existing]: "
         elif backend == "omlx":
             default_key = current_key or ""
-            key_hint = "  API key [oMLX; Enter keeps existing]: "
+            key_hint = "  API key [oMLX; Enter leaves blank; :keep keeps existing]: "
         elif backend == "ds4":
             default_key = current_key or ""
-            key_hint = "  API key [DS4 token (optional); Enter keeps existing]: "
+            key_hint = "  API key [DS4 token (optional); Enter leaves blank; :keep keeps existing]: "
         elif backend == "llama_cpp":
             default_key = current_key or ""
-            key_hint = "  API key [llama.cpp key (optional); Enter keeps existing]: "
+            key_hint = "  API key [llama.cpp key (optional); Enter leaves blank; :keep keeps existing]: "
         elif backend == "lm_studio":
             default_key = current_key or ""
-            key_hint = "  API key [LM Studio key (optional); Enter keeps existing]: "
+            key_hint = "  API key [LM Studio key (optional); Enter leaves blank; :keep keeps existing]: "
         else:
             default_key = current_key or ""
-            key_hint = "  API key [optional; Enter keeps existing/none]: "
+            key_hint = "  API key [optional; Enter leaves blank; :keep keeps existing]: "
         try:
-            api_key = self._secret_prompt_session.prompt(
+            api_key_input = self._secret_prompt_session.prompt(
                 [("class:prompt", key_hint)],
                 is_password=True,
             ).strip()
@@ -2474,7 +2531,11 @@ class InteractiveTerminal:
             self.console.print("  [dim]Cancelled.[/dim]")
             return
 
-        effective_key = api_key or current_key or default_key
+        effective_key = self._resolve_optional_api_key_input(
+            api_key_input,
+            existing_key=current_key,
+            default_key=default_key,
+        )
         discovered_models = self._fetch_compatible_models(
             base_url,
             backend=backend,
@@ -2499,7 +2560,6 @@ class InteractiveTerminal:
             if not retry_key:
                 self.console.print("  [dim]Retry skipped; keeping current key.[/dim]")
                 continue
-            api_key = retry_key
             effective_key = retry_key
             discovered_models = self._fetch_compatible_models(
                 base_url,
@@ -2514,12 +2574,10 @@ class InteractiveTerminal:
         self.session.set_model(model_id, provider="openai")
         self.session.config.set("llm.openai_base_url", base_url)
         self.session.config.set("llm.openai_compatible_backend", backend)
-        if api_key:
-            self.session.config.set("llm.openai_compatible_api_key", api_key)
-        elif current_key:
-            pass
+        if effective_key:
+            self.session.config.set("llm.openai_compatible_api_key", effective_key)
         else:
-            self.session.config.set("llm.openai_compatible_api_key", default_key)
+            self.session.config.unset("llm.openai_compatible_api_key")
         self.session.config.save()
 
         key_state = "configured" if self.session.config.get("llm.openai_compatible_api_key") else "not set"
@@ -2575,25 +2633,27 @@ class InteractiveTerminal:
 
         if backend == "ollama":
             default_key = existing_key or "ollama"
-            key_hint = "  API key [(ollama) Enter keeps existing/default]: "
+            key_hint = (
+                "  API key [(optional) Enter leaves blank; :default uses ollama; :keep keeps existing]: "
+            )
         elif backend == "unsloth":
             default_key = existing_key or ""
-            key_hint = "  API key [Unsloth sk-unsloth-...; Enter keeps existing]: "
+            key_hint = "  API key [Unsloth sk-unsloth-...; Enter leaves blank; :keep keeps existing]: "
         elif backend == "omlx":
             default_key = existing_key or ""
-            key_hint = "  API key [oMLX; Enter keeps existing]: "
+            key_hint = "  API key [oMLX; Enter leaves blank; :keep keeps existing]: "
         elif backend == "ds4":
             default_key = existing_key or ""
-            key_hint = "  API key [DS4 token (optional); Enter keeps existing]: "
+            key_hint = "  API key [DS4 token (optional); Enter leaves blank; :keep keeps existing]: "
         elif backend == "llama_cpp":
             default_key = existing_key or ""
-            key_hint = "  API key [llama.cpp key (optional); Enter keeps existing]: "
+            key_hint = "  API key [llama.cpp key (optional); Enter leaves blank; :keep keeps existing]: "
         elif backend == "lm_studio":
             default_key = existing_key or ""
-            key_hint = "  API key [LM Studio key (optional); Enter keeps existing]: "
+            key_hint = "  API key [LM Studio key (optional); Enter leaves blank; :keep keeps existing]: "
         else:
             default_key = existing_key or ""
-            key_hint = "  API key [optional; Enter keeps existing/none]: "
+            key_hint = "  API key [optional; Enter leaves blank; :keep keeps existing]: "
         try:
             api_key_input = self._secret_prompt_session.prompt(
                 [("class:prompt", key_hint)],
@@ -2601,7 +2661,11 @@ class InteractiveTerminal:
             ).strip()
         except (EOFError, KeyboardInterrupt):
             return None
-        effective_key = api_key_input or default_key
+        effective_key = self._resolve_optional_api_key_input(
+            api_key_input,
+            existing_key=existing_key,
+            default_key=default_key,
+        )
 
         profile_default_model = existing_default_model or str(self.session.current_model or "").strip() or "llama3.1"
         if profile_default_model == "__custom_openai_compatible__":
@@ -2612,7 +2676,7 @@ class InteractiveTerminal:
             label=label,
             backend=backend,
             base_url=base_url,
-            api_key=effective_key or None,
+            api_key=effective_key,
             default_model=profile_default_model,
             set_active=(existing_backend != "openai"),
         )
@@ -2730,13 +2794,27 @@ class InteractiveTerminal:
             default_choice = "ollama"
 
         self.console.print("  [cyan]Endpoint type[/cyan]")
-        self.console.print("    [1] Ollama (/api/tags)")
-        self.console.print("    [2] Unsloth (/v1/models, auth)")
-        self.console.print("    [3] oMLX (/v1/models, auth)")
-        self.console.print("    [4] Other OpenAI-compatible (/v1/models then /api/tags)")
-        self.console.print("    [5] DS4 (DeepSeek v4, /v1/models)")
-        self.console.print("    [6] llama.cpp (/v1/models)")
-        self.console.print("    [7] LM Studio (/v1/models)")
+        self.console.print(
+            f"    [1] Ollama (/api/tags) - {self._compatible_install_url('ollama')}"
+        )
+        self.console.print(
+            f"    [2] Unsloth (/v1/models, auth) - {self._compatible_install_url('unsloth')}"
+        )
+        self.console.print(
+            f"    [3] oMLX (/v1/models, auth) - {self._compatible_install_url('omlx')}"
+        )
+        self.console.print(
+            f"    [4] Other OpenAI-compatible (/v1/models then /api/tags) - {self._compatible_install_url('other')}"
+        )
+        self.console.print(
+            f"    [5] DS4 (DeepSeek v4, /v1/models) - {self._compatible_install_url('ds4')}"
+        )
+        self.console.print(
+            f"    [6] llama.cpp (/v1/models) - {self._compatible_install_url('llama_cpp')}"
+        )
+        self.console.print(
+            f"    [7] LM Studio (/v1/models) - {self._compatible_install_url('lm_studio')}"
+        )
         default_num = {
             "ollama": "1",
             "unsloth": "2",
@@ -3388,16 +3466,18 @@ class InteractiveTerminal:
                 f"  [cyan]Update API key for {label}[/cyan] [dim](currently {current_state})[/dim]"
             )
             try:
-                api_key = self._secret_prompt_session.prompt(
-                    [("class:prompt", "  New API key [Enter to cancel]: ")],
+                api_key_input = self._secret_prompt_session.prompt(
+                    [("class:prompt", "  New API key [Enter clears key; :keep keeps existing]: ")],
                     is_password=True,
                 ).strip()
             except (EOFError, KeyboardInterrupt):
                 self.console.print("  [dim]Cancelled.[/dim]")
                 return
-            if not api_key:
-                self.console.print("  [dim]Cancelled.[/dim]")
-                return
+            api_key = self._resolve_optional_api_key_input(
+                api_key_input,
+                existing_key=current_preview,
+                default_key=current_preview,
+            )
             cfg.upsert_openai_profile(
                 profile_id=profile_id,
                 api_key=api_key,
@@ -3405,7 +3485,10 @@ class InteractiveTerminal:
             )
             cfg.save()
             self.session.config = cfg
-            self.console.print(f"  [green]Updated key for profile:[/green] {label}")
+            if api_key:
+                self.console.print(f"  [green]Updated key for profile:[/green] {label}")
+            else:
+                self.console.print(f"  [green]Cleared key for profile:[/green] {label}")
             self.console.print(cfg.keys_table())
             return
 
