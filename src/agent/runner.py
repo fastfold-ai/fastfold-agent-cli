@@ -1496,7 +1496,10 @@ class AgentRunner:
             options = ClaudeAgentOptions(**options_kwargs)
 
         # ----- Create trace renderer -----
-        trace_renderer = TraceRenderer(self.session.console)
+        trace_renderer = TraceRenderer(
+            self.session.console,
+            config=getattr(self.session, "config", None),
+        )
 
         # ----- Prepare trace capture -----
         trace_events: list[dict] | None = None
@@ -1912,7 +1915,10 @@ class AgentRunner:
                 for spec in openai_tool_specs
             ]
 
-            trace_renderer = TraceRenderer(self.session.console)
+            trace_renderer = TraceRenderer(
+                self.session.console,
+                config=getattr(self.session, "config", None),
+            )
             trace_events: list[dict] = [] if self.trace_store is not None else []
             full_text: list[str] = []
             tool_calls: list[dict] = []
@@ -2306,7 +2312,10 @@ class AgentRunner:
         if not remaining:
             return
 
-        trace_renderer = TraceRenderer(self.session.console)
+        trace_renderer = TraceRenderer(
+            self.session.console,
+            config=getattr(self.session, "config", None),
+        )
         deadline = time.time() + self._bg_watch_timeout_s
         attempt = 0
         while remaining and time.time() < deadline:
@@ -2643,7 +2652,10 @@ class AgentRunner:
         for session_id, pending, _, _ in candidates:
             if not pending:
                 continue
-            trace_renderer = TraceRenderer(self.session.console)
+            trace_renderer = TraceRenderer(
+                self.session.console,
+                config=getattr(self.session, "config", None),
+            )
             self._probe_local_task_outputs(session_id, pending, trace_renderer)
 
         if not include_taskoutput:
@@ -2657,7 +2669,10 @@ class AgentRunner:
                 if not force and not probe_due:
                     continue
                 env = _clean_sdk_env(self.session, model)
-                trace_renderer = TraceRenderer(self.session.console)
+                trace_renderer = TraceRenderer(
+                    self.session.console,
+                    config=getattr(self.session, "config", None),
+                )
                 await self._probe_pending_tasks_via_taskoutput(
                     session_id=session_id,
                     remaining=pending,

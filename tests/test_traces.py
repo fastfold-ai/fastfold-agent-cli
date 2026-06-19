@@ -1,6 +1,7 @@
 """Tests for the TraceRenderer and helper functions."""
 
 from io import StringIO
+from unittest.mock import patch
 
 import pytest
 from rich.console import Console
@@ -167,6 +168,19 @@ class TestTraceRendererError:
         renderer.render_tool_error("tool.name", "error")
         output = buf.getvalue()
         assert "\u2717" in output  # ✗
+
+
+class TestTraceRendererReasoning:
+    def test_render_reasoning_uses_markdown_helper(self):
+        console, _ = _captured_console()
+        renderer = TraceRenderer(console, config={"ui.mermaid.enabled": True})
+        with patch("ui.traces.print_markdown_with_mermaid") as mock_print:
+            renderer.render_reasoning("reasoning text")
+        mock_print.assert_called_once_with(
+            console,
+            "reasoning text",
+            config={"ui.mermaid.enabled": True},
+        )
 
 
 class TestTraceRendererSnapshot:

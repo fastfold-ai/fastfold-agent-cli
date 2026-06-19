@@ -89,6 +89,9 @@ DEFAULTS = {
     "output.auto_publish_html_batch": False,
 
     "ui.spinner": "benzene_breathing",
+    "ui.mermaid.enabled": True,
+    "ui.mermaid.ascii": False,
+    "ui.mermaid.theme": "default",
 
     "models.gluelm": None,
     "models.deepternary": None,

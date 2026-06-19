@@ -26,6 +26,7 @@ dependencies = [
     "markdown>=3.5",
     "nbformat>=5.7",
     "questionary>=2.1.1",
+    "termaid>=0.7.1",
 ]
 
 [project.optional-dependencies]

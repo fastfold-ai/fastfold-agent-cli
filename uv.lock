@@ -1201,7 +1201,7 @@ wheels = [
 
 [[package]]
 name = "fastfold-agent-cli"
-version = "0.0.52"
+version = "0.0.53"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
@@ -1220,6 +1220,7 @@ dependencies = [
     { name = "rich" },
     { name = "scipy", version = "1.15.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "termaid" },
     { name = "typer" },
 ]
 
@@ -1357,6 +1358,7 @@ requires-dist = [
     { name = "seaborn", marker = "extra == 'all'", specifier = ">=0.13" },
     { name = "seaborn", marker = "extra == 'analysis'", specifier = ">=0.13" },
     { name = "seaborn", marker = "extra == 'win-build'", specifier = ">=0.13" },
+    { name = "termaid", specifier = ">=0.7.1" },
     { name = "tiledbsoma", marker = "extra == 'all'", specifier = ">=1.0" },
     { name = "tiledbsoma", marker = "extra == 'singlecell'", specifier = ">=1.0" },
     { name = "torch", marker = "extra == 'all'", specifier = ">=2.0" },
@@ -4976,6 +4978,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/83/d3/803453b36afefb7c2bb238361cd4ae6125a569b4db67cd9e79846ba2d68c/sympy-1.14.0.tar.gz", hash = "sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517", size = 7793921, upload-time = "2025-04-27T18:05:01.611Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a2/09/77d55d46fd61b4a135c444fc97158ef34a095e5681d0a6c10b75bf356191/sympy-1.14.0-py3-none-any.whl", hash = "sha256:e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5", size = 6299353, upload-time = "2025-04-27T18:04:59.103Z" },
+]
+
+[[package]]
+name = "termaid"
+version = "0.7.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/78/f3/b6d77f6c7f3ff3135c589334c115094e21facd3b7b6dbd57b1652d8088fa/termaid-0.7.1.tar.gz", hash = "sha256:13aca21054b39c122761e28ee2baaaa1ef5f187e5a39589660b1640c01ebaa5d", size = 397861, upload-time = "2026-06-11T16:38:25.664Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/20/88/1c7c9f616276ed22decc8dd62d47df20db311fa682a38548e44e66e4b4b4/termaid-0.7.1-py3-none-any.whl", hash = "sha256:80d45c719b3a432215fd61017b2cc2ee219524424061bc323c9aa3faacaf2bda", size = 157258, upload-time = "2026-06-11T16:38:23.693Z" },
 ]
 
 [[package]]

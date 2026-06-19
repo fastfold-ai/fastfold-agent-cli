@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.live import Live
 from rich.text import Text
 
+from ui.markdown import print_markdown_with_mermaid
 from ui.status import SPINNERS, apply_gradient
 
 
@@ -50,8 +51,9 @@ class TraceRenderer:
     ``Console(file=StringIO())`` to capture output.
     """
 
-    def __init__(self, console: Console | None = None):
+    def __init__(self, console: Console | None = None, config=None):
         self.console = console or Console()
+        self.config = config
 
     def render_tool_start(self, name: str, args: dict | None = None) -> None:
         """Render a running tool indicator."""
@@ -106,8 +108,11 @@ class TraceRenderer:
             return
         
         try:
-            from ui.markdown import LeftMarkdown
-            self.console.print(LeftMarkdown(text))
+            print_markdown_with_mermaid(
+                self.console,
+                text,
+                config=self.config,
+            )
         except Exception:
             self.console.print(text)
 

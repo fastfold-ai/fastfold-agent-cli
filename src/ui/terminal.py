@@ -21,7 +21,7 @@ from urllib.parse import urlparse, urlunparse
 from rich.console import Console
 from rich.panel import Panel
 from rich.markdown import Markdown as RichMarkdown
-from ui.markdown import LeftMarkdown
+from ui.markdown import LeftMarkdown, print_markdown_with_mermaid
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.document import Document
@@ -1675,7 +1675,10 @@ class InteractiveTerminal:
 
         from ui.traces import TraceRenderer
 
-        trace_renderer = TraceRenderer(self.console)
+        trace_renderer = TraceRenderer(
+            self.console,
+            config=getattr(self.session, "config", None),
+        )
         tool_inputs: dict[str, dict] = {}
         tool_names: dict[str, str] = {}
         rendered_text = False
@@ -1835,7 +1838,12 @@ class InteractiveTerminal:
                     input_tokens = self._coerce_int(row.get("input_tokens"))
                     output_tokens = self._coerce_int(row.get("output_tokens"))
             if answer and not rendered_from_trace:
-                self.console.print(RichMarkdown(answer))
+                print_markdown_with_mermaid(
+                    self.console,
+                    answer,
+                    config=getattr(self.session, "config", None),
+                    markdown_factory=RichMarkdown,
+                )
             if duration_s is not None or input_tokens is not None or output_tokens is not None:
                 self._render_turn_usage_footer(
                     term_width=term_width,
