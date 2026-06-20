@@ -264,6 +264,7 @@ class TestRunAsyncAnthropicPath:
         def _cfg_get(key, default=None):
             values = {
                 "llm.provider": "anthropic",
+                "agent.runtime": "sdk",
                 "agent.enable_experimental_tools": False,
                 "llm.model": "claude-sonnet-4-5-20250929",
                 "agent.max_sdk_turns": 5,

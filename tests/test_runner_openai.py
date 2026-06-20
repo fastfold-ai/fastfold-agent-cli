@@ -53,6 +53,7 @@ def test_runner_openai_tool_loop_and_summary():
     cfg = MagicMock()
     cfg.get.side_effect = lambda key, default=None: {
         "llm.provider": "openai",
+        "agent.runtime": "sdk",
         "llm.model": "gpt-4o",
         "llm.openai_base_url": "http://localhost:11434/v1",
         "llm.temperature": 0.1,
@@ -109,6 +110,7 @@ def test_runner_openai_plan_preview_rejection_returns_error():
     cfg = MagicMock()
     cfg.get.side_effect = lambda key, default=None: {
         "llm.provider": "openai",
+        "agent.runtime": "sdk",
         "llm.model": "gpt-4o",
         "llm.temperature": 0.1,
         "agent.max_sdk_turns": 3,
@@ -174,6 +176,7 @@ def test_runner_openai_caps_tool_payload_to_provider_limit():
     cfg = MagicMock()
     cfg.get.side_effect = lambda key, default=None: {
         "llm.provider": "openai",
+        "agent.runtime": "sdk",
         "llm.model": "gpt-5.5",
         "llm.temperature": 0.1,
         "agent.max_sdk_turns": 2,

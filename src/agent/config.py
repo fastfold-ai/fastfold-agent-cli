@@ -178,6 +178,11 @@ DEFAULTS = {
     "sandbox.max_retries": 2,
 
     "agent.max_iterations": 3,
+    # Agent runtime backend: "deepagents" (LangGraph deep-agent harness with
+    # native progressive-disclosure skills, default) or "sdk" (legacy Claude
+    # Agent SDK + OpenAI loop). In-process providers (local, gluelm) always use
+    # the sdk path regardless of this setting.
+    "agent.runtime": "deepagents",
     "agent.enable_experimental_tools": False,
     "skills.allow_agent_install": False,
     "agent.observer_model": None,
@@ -220,6 +225,11 @@ DEFAULTS = {
     "agent.tool_health_failure_window_s": 1800,
     "agent.tool_health_suppress_seconds": 900,
     "agent.preflight_validation_enabled": True,
+    "agent.skills.max_catalog_entries": 250,
+    "agent.skills.max_active": 6,
+    "agent.skills.max_prompt_chars": 120000,
+    "agent.skills.catalog_description_chars": 140,
+    "agent.skills.index_snippet_chars": 8000,
 
     "enterprise.enforce_policy": False,
     "enterprise.audit_enabled": True,
@@ -429,6 +439,11 @@ def _validate_config(config_dict: dict) -> list[str]:
     _check_positive_int("agent.parallel_max_threads", "parallel max threads")
     _check_positive_int("agent.background_watch_timeout_s", "background watch timeout")
     _check_positive_int("agent.interrupt_drain_timeout_s", "interrupt drain timeout")
+    _check_positive_int("agent.skills.max_catalog_entries", "skills catalog entries")
+    _check_positive_int("agent.skills.max_active", "active skills")
+    _check_positive_int("agent.skills.max_prompt_chars", "skills prompt character budget")
+    _check_positive_int("agent.skills.catalog_description_chars", "skills catalog description chars")
+    _check_positive_int("agent.skills.index_snippet_chars", "skills index snippet chars")
     _check_min("agent.synthesis_max_tokens", 512, "synthesis max tokens")
     _check_min("sandbox.timeout", 1, "sandbox timeout")
 

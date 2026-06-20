@@ -37,17 +37,47 @@ def _claude_sdk_cli_path() -> str | None:
     return resolve_claude_sdk_cli_path()
 
 
-def _windows_should_inline_system_prompt(system_prompt: str) -> bool:
-    """Return True when Windows should avoid passing full system prompt via CLI args."""
+def _should_inline_system_prompt(system_prompt: str) -> bool:
+    """Return True when the system prompt should avoid CLI arg transport.
 
-    if sys.platform != "win32":
-        return False
-    mode = str(os.environ.get("FASTFOLD_WINDOWS_INLINE_SYSTEM_PROMPT", "auto")).strip().lower()
+    Claude SDK currently forwards ``system_prompt`` via ``--system-prompt``.
+    Very large prompts can exceed OS arg limits (e.g., macOS/Linux ``ARG_MAX``),
+    especially when many long skills are installed.
+
+    Env controls:
+    - ``FASTFOLD_INLINE_SYSTEM_PROMPT``: force on/off (auto by default)
+    - ``FASTFOLD_INLINE_SYSTEM_PROMPT_THRESHOLD``: char threshold in auto mode
+    - ``FASTFOLD_WINDOWS_INLINE_SYSTEM_PROMPT`` and
+      ``FASTFOLD_WINDOWS_INLINE_SYSTEM_PROMPT_THRESHOLD`` remain supported for
+      backward compatibility.
+    """
+
+    mode = str(os.environ.get("FASTFOLD_INLINE_SYSTEM_PROMPT", "auto")).strip().lower()
     if mode in {"1", "true", "yes", "on", "always"}:
         return True
     if mode in {"0", "false", "no", "off"}:
         return False
-    threshold = int(os.environ.get("FASTFOLD_WINDOWS_INLINE_SYSTEM_PROMPT_THRESHOLD", "12000"))
+
+    # Backward-compatibility with older Windows-specific toggles.
+    windows_mode = str(
+        os.environ.get("FASTFOLD_WINDOWS_INLINE_SYSTEM_PROMPT", "auto")
+    ).strip().lower()
+    if windows_mode in {"1", "true", "yes", "on", "always"}:
+        return True
+    if windows_mode in {"0", "false", "no", "off"}:
+        return False
+
+    if sys.platform == "win32":
+        default_threshold = "12000"
+    else:
+        # Conservative default for POSIX platforms where ARG_MAX often ranges
+        # from ~128 KiB to a few MiB, and env + other args consume headroom.
+        default_threshold = "64000"
+
+    threshold_raw = os.environ.get("FASTFOLD_INLINE_SYSTEM_PROMPT_THRESHOLD")
+    if threshold_raw is None and sys.platform == "win32":
+        threshold_raw = os.environ.get("FASTFOLD_WINDOWS_INLINE_SYSTEM_PROMPT_THRESHOLD")
+    threshold = int(threshold_raw or default_threshold)
     return len(system_prompt) >= threshold
 
 
@@ -1326,6 +1356,14 @@ class AgentRunner:
         MCP tools, unlike ``query()`` which does not.
         """
         provider = str(self.session.config.get("llm.provider", "anthropic") or "anthropic").strip().lower()
+
+        runtime = str(self.session.config.get("agent.runtime", "deepagents") or "deepagents").strip().lower()
+        # The deepagents runtime only supports providers that map to
+        # ``init_chat_model`` (anthropic / openai-compatible). In-process
+        # providers (local, gluelm) fall back to the legacy SDK path.
+        if runtime == "deepagents" and provider in ("anthropic", "openai"):
+            return await self._run_async_deepagents(query, context, progress_callback)
+
         if provider == "openai":
             return await self._run_async_openai(query, context, progress_callback)
         if provider != "anthropic":
@@ -1384,11 +1422,23 @@ class AgentRunner:
         if self.trajectory and self.trajectory.turns:
             history = self.trajectory.context_for_planner()
 
+        skill_routing_context_parts = [query]
+        if ctx.get("mention_context"):
+            skill_routing_context_parts.append(str(ctx["mention_context"]))
+        if ctx.get("target"):
+            skill_routing_context_parts.append(f"Target: {ctx['target']}")
+        if ctx.get("indication"):
+            skill_routing_context_parts.append(f"Indication: {ctx['indication']}")
+        skill_routing_context = "\n".join(
+            part for part in skill_routing_context_parts if str(part).strip()
+        )
+
         system_prompt = build_system_prompt(
             self.session,
             tool_names=tool_names,
             data_context=data_context,
             history=history,
+            user_request=skill_routing_context,
         )
 
         # ----- Build user prompt -----
@@ -1407,13 +1457,13 @@ class AgentRunner:
             user_prompt = query + "\n\nContext:\n" + "\n".join(context_parts)
 
         effective_system_prompt = system_prompt
-        if _windows_should_inline_system_prompt(system_prompt):
+        if _should_inline_system_prompt(system_prompt):
             effective_system_prompt, user_prompt = _inline_system_prompt_into_user_prompt(
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
             )
             logger.debug(
-                "Windows-safe mode active: moved %d-char system prompt into user payload.",
+                "Arg-safe mode active: moved %d-char system prompt into user payload.",
                 len(system_prompt),
             )
 
@@ -1760,6 +1810,304 @@ class AgentRunner:
 
         return exec_result
 
+    async def _run_async_deepagents(
+        self,
+        query: str,
+        context: dict | None = None,
+        progress_callback=None,
+    ) -> ExecutionResult:
+        """Execute a query on the deepagents (LangGraph) runtime.
+
+        Builds a ``create_deep_agent`` graph with the ct domain tools wrapped as
+        LangChain tools, native progressive-disclosure skills, and a model from
+        ``init_chat_model``. Consumes ``astream_events`` via
+        :func:`agent.deepagents_runtime.process_events`, which emits the same
+        trace-event schema and progress callbacks as the SDK path.
+        """
+        t0 = time.time()
+        config = self.session.config
+        ctx = context or {}
+
+        try:
+            from deepagents import create_deep_agent
+            from deepagents.backends import FilesystemBackend
+            from agent.deepagents_runtime import (
+                build_chat_model,
+                create_ct_langchain_tools,
+                process_events,
+                skill_source_dirs,
+            )
+            from agent.system_prompt import build_system_prompt
+            from ui.traces import TraceRenderer
+            from models.llm import MODEL_PRICING
+        except Exception as e:  # noqa: BLE001
+            logger.error("deepagents runtime unavailable: %s\n%s", e, traceback.format_exc())
+            return self._make_error_result(
+                query,
+                (
+                    f"deepagents runtime is not available ({e}). Install the "
+                    "deepagents/langchain stack or set `agent.runtime sdk`."
+                ),
+                time.time() - t0,
+            )
+
+        provider = str(config.get("llm.provider", "anthropic") or "anthropic").strip().lower()
+
+        allow_live_spinner = (not self._headless) and (progress_callback is None)
+        thinking_status = None
+        if allow_live_spinner:
+            from ui.status import ThinkingStatus
+
+            thinking_status = ThinkingStatus(self.session.console, phase="planning")
+            thinking_status.__enter__()
+            thinking_status.start_async_refresh()
+            self._active_spinner = thinking_status
+
+        try:
+            # ----- Model -----
+            try:
+                model = build_chat_model(config)
+            except ValueError as e:
+                if thinking_status is not None:
+                    thinking_status.stop()
+                return self._make_error_result(query, str(e), time.time() - t0)
+
+            # ----- Tools -----
+            exclude_cats = set()
+            if not config.get("agent.enable_experimental_tools", False):
+                from tools import EXPERIMENTAL_CATEGORIES
+
+                exclude_cats = set(EXPERIMENTAL_CATEGORIES)
+
+            tools, sandbox, code_trace_buffer, display_name_map = create_ct_langchain_tools(
+                self.session,
+                exclude_categories=exclude_cats,
+                provider=provider,
+            )
+
+            # ----- System prompt (skills handled natively by deepagents) -----
+            data_context = None
+            data_dir = ctx.get("data_dir")
+            if data_dir:
+                data_context = f"Data directory: {data_dir}\n"
+                config.set("sandbox.extra_read_dirs", str(data_dir))
+
+            history = None
+            if self.trajectory and self.trajectory.turns:
+                history = self.trajectory.context_for_planner()
+
+            tool_names = [getattr(t, "name", "") for t in tools]
+            system_prompt = build_system_prompt(
+                self.session,
+                tool_names=tool_names,
+                data_context=data_context,
+                history=history,
+                include_skills=False,
+                runtime="deepagents",
+            )
+
+            # ----- User prompt -----
+            user_prompt = query
+            context_parts = []
+            if ctx.get("compound_smiles"):
+                context_parts.append(f"Compound SMILES: {ctx['compound_smiles']}")
+            if ctx.get("target"):
+                context_parts.append(f"Target: {ctx['target']}")
+            if ctx.get("indication"):
+                context_parts.append(f"Indication: {ctx['indication']}")
+            if ctx.get("mention_context"):
+                context_parts.append(ctx["mention_context"])
+            if context_parts:
+                user_prompt = query + "\n\nContext:\n" + "\n".join(context_parts)
+
+            # ----- Plan preview (optional) -----
+            plan_preview = bool(config.get("agent.plan_preview", False))
+            if plan_preview and not self._headless:
+                if thinking_status is not None:
+                    thinking_status.stop()
+                    thinking_status = None
+                    self._active_spinner = None
+                approved = await self._deepagents_plan_preview(model, user_prompt)
+                if not approved:
+                    return self._make_error_result(
+                        query, "User rejected plan preview.", time.time() - t0
+                    )
+
+            # ----- Build agent -----
+            skills_sources = skill_source_dirs()
+            backend = FilesystemBackend(root_dir="/", virtual_mode=False)
+            agent = create_deep_agent(
+                model=model,
+                tools=tools,
+                system_prompt=system_prompt,
+                skills=skills_sources or None,
+                backend=backend,
+            )
+
+            trace_renderer = TraceRenderer(
+                self.session.console,
+                config=getattr(self.session, "config", None),
+            )
+            trace_events: list[dict] | None = [] if self.trace_store is not None else None
+
+            max_turns = int(config.get("agent.max_sdk_turns", 30))
+            recursion_limit = max(25, max_turns * 2 + 10)
+            model_name = config.get("llm.model") or (
+                "claude-sonnet-4-5-20250929" if provider == "anthropic" else "gpt-4o"
+            )
+
+            events = agent.astream_events(
+                {"messages": [{"role": "user", "content": user_prompt}]},
+                version="v2",
+                config={"recursion_limit": recursion_limit},
+            )
+            result = await process_events(
+                events,
+                trace_renderer=trace_renderer,
+                headless=self._headless,
+                trace_events=trace_events,
+                thinking_status=thinking_status,
+                allow_live_spinner=allow_live_spinner,
+                runner=self,
+                on_activity=progress_callback,
+                code_trace_buffer=code_trace_buffer,
+                display_name_map=display_name_map,
+            )
+            thinking_status = None  # consumed by process_events
+        except Exception as e:  # noqa: BLE001
+            logger.error("deepagents query failed: %s\n%s", e, traceback.format_exc())
+            duration = time.time() - t0
+            return self._make_error_result(query, str(e), duration)
+        finally:
+            if thinking_status is not None:
+                thinking_status.stop()
+
+        duration = time.time() - t0
+        full_text = result["full_text"]
+        tool_calls = result["tool_calls"]
+        token_usage = dict(result.get("token_usage") or {})
+        model_call_count = int(result.get("model_call_count", 0))
+
+        summary = "\n".join(full_text).strip() or "(Agent produced no text output)"
+        guardrail_unverified_execution = False
+        if _looks_like_unverified_execution_claim(summary, tool_calls):
+            guardrail_unverified_execution = True
+            summary = (
+                "I did not execute any tool calls in this turn, so I cannot confirm a submission, "
+                "status, or generated job/workflow ID. Ask me to run the submission now and I will "
+                "execute it and return the real ID from tool output."
+            )
+
+        answer = None
+        if sandbox:
+            result_var = sandbox.get_variable("result")
+            if isinstance(result_var, dict):
+                answer = result_var.get("answer")
+
+        steps = []
+        for i, tc in enumerate(tool_calls, 1):
+            step = Step(
+                id=i,
+                tool=tc["name"],
+                description=f"Called {tc['name']}",
+                tool_args=tc.get("input", {}),
+            )
+            step.status = "completed"
+            steps.append(step)
+        plan = Plan(query=query, steps=steps)
+
+        pricing = MODEL_PRICING.get(model_name, {})
+        input_cost = (
+            float(token_usage.get("input_tokens", 0)) / 1_000_000.0 * float(pricing.get("input", 0.0))
+        )
+        output_cost = (
+            float(token_usage.get("output_tokens", 0)) / 1_000_000.0 * float(pricing.get("output", 0.0))
+        )
+        total_cost_usd = input_cost + output_cost
+
+        exec_result = ExecutionResult(
+            plan=plan,
+            summary=summary,
+            raw_results={
+                "tool_calls": tool_calls,
+                "answer": answer,
+                "pending_background_tasks": [],
+                "completed_background_tasks": [],
+            },
+            duration_s=duration,
+            iterations=1,
+            metadata={
+                "sdk_cost_usd": total_cost_usd,
+                "sdk_total_cost_usd": total_cost_usd,
+                "sdk_model_usage_cost_usd": total_cost_usd,
+                "sdk_server_tool_cost_usd": 0.0,
+                "sdk_cost_split_known": bool(pricing),
+                "sdk_turns": model_call_count or (len(tool_calls) + 1),
+                "sdk_duration_ms": int(duration * 1000),
+                "sdk_model": model_name,
+                "sdk_models": [model_name] if model_name else [],
+                "sdk_input_tokens": int(token_usage.get("input_tokens", 0)),
+                "sdk_output_tokens": int(token_usage.get("output_tokens", 0)),
+                "sdk_cache_creation_input_tokens": int(token_usage.get("cache_creation_input_tokens", 0)),
+                "sdk_cache_read_input_tokens": int(token_usage.get("cache_read_input_tokens", 0)),
+                "tool_call_count": len(tool_calls),
+                "guardrail_unverified_execution": guardrail_unverified_execution,
+                "pending_background_task_count": 0,
+                "completed_background_task_count": 0,
+                "runtime": "deepagents",
+            },
+        )
+
+        if self.trace_store is not None and trace_events:
+            try:
+                self.trace_store.add_events(
+                    trace_events,
+                    query=query,
+                    model=model_name,
+                    duration_s=duration,
+                    cost_usd=total_cost_usd,
+                )
+                self.trace_store.flush()
+            except Exception as e:  # noqa: BLE001
+                logger.warning("Failed to flush trace: %s", e)
+
+        if not self._headless:
+            self._print_usage(
+                None,
+                duration,
+                input_tokens=int(token_usage.get("input_tokens", 0)),
+                output_tokens=int(token_usage.get("output_tokens", 0)),
+            )
+
+        return exec_result
+
+    async def _deepagents_plan_preview(self, model, user_prompt: str) -> bool:
+        """Show a one-shot plan and ask for terminal approval (deepagents path)."""
+        try:
+            from langchain_core.messages import HumanMessage, SystemMessage
+
+            response = await model.ainvoke(
+                [
+                    SystemMessage(content="Create a concise execution plan before running tools."),
+                    HumanMessage(content=user_prompt),
+                ]
+            )
+            from agent.deepagents_runtime import _text_from_content
+
+            proposed_plan = _text_from_content(getattr(response, "content", "")).strip()
+        except Exception:  # noqa: BLE001
+            logger.debug("deepagents plan preview failed", exc_info=True)
+            return True
+
+        if proposed_plan:
+            self.session.console.print("\n  [bold cyan]Proposed Plan[/bold cyan]")
+            self.session.console.print(f"  {proposed_plan}\n")
+        try:
+            answer = input("  Execute this plan? [Y/n] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            answer = "n"
+        return answer in {"", "y", "yes"}
+
     async def _run_async_openai(
         self,
         query: str,
@@ -1837,11 +2185,23 @@ class AgentRunner:
             if self.trajectory and self.trajectory.turns:
                 history = self.trajectory.context_for_planner()
 
+            skill_routing_context_parts = [query]
+            if ctx.get("mention_context"):
+                skill_routing_context_parts.append(str(ctx["mention_context"]))
+            if ctx.get("target"):
+                skill_routing_context_parts.append(f"Target: {ctx['target']}")
+            if ctx.get("indication"):
+                skill_routing_context_parts.append(f"Indication: {ctx['indication']}")
+            skill_routing_context = "\n".join(
+                part for part in skill_routing_context_parts if str(part).strip()
+            )
+
             system_prompt = build_system_prompt(
                 self.session,
                 tool_names=openai_tool_names,
                 data_context=data_context,
                 history=history,
+                user_request=skill_routing_context,
             )
 
             user_prompt = query
@@ -1858,7 +2218,7 @@ class AgentRunner:
                 user_prompt = query + "\n\nContext:\n" + "\n".join(context_parts)
 
             effective_system_prompt = system_prompt
-            if _windows_should_inline_system_prompt(system_prompt):
+            if _should_inline_system_prompt(system_prompt):
                 effective_system_prompt, user_prompt = _inline_system_prompt_into_user_prompt(
                     system_prompt=system_prompt,
                     user_prompt=user_prompt,
