@@ -7,11 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.57] - 2026-06-20
+
 ### Added
 
-- **Deep Agents (LangGraph) runtime** as the default agent engine
-  (`agent.runtime=deepagents`), with native progressive skill discovery so many
-  installed skills no longer bloat the system prompt.
+- **Deep Agents (LangGraph) runtime** as the agent engine, with native
+  progressive skill discovery so many installed skills no longer bloat the
+  system prompt.
+- Unit-test coverage for the Deep Agents runtime (`deepagents_runtime` model
+  factory, tool adapter, and `process_events` event stream), the
+  `_run_async_deepagents` dispatch, and the trace renderer.
 - **Programmatic Tool Calling (PTC)** tool mode (`agent.tool_mode=ptc`, now the
   default): domain tools are exposed as Python callables inside the sandbox and
   discovered via a compact catalog plus a `search_tools` helper, significantly
@@ -39,6 +44,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tool-call durations under a second now render in milliseconds (e.g. `42ms`)
   instead of `0.0s`.
 - `write_todos` renders as a checklist in the interactive trace output.
+- README and CLI docs rewritten around the Deep Agents / PTC stack, with an
+  Acknowledgements section (CellType, BixBench, Deep Agents, open-ptc-agent) and
+  a Benchmarks (coming soon) section.
+
+### Removed
+
+- **Legacy Claude Agent SDK runtime** and the redundant non-deepagents OpenAI
+  loop. Deep Agents is now the only runtime, so the `agent.runtime` setting and
+  the `claude-agent-sdk` dependency are gone.
+- **In-process `local` / `gluelm` providers**, which only ran on the old SDK
+  path. Use `anthropic` or `openai` (OpenAI-compatible local servers such as
+  Ollama/LM Studio/vLLM/llama.cpp still work via `provider=openai` +
+  `llm.openai_base_url`).
+- The `/autofix` command, the `fastfold autofix` CLI command, and the Windows
+  Claude Code launcher safeguards (they only repaired the SDK CLI).
 
 ### Fixed
 

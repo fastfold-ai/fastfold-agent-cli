@@ -27,7 +27,7 @@ from rich.table import Table
 CONFIG_DIR = Path.home() / ".fastfold-cli"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 CONFIG_BACKUP_FILE = CONFIG_DIR / "config.json.bak"
-VALID_LLM_PROVIDERS = frozenset({"anthropic", "openai", "local", "gluelm"})
+VALID_LLM_PROVIDERS = frozenset({"anthropic", "openai"})
 logger = logging.getLogger("config")
 OPENAI_API_KEY_PATTERN = re.compile(r"^sk-[A-Za-z0-9_-]{6,}$")
 ANTHROPIC_API_KEY_PATTERN = re.compile(r"^sk-ant-[A-Za-z0-9_-]{6,}$")
@@ -158,7 +158,6 @@ DEFAULTS = {
     "ui.mermaid.ascii": False,
     "ui.mermaid.theme": "default",
 
-    "models.gluelm": None,
     "models.deepternary": None,
     "models.boltz2": None,
 
@@ -178,18 +177,13 @@ DEFAULTS = {
     "sandbox.max_retries": 2,
 
     "agent.max_iterations": 3,
-    # Agent runtime backend: "deepagents" (LangGraph deep-agent harness with
-    # native progressive-disclosure skills, default) or "sdk" (legacy Claude
-    # Agent SDK + OpenAI loop). In-process providers (local, gluelm) always use
-    # the sdk path regardless of this setting.
-    "agent.runtime": "deepagents",
     # Tool-calling strategy for the deepagents runtime: "ptc" (Programmatic Tool
     # Calling, default — domain tools are injected as Python callables inside
     # run_python and the model invokes them in code, with only a compact catalog
     # + search_tools in context) or "native" (each domain tool exposed as its own
     # LangChain tool schema). PTC significantly reduces per-call input tokens and
-    # removes the OpenAI tool-count ceiling. Ignored by the sdk runtime. Set to
-    # "native" to restore per-tool schemas.
+    # removes the OpenAI tool-count ceiling. Set to "native" to restore per-tool
+    # schemas.
     "agent.tool_mode": "ptc",
     # Tool-call rendering (deepagents runtime only). When True, the most recent
     # `agent.tool_trace_detail_limit` tool calls in a consecutive batch stay in
@@ -1461,14 +1455,6 @@ class Config:
                 f"Unsupported llm.provider '{provider}'. "
                 f"Valid providers: {valid}. Set it with: fastfold config set llm.provider <provider>"
             )
-
-        if provider in {"local", "gluelm"}:
-            if not self.get("llm.model"):
-                return (
-                    f"llm.model is required for provider '{provider}'. "
-                    "Set it with: fastfold config set llm.model <model-id-or-path>"
-                )
-            return None
 
         provider_key = self.llm_api_key(provider)
         if provider_key:

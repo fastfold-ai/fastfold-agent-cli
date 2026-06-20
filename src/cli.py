@@ -913,15 +913,6 @@ def setup_cmd(
     # Optional: download local datasets (auto-downloadable ones, all preselected)
     _prompt_install_datasets(datasets_arg=datasets, skip=skip_datasets)
 
-    if sys.platform == "win32":
-        from agent.claude_code_cli import run_windows_autofix
-
-        fix = run_windows_autofix()
-        if fix.get("ok"):
-            console.print(f"  [green]{fix.get('summary')}[/green]")
-        else:
-            console.print(f"  [yellow]{fix.get('summary')}[/yellow]")
-
     # Quick health check
     console.print()
     console.print("  [cyan]Running health check...[/cyan]")
@@ -2434,26 +2425,6 @@ def doctor_cmd():
         raise typer.Exit(code=1)
 
     console.print("\n[green]No blocking issues found.[/green]")
-
-
-@app.command("autofix")
-def autofix_cmd():
-    """Apply automatic local fixes for common install/runtime issues."""
-    if sys.platform != "win32":
-        console.print("[green]No autofix needed on this platform.[/green]")
-        return
-
-    from agent.claude_code_cli import run_windows_autofix
-
-    console.print("[cyan]Running Windows autofix...[/cyan]")
-    result = run_windows_autofix()
-    if result.get("ok"):
-        console.print(f"[green]{result.get('summary')}[/green]")
-        if result.get("path"):
-            console.print(f"[dim]Using launcher:[/dim] {result.get('path')}")
-    else:
-        console.print(f"[red]{result.get('summary')}[/red]")
-        raise typer.Exit(code=2)
 
 
 # ─── Data subcommand ──────────────────────────────────────────

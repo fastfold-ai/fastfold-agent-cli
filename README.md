@@ -11,16 +11,20 @@
 
 ![Fastfold CLI demo](img/demo.gif)
 
-Fastfold Agent CLI is an agentic research environment for scientists in search of great tools, combining open-source skills and tools with Fastfold workflows, cloud services, and local or hosted LLMs.
+Fastfold Agent CLI is an agentic research environment for drug discovery and computational biology. Think of it as a coding agent, but for biology. You ask a question in natural language and it plans and executes multi-step scientific workflows using 190+ specialized tools, installable skills, Fastfold Cloud compute, and a persistent Python sandbox. It is intentionally narrow, built for the real, tool-heavy research workflows scientists run rather than for being a general-purpose chatbot.
 
-It is built on CellType,[1](#notes) an open-source agent for computational biology that achieves a state-of-the-art **90% on BixBench-Verified-50**.[2](#notes)[3](#notes)[4](#notes)
+Our mission is to bring the best tools to scientists wherever they work: on the cloud, on local compute, university HPC, or inside the enterprise.
+
+Under the hood it runs on a [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) (LangChain / LangGraph) agentic loop with **Programmatic Tool Calling (PTC)** and native **progressive skill discovery**. A single agent plans, calls domain tools as Python inside a persistent sandbox, self-corrects, and synthesizes a report. Anthropic, OpenAI, and local or OpenAI-compatible models all work through the same loop.
+
+Many of the tools and prompts trace back to [CellType](https://github.com/celltype/celltype-agent); see [Acknowledgements](#acknowledgements) for credits.
 
 
 ### Why Fastfold CLI
 
-You get the full open-source agent[1](#notes) with 190+ tools, 30+ database APIs, and multi-step planning, plus what Fastfold adds for composability and extensibility:
+You get 190+ tools, 30+ database APIs, and multi-step planning, plus what Fastfold adds for composability and extensibility:
 
-- **GPU compute models & workflows**: run heavy scientific workflows like folding, protein design, and MD simulation on Fastfold Cloud, your own compute, or providers like Modal, Nebius, and more.
+- **GPU compute models & workflows**: run heavy scientific workflows like folding, protein design, and MD simulation on Fastfold Cloud, your own compute, or providers like Modal, Boltzbio, and more.
 - **Installable skills**: discover, add, and share workflows natively (`fastfold skills find`, `fastfold skills add <github url>`).
 - **Any model**: Anthropic, OpenAI, or local/open models like Gemma, Qwen, and DeepSeek through endpoints like **Ollama**, **Unsloth**, **oMLX**, **DS4**, **llama.cpp**, and **LM Studio** via `/model`, `/model-manager`, or `fastfold setup`.
 
@@ -297,7 +301,6 @@ Inside `fastfold` interactive mode (run `/help` for the full reference):
 
 - `/upgrade`: upgrade `fastfold-agent-cli` via uv
 - `/doctor`: run readiness diagnostics and fix hints
-- `/autofix`: apply automatic local fixes for common runtime issues
 - `/clear`: clear the screen
 - `/exit`: exit the terminal
 
@@ -344,7 +347,7 @@ fastfold "My lead compound is immune-cold. What combination strategy should I us
 
 ### Agent runtime & efficiency
 
-The agent runs on a [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) (LangGraph) runtime with native **progressive skill discovery** — skill details load on demand, so you can install many skills without bloating the prompt. Anthropic prompt caching is enabled automatically, and the footer shows fresh (non-cached) input tokens so the numbers stay meaningful.
+The agent runs on a [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) (LangGraph) runtime with native **progressive skill discovery**, so skill details load on demand and you can install many skills without bloating the prompt. Anthropic prompt caching is enabled automatically, and the footer shows fresh (non-cached) input tokens so the numbers stay meaningful.
 
 **Programmatic Tool Calling (PTC)** is the default tool mode (`agent.tool_mode=ptc`): the agent calls domain tools as Python functions inside a persistent sandbox and discovers them through a compact catalog plus `search_tools`, instead of injecting every tool's JSON schema. This significantly reduces per-turn input tokens and removes the OpenAI tool-count ceiling. Set `agent.tool_mode=native` to restore per-tool schemas.
 
@@ -459,6 +462,12 @@ Browse the Fastfold Apps catalog at [https://cloud.fastfold.ai/apps](https://clo
 ![Fastfold Apps Catalog](img/apps.png)
 
 
+## Benchmarks
+
+**Coming soon.** Generic Q&A leaderboards don't capture what matters here, so we're crafting a comprehensive benchmark focused on **industry-specific drug-discovery and computational-biology use cases**: the multi-step, tool-heavy workflows scientists actually run (target prioritization, folding, protein design, MD, omics analysis, and more), measured across multiple model backends.
+
+We are looking for help. If you have a real-world use case you'd like represented, or want to contribute tasks, datasets, or scoring rubrics, please [open an issue](https://github.com/fastfold-ai/fastfold-agent-cli/issues) or say hi on [Slack](https://fastfoldcommunity.slack.com/join/shared_invite/zt-3azbiw7qv-majshu97TymCma_TwFT6mw#/shared-invite/email). The goal is an honest, reproducible measure of how the agent performs across many domains.
+
 ## Contributing
 
 Contributions are welcome, from bug reports and docs fixes to new tools and skills.
@@ -492,10 +501,12 @@ A few guidelines:
 
 MIT
 
-## Notes
+## Acknowledgements
 
-1. Agent foundation and capabilities: [CellType](https://github.com/celltype/celltype-agent)
-2. Benchmark: 90% on BixBench-Verified-50, as reported upstream: [github.com/celltype/celltype-agent#benchmark](https://github.com/celltype/celltype-agent#benchmark)
-3. BixBench benchmark repository: [github.com/FUture-House/BixBench](https://github.com/FUture-House/BixBench)
-4. BixBench-Verified-50 dataset: [huggingface.co/datasets/phylobio/BixBench-Verified-50](https://huggingface.co/datasets/phylobio/BixBench-Verified-50)
+Fastfold Agent CLI stands on the shoulders of excellent open-source work:
+
+- **[CellType](https://github.com/celltype/celltype-agent):** most of the 190+ domain tools and prompt definitions are derived from or inspired by CellType's open-source computational-biology agent, which reports a state-of-the-art **90% on BixBench-Verified-50**.
+- **[BixBench](https://github.com/Future-House/BixBench)** and the **[BixBench-Verified-50](https://huggingface.co/datasets/phylobio/BixBench-Verified-50)** dataset: the evaluation that grounds the domain-agent results above.
+- **[Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview)** (LangChain / LangGraph): the agentic runtime Fastfold is built on today, providing progressive skill discovery and the foundation for Programmatic Tool Calling.
+- **[open-ptc-agent](https://github.com/Chen-zexi/open-ptc-agent):** the reference that shaped Fastfold's Programmatic Tool Calling (PTC) approach to keeping per-turn tokens low.
 

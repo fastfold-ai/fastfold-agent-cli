@@ -13,9 +13,9 @@ This is the model-agnostic alternative to the Claude Agent SDK path in
   and OpenAI-compatible providers share one agentic loop.
 
 The event consumer (:func:`process_events`) translates LangGraph
-``astream_events`` into the SAME ``trace_events`` schema, ``on_activity``
-progress callbacks, and result contract that ``runner.process_messages``
-produces, so the UI, usage accounting, and export layers are unchanged.
+``astream_events`` into the ``trace_events`` schema, ``on_activity`` progress
+callbacks, and result contract the UI, usage accounting, and export layers
+expect.
 """
 
 from __future__ import annotations
@@ -50,8 +50,7 @@ def build_chat_model(config, *, streaming: bool = True):
 
     Supports ``anthropic`` and ``openai`` (including OpenAI-compatible
     endpoints such as Ollama / LM Studio / vLLM, surfaced as ``openai`` +
-    ``base_url``). The in-process providers ``local`` / ``gluelm`` have no
-    OpenAI-compatible endpoint and are not supported by the deepagents runtime.
+    ``base_url``).
     """
     from langchain.chat_models import init_chat_model
 
@@ -86,8 +85,7 @@ def build_chat_model(config, *, streaming: bool = True):
 
     raise ValueError(
         f"deepagents runtime does not support llm.provider '{provider}'. "
-        "Use 'anthropic' or 'openai' (OpenAI-compatible), or switch "
-        "agent.runtime back to 'sdk'."
+        "Use 'anthropic' or 'openai' (OpenAI-compatible via llm.openai_base_url)."
     )
 
 
@@ -480,8 +478,8 @@ async def process_events(
 ) -> dict:
     """Consume ``astream_events`` (v2) into the ct result/trace contract.
 
-    Mirrors :func:`agent.runner.process_messages` so downstream ExecutionResult
-    construction, trace export, and usage accounting are unchanged.
+    Produces the ExecutionResult, trace export, and usage-accounting shapes the
+    UI and export layers expect.
 
     Tool-call rendering: when ``group_tools`` is True, the most recent
     ``tool_detail_limit`` tools in a consecutive batch are shown in full (name,

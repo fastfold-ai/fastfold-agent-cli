@@ -224,18 +224,6 @@ class TestTerminalKeyBindings:
 
 
 class TestRunnerAdditionalHelpers:
-    def test_claude_sdk_cli_path_delegates(self, monkeypatch):
-        monkeypatch.setattr("agent.runner.resolve_claude_sdk_cli_path", lambda: "/tmp/claude")
-        assert runner._claude_sdk_cli_path() == "/tmp/claude"
-
-    def test_windows_inline_prompt_env_modes(self, monkeypatch):
-        monkeypatch.setattr("agent.runner.sys.platform", "win32")
-        monkeypatch.delenv("FASTFOLD_INLINE_SYSTEM_PROMPT", raising=False)
-        monkeypatch.setenv("FASTFOLD_WINDOWS_INLINE_SYSTEM_PROMPT", "always")
-        assert runner._should_inline_system_prompt("short") is True
-        monkeypatch.setenv("FASTFOLD_WINDOWS_INLINE_SYSTEM_PROMPT", "off")
-        assert runner._should_inline_system_prompt("x" * 50000) is False
-
     def test_default_local_task_output_path(self, monkeypatch, tmp_path):
         monkeypatch.setattr("agent.runner.os.getuid", lambda: 501)
         monkeypatch.chdir(tmp_path)
@@ -271,20 +259,3 @@ class TestRunnerAdditionalHelpers:
         assert ";" not in out
         assert "\n" not in out
         assert len(out) <= 40
-
-    def test_clean_sdk_env_sets_keys_and_foundry(self, monkeypatch):
-        session = SimpleNamespace(
-            config=SimpleNamespace(
-                llm_api_key=lambda provider: "sk-ant-test",
-                get=lambda key: "ff-key" if key == "api.fastfold_cloud_key" else None,
-            )
-        )
-        monkeypatch.setenv("CLAUDECODE", "1")
-        monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "s1")
-        monkeypatch.setenv("ANTHROPIC_FOUNDRY_API_KEY", "foundry")
-        clean = runner._clean_sdk_env(session, model="claude-sonnet-4-5-20250929")
-        assert "CLAUDECODE" not in clean
-        assert clean["ANTHROPIC_API_KEY"] == "sk-ant-test"
-        assert clean["FASTFOLD_API_KEY"] == "ff-key"
-        assert clean["CLAUDE_CODE_USE_FOUNDRY"] == "1"
-        assert clean["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "claude-sonnet-4-5-20250929"

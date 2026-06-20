@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 from rich.console import Console
 
-from ui.traces import TraceRenderer, format_args, truncate_output
+from ui.traces import TraceRenderer, format_args, format_duration, truncate_output
 
 
 # ---------------------------------------------------------------------------
@@ -181,6 +181,115 @@ class TestTraceRendererReasoning:
             "reasoning text",
             config={"ui.mermaid.enabled": True},
         )
+
+
+class TestFormatDuration:
+    def test_subsecond_shows_ms(self):
+        assert format_duration(0.042) == "42ms"
+        assert format_duration(0.0) == "0ms"
+
+    def test_seconds(self):
+        assert format_duration(2.34) == "2.3s"
+
+    def test_minutes(self):
+        assert format_duration(65) == "1m 5s"
+
+    def test_negative_clamped(self):
+        assert format_duration(-5) == "0ms"
+
+
+class TestRenderTodos:
+    def test_renders_checklist_with_statuses(self):
+        console, buf = _captured_console()
+        renderer = TraceRenderer(console)
+        renderer.render_todos([
+            {"content": "done step", "status": "completed"},
+            {"content": "active step", "status": "in_progress"},
+            {"content": "later step", "status": "pending"},
+            {"content": "weird", "status": "bogus"},
+        ])
+        output = buf.getvalue()
+        assert "todos" in output
+        assert "1/4" in output
+        assert "done step" in output
+        assert "active step" in output
+        assert "[x]" in output
+        assert "[~]" in output
+
+    def test_ignores_empty_or_non_list(self):
+        console, buf = _captured_console()
+        renderer = TraceRenderer(console)
+        renderer.render_todos(None)
+        renderer.render_todos([])
+        renderer.render_todos("not a list")
+        assert buf.getvalue() == ""
+
+    def test_skips_non_dict_and_blank_entries(self):
+        console, buf = _captured_console()
+        renderer = TraceRenderer(console)
+        renderer.render_todos(["skip", {"content": "", "status": "pending"}, {"content": "keep"}])
+        output = buf.getvalue()
+        assert "keep" in output
+
+
+class TestRenderReasoningEdgeCases:
+    def test_empty_text_noop(self):
+        console, buf = _captured_console()
+        renderer = TraceRenderer(console)
+        renderer.render_reasoning("   ")
+        assert buf.getvalue() == ""
+
+    def test_markdown_failure_falls_back_to_plain_print(self):
+        console, buf = _captured_console()
+        renderer = TraceRenderer(console)
+        with patch("ui.traces.print_markdown_with_mermaid", side_effect=RuntimeError("boom")):
+            renderer.render_reasoning("plain reasoning")
+        assert "plain reasoning" in buf.getvalue()
+
+
+class TestRenderTaskEvents:
+    def test_render_task_started(self):
+        console, buf = _captured_console()
+        renderer = TraceRenderer(console)
+        renderer.render_task_started("task-1", "folding job", task_type="fold")
+        output = buf.getvalue()
+        assert "task-1" in output
+        assert "fold" in output
+        assert "folding job" in output
+
+    def test_render_task_progress_with_usage(self):
+        console, buf = _captured_console()
+        renderer = TraceRenderer(console)
+        renderer.render_task_progress(
+            "task-2",
+            "running",
+            usage={"total_tokens": 1234, "tool_uses": 7},
+            last_tool_name="fold.create",
+        )
+        output = buf.getvalue()
+        assert "task-2" in output
+        assert "1234 tokens" in output
+        assert "7 tool calls" in output
+        assert "fold.create" in output
+
+    def test_render_task_notification_completed(self):
+        console, buf = _captured_console()
+        renderer = TraceRenderer(console)
+        renderer.render_task_notification("task-3", "completed", "all done", "/tmp/out.txt")
+        output = buf.getvalue()
+        assert "\u2713" in output
+        assert "completed" in output
+        assert "all done" in output
+        assert "/tmp/out.txt" in output
+
+    def test_render_task_notification_failed_and_other(self):
+        console, buf = _captured_console()
+        renderer = TraceRenderer(console)
+        renderer.render_task_notification("task-4", "failed")
+        renderer.render_task_notification("task-5", "running")
+        output = buf.getvalue()
+        assert "\u2717" in output
+        assert "\u25a0" in output
 
 
 class TestTraceRendererSnapshot:

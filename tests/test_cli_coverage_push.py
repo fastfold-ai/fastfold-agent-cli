@@ -35,34 +35,6 @@ def _mock_cfg(monkeypatch, data=None):
     return cfg
 
 
-class TestAutofixCmd:
-    def test_autofix_non_windows(self):
-        result = runner.invoke(app, ["autofix"])
-        assert result.exit_code == 0
-        assert "No autofix needed" in result.stdout
-
-    @patch("agent.claude_code_cli.run_windows_autofix")
-    def test_autofix_windows_success(self, mock_autofix):
-        mock_autofix.return_value = {
-            "ok": True,
-            "summary": "Fixed launcher",
-            "path": "C:\\fastfold\\launcher.cmd",
-        }
-        with patch("cli.sys.platform", "win32"):
-            result = runner.invoke(app, ["autofix"])
-        assert result.exit_code == 0
-        assert "Fixed launcher" in result.stdout
-        assert "launcher.cmd" in result.stdout
-
-    @patch("agent.claude_code_cli.run_windows_autofix")
-    def test_autofix_windows_failure_exits(self, mock_autofix):
-        mock_autofix.return_value = {"ok": False, "summary": "Could not repair"}
-        with patch("cli.sys.platform", "win32"):
-            result = runner.invoke(app, ["autofix"])
-        assert result.exit_code == 2
-        assert "Could not repair" in result.stdout
-
-
 class TestDataPull:
     def test_data_pull_invokes_downloader(self, tmp_path):
         with patch("data.downloader.download_dataset") as mock_download:

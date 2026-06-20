@@ -61,7 +61,6 @@ SLASH_COMMANDS = {
     "/model-manager": "Manage OpenAI-compatible profiles (add/edit/delete)",
     "/upgrade": "Upgrade fastfold-agent-cli via uv",
     "/doctor": "Run readiness diagnostics and fix hints",
-    "/autofix": "Apply automatic local fixes for common runtime issues",
     "/usage": "Show session token/cost usage",
     "/tasks": "Show background task watcher status (/tasks refresh for live probe)",
     "/interrupt": "Interrupt the active generation (add ! to force)",
@@ -1351,10 +1350,6 @@ class InteractiveTerminal:
                     return "openai", "OpenAI-compatible custom endpoint", openai_base_url
                 return "openai", f"OpenAI-compatible custom endpoint ({label})", openai_base_url
             return "anthropic", "Anthropic", None
-        if raw_provider == "local":
-            return "local", "Local", None
-        if raw_provider == "gluelm":
-            return "gluelm", "GlueLM", None
         return raw_provider or "anthropic", (raw_provider or "anthropic"), None
 
     @staticmethod
@@ -1757,23 +1752,6 @@ class InteractiveTerminal:
                     self.console.print("  [red]Blocking issues found.[/red]")
                 else:
                     self.console.print("  [green]No blocking issues found.[/green]")
-                self._advance_suggestion()
-                continue
-            if cmd in ("autofix", "/autofix"):
-                if os.name != "nt":
-                    self.console.print("  [green]No autofix needed on this platform.[/green]")
-                    self._advance_suggestion()
-                    continue
-                from agent.claude_code_cli import run_windows_autofix
-
-                self.console.print("  [cyan]Running Windows autofix...[/cyan]")
-                fix_result = run_windows_autofix()
-                if fix_result.get("ok"):
-                    self.console.print(f"  [green]{fix_result.get('summary')}[/green]")
-                    if fix_result.get("path"):
-                        self.console.print(f"  [dim]Using launcher:[/dim] {fix_result.get('path')}")
-                else:
-                    self.console.print(f"  [red]{fix_result.get('summary')}[/red]")
                 self._advance_suggestion()
                 continue
             if cmd in ("clear", "/clear"):
@@ -3803,12 +3781,9 @@ class InteractiveTerminal:
             return
 
         # Reconcile pending tasks before rendering so /tasks reflects
-        # any just-completed tasks from SDK notifications or fallback probes.
+        # any just-completed tasks detected by the local output-file probe.
         if hasattr(runner, "refresh_background_watch_status"):
-            runner.refresh_background_watch_status(
-                force=force_refresh,
-                include_taskoutput=force_refresh,
-            )
+            runner.refresh_background_watch_status(force=force_refresh)
 
         statuses = runner.get_background_watch_status(include_inactive=True)
         if not statuses:

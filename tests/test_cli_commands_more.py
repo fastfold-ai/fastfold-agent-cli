@@ -312,11 +312,6 @@ class TestCaseStudyRun:
 
 
 class TestMiscCliCommands:
-    def test_autofix_non_windows(self):
-        result = runner.invoke(app, ["autofix"])
-        assert result.exit_code == 0
-        assert "No autofix needed" in result.stdout
-
     def test_config_unset(self, monkeypatch):
         cfg = Config(data={"llm": {"provider": "anthropic"}})
         monkeypatch.setattr("agent.config.Config.load", lambda: cfg)

@@ -77,9 +77,6 @@ def run_checks(config: Config | None = None, session=None) -> list[DoctorCheck]:
             DoctorCheck(name="llm", status="ok", detail=detail)
         )
 
-    if sys.platform == "win32":
-        checks.append(_check_windows_sdk_cli())
-
     # 3) Output directory availability
     out_dir = Path(cfg.get("sandbox.output_dir", str(Path.cwd() / "outputs")))
     try:
@@ -363,54 +360,6 @@ def to_table(checks: list[DoctorCheck]) -> Table:
         table.add_row(check.name, _status_markup(check.status), check.detail)
 
     return table
-
-
-def _check_windows_sdk_cli() -> DoctorCheck:
-    """Verify Claude Agent SDK can locate a spawnable Claude Code launcher on Windows."""
-
-    from agent.claude_code_cli import (
-        _validate_windows_claude_spawn,
-        bundled_sdk_claude_exe_win32,
-        bundled_windows_path_maybe_too_long,
-        windows_claude_code_cli_resolve_detail,
-    )
-
-    path, label = windows_claude_code_cli_resolve_detail()
-    risk_long = bundled_windows_path_maybe_too_long()
-    bundled = bundled_sdk_claude_exe_win32()
-
-    if path is not None and Path(path).is_file():
-        ok, spawn_detail = _validate_windows_claude_spawn(path, probe_long_args=True)
-        if not ok:
-            return DoctorCheck(
-                name="windows_sdk_claude",
-                status="error",
-                detail=f"{label}: {path} (spawn probe failed: {spawn_detail})",
-            )
-
-        detail = f"{label}: {path}"
-        if risk_long is True and "FastFoldAgent" in label:
-            detail += (
-                "; bundled Claude Code exe cached locally (FastFoldAgent) avoids "
-                "WinError 206 vs deep uv path"
-            )
-        elif risk_long is True:
-            detail += "; resolver bypasses long bundled exe path under site-packages"
-        return DoctorCheck(name="windows_sdk_claude", status="ok", detail=detail)
-
-    extra = ""
-    if bundled:
-        extra = f" Bundled exe: {bundled}."
-    return DoctorCheck(
-        name="windows_sdk_claude",
-        status="error",
-        detail=(
-            f"{label}. Install Claude Code globally, set FASTFOLD_CLAUDE_CODE_CLI, "
-            "or allow writes to FastFoldAgent under Local AppData (bundled "
-            "launcher cache)."
-            + extra
-        ),
-    )
 
 
 # ---------------------------------------------------------------------------
