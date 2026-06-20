@@ -69,8 +69,8 @@ class TestSearchTools:
 class TestCatalog:
     def test_catalog_is_compact_and_lists_tools(self):
         cat = build_tool_catalog()
-        # Compact: the names-only catalog should be far smaller than per-tool
-        # schemas (~38K tokens). Guard well under that ceiling.
+        # Compact: the names-only catalog should be far smaller than the full
+        # per-tool schemas. Guard well under that ceiling.
         assert len(cat) < 12_000
         assert "Programmatic Tool Calling (PTC)" in cat
         assert "chemistry:" in cat

@@ -7,10 +7,12 @@ from agent import runner
 
 def test_windows_should_inline_system_prompt_auto_threshold(monkeypatch):
     monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.delenv("FASTFOLD_INLINE_SYSTEM_PROMPT", raising=False)
+    monkeypatch.delenv("FASTFOLD_INLINE_SYSTEM_PROMPT_THRESHOLD", raising=False)
     monkeypatch.delenv("FASTFOLD_WINDOWS_INLINE_SYSTEM_PROMPT", raising=False)
     monkeypatch.setenv("FASTFOLD_WINDOWS_INLINE_SYSTEM_PROMPT_THRESHOLD", "10")
-    assert runner._windows_should_inline_system_prompt("x" * 11) is True
-    assert runner._windows_should_inline_system_prompt("x" * 9) is False
+    assert runner._should_inline_system_prompt("x" * 11) is True
+    assert runner._should_inline_system_prompt("x" * 9) is False
 
 
 def test_inline_system_prompt_into_user_prompt_shapes_payload():

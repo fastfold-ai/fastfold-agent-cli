@@ -187,9 +187,9 @@ DEFAULTS = {
     # Calling, default — domain tools are injected as Python callables inside
     # run_python and the model invokes them in code, with only a compact catalog
     # + search_tools in context) or "native" (each domain tool exposed as its own
-    # LangChain tool schema). PTC sharply cuts per-call input tokens (~38K on the
-    # full catalog) and removes the OpenAI tool-count ceiling. Ignored by the sdk
-    # runtime. Set to "native" to restore per-tool schemas.
+    # LangChain tool schema). PTC significantly reduces per-call input tokens and
+    # removes the OpenAI tool-count ceiling. Ignored by the sdk runtime. Set to
+    # "native" to restore per-tool schemas.
     "agent.tool_mode": "ptc",
     # Tool-call rendering (deepagents runtime only). When True, the most recent
     # `agent.tool_trace_detail_limit` tool calls in a consecutive batch stay in

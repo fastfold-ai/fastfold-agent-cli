@@ -2,9 +2,9 @@
 Programmatic Tool Calling (PTC) support for the deepagents runtime.
 
 Instead of exposing every domain tool as its own LangChain tool schema (which
-costs ~38K input tokens for ~190 tools on every model call), PTC injects the
-domain tools as plain Python callables inside the persistent ``run_python``
-sandbox. The model invokes them in code:
+adds a large, fixed input-token cost for ~190 tools on every model call), PTC
+injects the domain tools as plain Python callables inside the persistent
+``run_python`` sandbox. The model invokes them in code:
 
     res = tools.chemistry.descriptors(smiles="CCO")
     df = pd.DataFrame(res["table"])
@@ -144,8 +144,8 @@ def build_tool_catalog(
     """Build the compact PTC tool catalog injected into the system prompt.
 
     Lists category counts and a names-only listing of every available domain
-    tool (no per-param schemas), keeping the prompt around a couple thousand
-    tokens instead of ~38K.
+    tool (no per-param schemas), keeping the prompt compact instead of carrying
+    the full per-tool schema cost.
     """
     names_by_cat: dict[str, list[str]] = {}
     total = 0

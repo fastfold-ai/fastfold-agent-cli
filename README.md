@@ -29,7 +29,7 @@ You get the full open-source agent[1](#notes) with 190+ tools, 30+ database APIs
 <details>
 <summary>Install <code>uv</code> (for native CLI install)</summary>
 
-- **Python 3.10+** (recommended: let `uv` install managed interpreters).
+- **Python 3.11+** (recommended: let `uv` install managed interpreters).
 - **uv** — [Installing uv](https://docs.astral.sh/uv/getting-started/installation/). Quick options:
 
 **Linux / macOS:**
@@ -53,13 +53,13 @@ After installing `uv`, close and reopen your terminal or PowerShell so `PATH` pi
 **Linux / macOS:**
 
 ```bash
-uv tool install "fastfold-agent-cli[all]" --python 3.10
+uv tool install "fastfold-agent-cli[all]" --python 3.11
 ```
 
 **Windows (cmd/PowerShell):**
 
 ```bash
-uv tool install "fastfold-agent-cli[win_build]" --python 3.10
+uv tool install "fastfold-agent-cli[win_build]" --python 3.11
 ```
 
 <details>
@@ -72,7 +72,7 @@ uv tool install "fastfold-agent-cli[win_build]" --python 3.10
 3. Run the same install command inside WSL:
 
 ```bash
-uv tool install "fastfold-agent-cli[all]" --python 3.10
+uv tool install "fastfold-agent-cli[all]" --python 3.11
 ```
 
 </details>
@@ -259,6 +259,7 @@ Inside `fastfold` interactive mode (run `/help` for the full reference):
 
 - `/help`: show command reference with examples
 - `/tools`: list all tools with status (stable/experimental)
+- `/data`: manage local datasets (`/data list`, `/data status`, `/data pull <name>`, `/data pull-all`)
 - `/skills`: list currently loaded skills
 - `/skills-find [query]`: discover installable skills from the catalog
 - `/skills-add <source>`: install a skill from GitHub/local path/name
@@ -341,6 +342,14 @@ fastfold "My lead compound is immune-cold. What combination strategy should I us
 | **DNA**        | ORF finding, codon optimization, primer design, Gibson/Golden Gate assembly |
 
 
+### Agent runtime & efficiency
+
+The agent runs on a [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) (LangGraph) runtime with native **progressive skill discovery** — skill details load on demand, so you can install many skills without bloating the prompt. Anthropic prompt caching is enabled automatically, and the footer shows fresh (non-cached) input tokens so the numbers stay meaningful.
+
+**Programmatic Tool Calling (PTC)** is the default tool mode (`agent.tool_mode=ptc`): the agent calls domain tools as Python functions inside a persistent sandbox and discovers them through a compact catalog plus `search_tools`, instead of injecting every tool's JSON schema. This significantly reduces per-turn input tokens and removes the OpenAI tool-count ceiling. Set `agent.tool_mode=native` to restore per-tool schemas.
+
+Tool-call traces keep the current/last call in full detail and progressively collapse older ones to compact named lines (tune with `agent.tool_trace_detail_limit`; set `agent.group_tool_traces=false` for fully verbose output).
+
 ### Agent Skills
 
 Fastfold ships with a bundled skill catalog and lets you discover, add, and manage skills natively. Installed skills live in `~/.fastfold-cli/skills/` and are picked up automatically.
@@ -413,14 +422,24 @@ fastfold skills add google-deepmind/science-skills
 ### Data Management
 
 ```bash
+fastfold data list           # catalog: description, size, auto/manual
+fastfold data status         # what's downloaded locally
 fastfold data pull depmap    # DepMap CRISPR, mutations, expression
 fastfold data pull prism     # PRISM cell viability
 fastfold data pull msigdb    # Gene sets
-fastfold data pull alphafold     # Protein structures (on-demand)
+fastfold data pull alphafold # Protein structures (on-demand)
+fastfold data pull-all       # every auto-downloadable dataset (depmap is ~580MB)
 
 # Or point to existing data
 fastfold config set data.depmap /path/to/depmap/
 ```
+
+`fastfold setup` also offers an optional dataset step with a multi-select (all
+auto-downloadable datasets preselected). Non-interactive:
+`fastfold setup --datasets depmap,msigdb` (or `--datasets all` / `--skip-datasets`).
+
+The same actions are available inside the interactive session via `/data`
+(`/data list`, `/data status`, `/data pull <name>`, `/data pull-all`).
 
 ### Reports
 

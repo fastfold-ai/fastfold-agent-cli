@@ -48,6 +48,7 @@ class MentionCandidate:
 SLASH_COMMANDS = {
     "/help": "Show command reference with examples",
     "/tools": "List all tools with status (stable/experimental)",
+    "/data": "Manage local datasets (/data list | status | pull <name> | pull-all)",
     "/skills": "List currently loaded skills",
     "/skills-add": "Install a skill from GitHub/local path/name",
     "/skills-find": "Discover installable skills from the catalog",
@@ -1696,6 +1697,10 @@ class InteractiveTerminal:
                 continue
             if cmd in ("skill", "/skill", "skills", "/skills"):
                 self._show_skills()
+                self._advance_suggestion()
+                continue
+            if cmd_head in ("data", "/data"):
+                self._handle_data_command(query)
                 self._advance_suggestion()
                 continue
             if cmd in ("model", "/model"):
@@ -4628,6 +4633,60 @@ class InteractiveTerminal:
             self.console.print("\n  [yellow]Interrupted.[/yellow]")
         except Exception as e:
             self.console.print(f"\n  [red]Case study error:[/red] {e}")
+
+    def _handle_data_command(self, query: str) -> None:
+        """Interactive dataset management: /data [list | status | pull <name> | pull-all]."""
+        try:
+            from data.downloader import (
+                DATASETS,
+                dataset_catalog,
+                dataset_status,
+                download_all,
+                download_dataset,
+            )
+        except Exception as e:  # noqa: BLE001
+            self.console.print(f"  [red]Data module unavailable:[/red] {e}")
+            return
+
+        parts = query.strip().split()
+        sub = parts[1].lower() if len(parts) > 1 else "status"
+        args = parts[2:]
+
+        if sub in ("list", "ls", "catalog"):
+            self.console.print(dataset_catalog())
+            return
+        if sub in ("status", "st"):
+            self.console.print(dataset_status())
+            return
+        if sub in ("pull-all", "pullall", "all"):
+            auto = [n for n, ds in DATASETS.items() if ds.get("auto_download")]
+            self.console.print(
+                f"  [cyan]Downloading all auto-downloadable datasets:[/cyan] {', '.join(auto)}"
+            )
+            self.console.print("  [dim]This can be large (depmap alone is ~580MB). Ctrl+C to stop.[/dim]")
+            try:
+                download_all()
+            except KeyboardInterrupt:
+                self.console.print("\n  [yellow]Download interrupted.[/yellow]")
+            return
+        if sub == "pull":
+            if not args:
+                self.console.print("  [yellow]Usage:[/yellow] /data pull <name|all>")
+                self.console.print(f"  [dim]Available:[/dim] {', '.join(DATASETS.keys())}")
+                return
+            name = args[0].lower()
+            if name not in DATASETS and name not in ("all",):
+                self.console.print(f"  [red]Unknown dataset:[/red] {name}")
+                self.console.print(f"  [dim]Available:[/dim] {', '.join(DATASETS.keys())} (or 'all')")
+                return
+            try:
+                download_dataset(name)
+            except KeyboardInterrupt:
+                self.console.print("\n  [yellow]Download interrupted.[/yellow]")
+            return
+
+        self.console.print(f"  [yellow]Unknown /data subcommand:[/yellow] {sub}")
+        self.console.print(r"  [dim]Usage:[/dim] /data \[list | status | pull <name> | pull-all]")
 
     def _show_help(self):
         command_lines = ["**Slash Commands:**"]

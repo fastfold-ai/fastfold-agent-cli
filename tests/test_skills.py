@@ -234,8 +234,12 @@ def test_build_skills_prompt_includes_content(tmp_path, monkeypatch):
     _write_skill(bundled, "alpha", "Alpha skill")
     monkeypatch.setattr(skills_mod, "BUNDLED_SKILLS_DIR", bundled)
     monkeypatch.setattr(skills_mod, "GLOBAL_SKILLS_DIR", tmp_path / "noglobal")
-    prompt = skills_mod.build_skills_prompt(project_root=tmp_path / "noproject")
+    prompt = skills_mod.build_skills_prompt(
+        project_root=tmp_path / "noproject", user_request="alpha skill"
+    )
     assert "Installed Agent Skills" in prompt
+    # Catalog always lists the skill; a matching request also pulls in full content.
+    assert "`alpha`" in prompt
     assert "Skill: `alpha`" in prompt
 
 
@@ -251,7 +255,9 @@ def test_build_skills_prompt_rewrites_script_paths_absolute(tmp_path, monkeypatc
     )
     monkeypatch.setattr(skills_mod, "BUNDLED_SKILLS_DIR", tmp_path / "nobundled")
     monkeypatch.setattr(skills_mod, "GLOBAL_SKILLS_DIR", global_dir)
-    prompt = skills_mod.build_skills_prompt(project_root=tmp_path / "noproject")
+    prompt = skills_mod.build_skills_prompt(
+        project_root=tmp_path / "noproject", user_request="boltz workflow"
+    )
     abs_prefix = str(d)
     assert f"python {abs_prefix}/scripts/workflow_api.py" in prompt
     assert f"`{abs_prefix}/scripts/fetch_cif.py`" in prompt

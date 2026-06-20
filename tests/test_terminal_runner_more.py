@@ -230,10 +230,11 @@ class TestRunnerAdditionalHelpers:
 
     def test_windows_inline_prompt_env_modes(self, monkeypatch):
         monkeypatch.setattr("agent.runner.sys.platform", "win32")
+        monkeypatch.delenv("FASTFOLD_INLINE_SYSTEM_PROMPT", raising=False)
         monkeypatch.setenv("FASTFOLD_WINDOWS_INLINE_SYSTEM_PROMPT", "always")
-        assert runner._windows_should_inline_system_prompt("short") is True
+        assert runner._should_inline_system_prompt("short") is True
         monkeypatch.setenv("FASTFOLD_WINDOWS_INLINE_SYSTEM_PROMPT", "off")
-        assert runner._windows_should_inline_system_prompt("x" * 50000) is False
+        assert runner._should_inline_system_prompt("x" * 50000) is False
 
     def test_default_local_task_output_path(self, monkeypatch, tmp_path):
         monkeypatch.setattr("agent.runner.os.getuid", lambda: 501)
