@@ -1644,21 +1644,39 @@ def _chembl_compound_search(query: str, base: str, headers: dict) -> dict:
 
 def _chembl_target_activities(query: str, base: str, headers: dict) -> dict:
     """Get aggregated bioactivity statistics for a target."""
-    # Find the target
-    try:
-        tgt_resp = _http_get(
-            f"{base}/target/search.json",
-            params={"q": query, "limit": 5},
-            headers=headers,
-            timeout=15,
-            retries=2,
-        )
-        tgt_resp.raise_for_status()
-        tgt_data = tgt_resp.json()
-    except Exception as e:
-        return {"error": f"ChEMBL target search failed: {e}", "summary": f"ChEMBL target search failed: {e}"}
-    targets = tgt_data.get("targets", [])
+    # Find the target. ChEMBL's /target/search endpoint can intermittently 5xx, so
+    # fall back to filtered /target lookups before failing the tool.
+    targets = []
+    target_search_errors = []
+    target_search_attempts = [
+        ("target_search", f"{base}/target/search.json", {"q": query, "limit": 5}),
+        ("target_synonym", f"{base}/target.json", {"target_synonym__icontains": query, "limit": 5}),
+        ("target_pref_name", f"{base}/target.json", {"pref_name__icontains": query, "limit": 5}),
+    ]
+    for _, endpoint, params in target_search_attempts:
+        try:
+            tgt_resp = _http_get(
+                endpoint,
+                params=params,
+                headers=headers,
+                timeout=15,
+                retries=2,
+            )
+            tgt_resp.raise_for_status()
+            tgt_data = tgt_resp.json()
+        except Exception as e:
+            target_search_errors.append(str(e))
+            continue
+        targets = tgt_data.get("targets", []) or []
+        if targets:
+            break
     if not targets:
+        if target_search_errors:
+            joined = " | ".join(err for err in target_search_errors if err) or "unknown error"
+            return {
+                "error": f"ChEMBL target search failed: {joined}",
+                "summary": f"ChEMBL target search failed: {joined}",
+            }
         return {"summary": f"No ChEMBL target found for '{query}'", "query": query}
 
     # Prefer human SINGLE PROTEIN

@@ -764,6 +764,42 @@ class TestChEMBLAdvanced:
         assert "IC50" in result["activity_statistics"]
         assert result["activity_statistics"]["IC50"]["median_nM"] == 85.0  # median of 50, 120
 
+    @patch("tools.data_api._http_get")
+    def test_target_activities_falls_back_when_target_search_5xx(self, mock_http_get):
+        from tools.data_api import chembl_advanced
+
+        target_fallback_resp = _mock_response(200, {
+            "targets": [{
+                "target_chembl_id": "CHEMBL203",
+                "pref_name": "Epidermal growth factor receptor erbB1",
+                "organism": "Homo sapiens",
+                "target_type": "SINGLE PROTEIN",
+            }]
+        })
+        activity_resp = _mock_response(200, {
+            "activities": [
+                {"molecule_chembl_id": "CHEMBL1", "standard_type": "IC50", "standard_value": "50"},
+                {"molecule_chembl_id": "CHEMBL2", "standard_type": "IC50", "standard_value": "120"},
+            ]
+        })
+
+        def _side_effect(url, **kwargs):
+            if "target/search.json" in url:
+                raise Exception("Server error '500 Internal Server Error'")
+            if "target.json" in url:
+                return target_fallback_resp
+            if "activity.json" in url:
+                return activity_resp
+            raise AssertionError(f"Unexpected URL: {url}")
+
+        mock_http_get.side_effect = _side_effect
+
+        result = chembl_advanced(query="EGFR", search_type="target_activities")
+
+        assert "error" not in result, result.get("error")
+        assert result["target_chembl_id"] == "CHEMBL203"
+        assert "IC50" in result["activity_statistics"]
+
     @patch("httpx.get")
     def test_mechanism_search(self, mock_get):
         from tools.data_api import chembl_advanced
