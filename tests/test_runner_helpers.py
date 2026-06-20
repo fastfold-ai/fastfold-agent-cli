@@ -19,6 +19,17 @@ class TestExecutionClaimDetection:
     def test_benign_summary(self):
         assert _looks_like_unverified_execution_claim("TP53 is a tumor suppressor.", []) is False
 
+    def test_empty_summary_not_flagged(self):
+        assert _looks_like_unverified_execution_claim("   ", []) is False
+
+    def test_submit_claim_without_generated_id_is_flagged(self):
+        summary = "I created a job for your sequence and it is queued."
+        assert _looks_like_unverified_execution_claim(summary, []) is True
+
+    def test_running_claim_without_tools_is_flagged(self):
+        summary = "The workflow is running with your inputs now."
+        assert _looks_like_unverified_execution_claim(summary, []) is True
+
 
 class TestTaskHelpers:
     def test_extract_task_output_paths(self):
@@ -31,3 +42,6 @@ class TestTaskHelpers:
         parsed = _parse_task_probe_json(raw)
         assert parsed["task_abc"] == "completed"
         assert parsed["task_def"] == "running"
+
+    def test_parse_task_probe_json_empty(self):
+        assert _parse_task_probe_json("") == {}
