@@ -31,6 +31,63 @@ logger = logging.getLogger("runner")
 OPENAI_MAX_TOOLS = 128
 
 
+def _classify_llm_error(exc: Exception) -> tuple[str, str] | None:
+    """Map a known model-provider exception to ``(title, friendly_body)``.
+
+    Returns ``None`` for unrecognized errors so the caller can fall back to the
+    generic error path (full traceback in logs). Recognized errors get a short,
+    actionable message instead of a multi-frame traceback dumped to the console.
+    """
+    text = str(exc)
+    low = text.lower()
+    status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+
+    is_auth = (
+        status == 401
+        or "authentication_error" in low
+        or "invalid x-api-key" in low
+        or "invalid api key" in low
+        or "incorrect api key" in low
+        or ("unauthorized" in low and "401" in low)
+    )
+    if is_auth:
+        return (
+            "Authentication failed",
+            "Your model provider rejected the API key (401 — invalid or missing).\n"
+            "Set a valid key, then re-run your query:\n"
+            "  • fastfold config set llm.anthropic_api_key sk-ant-...\n"
+            "  • or run: fastfold setup",
+        )
+
+    is_rate = (
+        status == 429
+        or "rate_limit" in low
+        or "rate limit" in low
+        or "overloaded" in low
+    )
+    if is_rate:
+        return (
+            "Rate limited",
+            "The model provider is rate-limiting or overloaded (429).\n"
+            "Wait a few seconds and try again.",
+        )
+
+    is_conn = (
+        isinstance(exc, (ConnectionError, TimeoutError))
+        or "connection error" in low
+        or "timed out" in low
+        or "timeout" in low
+    )
+    if is_conn:
+        return (
+            "Connection problem",
+            "Could not reach the model provider.\n"
+            "Check your network connection and try again.",
+        )
+
+    return None
+
+
 def _claude_sdk_cli_path() -> str | None:
     """Delegates to ``resolve_claude_sdk_cli_path()`` (thin wrapper for readability)."""
 
@@ -1781,6 +1838,7 @@ class AgentRunner:
                 duration,
                 input_tokens=int(token_usage.get("input_tokens", 0)),
                 output_tokens=int(token_usage.get("output_tokens", 0)),
+                cache_read_tokens=int(token_usage.get("cache_read_input_tokens", 0)),
             )
             if pending_background_tasks:
                 self.session.console.print(
@@ -1879,10 +1937,13 @@ class AgentRunner:
 
                 exclude_cats = set(EXPERIMENTAL_CATEGORIES)
 
+            tool_mode = str(config.get("agent.tool_mode", "native") or "native").strip().lower()
+
             tools, sandbox, code_trace_buffer, display_name_map = create_ct_langchain_tools(
                 self.session,
                 exclude_categories=exclude_cats,
                 provider=provider,
+                tool_mode=tool_mode,
             )
 
             # ----- System prompt (skills handled natively by deepagents) -----
@@ -1904,6 +1965,8 @@ class AgentRunner:
                 history=history,
                 include_skills=False,
                 runtime="deepagents",
+                tool_mode=tool_mode,
+                exclude_categories=exclude_cats,
             )
 
             # ----- User prompt -----
@@ -1972,11 +2035,28 @@ class AgentRunner:
                 on_activity=progress_callback,
                 code_trace_buffer=code_trace_buffer,
                 display_name_map=display_name_map,
+                group_tools=bool(config.get("agent.group_tool_traces", True)),
+                tool_detail_limit=int(config.get("agent.tool_trace_detail_limit", 8)),
             )
             thinking_status = None  # consumed by process_events
         except Exception as e:  # noqa: BLE001
-            logger.error("deepagents query failed: %s\n%s", e, traceback.format_exc())
             duration = time.time() - t0
+            if thinking_status is not None:
+                thinking_status.stop()
+                thinking_status = None
+            classified = _classify_llm_error(e)
+            if classified is not None:
+                title, body = classified
+                # Expected/actionable error: keep the console clean and stash the
+                # full traceback at debug level only (surfaces in verbose mode).
+                logger.debug(
+                    "deepagents query failed (%s): %s\n%s", title, e, traceback.format_exc()
+                )
+                self._print_friendly_error(title, body)
+                return self._make_error_result(
+                    query, f"{title}: {body.splitlines()[0]}", duration
+                )
+            logger.error("deepagents query failed: %s\n%s", e, traceback.format_exc())
             return self._make_error_result(query, str(e), duration)
         finally:
             if thinking_status is not None:
@@ -2077,6 +2157,7 @@ class AgentRunner:
                 duration,
                 input_tokens=int(token_usage.get("input_tokens", 0)),
                 output_tokens=int(token_usage.get("output_tokens", 0)),
+                cache_read_tokens=int(token_usage.get("cache_read_input_tokens", 0)),
             )
 
         return exec_result
@@ -2547,6 +2628,7 @@ class AgentRunner:
                     duration,
                     input_tokens=int(token_usage.get("input_tokens", 0)),
                     output_tokens=int(token_usage.get("output_tokens", 0)),
+                    cache_read_tokens=int(token_usage.get("cache_read_input_tokens", 0)),
                 )
 
             return exec_result
@@ -3240,8 +3322,14 @@ class AgentRunner:
         except Exception:
             return 0
 
-    def _print_usage(self, result_msg, duration: float, input_tokens: int = 0, output_tokens: int = 0):
-        """Print per-turn usage summary footer."""
+    def _print_usage(self, result_msg, duration: float, input_tokens: int = 0,
+                     output_tokens: int = 0, cache_read_tokens: int = 0):
+        """Print per-turn usage summary footer.
+
+        The ``↑`` figure shows fresh (non-cached) input only — i.e. total input
+        minus prompt-cache reads — so long agentic turns that re-send a large
+        cached prefix on every model call don't surface alarming totals.
+        """
         verb = self._random_usage_word()
         if duration >= 60:
             mins = int(duration // 60)
@@ -3252,13 +3340,17 @@ class AgentRunner:
 
         in_tokens = self._coerce_int(input_tokens)
         out_tokens = self._coerce_int(output_tokens)
+        cache_read = self._coerce_int(cache_read_tokens)
         if result_msg is not None and (in_tokens <= 0 and out_tokens <= 0):
             usage = getattr(result_msg, "usage", None)
             in_tokens = self._coerce_int(getattr(usage, "input_tokens", 0))
             out_tokens = self._coerce_int(getattr(usage, "output_tokens", 0))
+            if cache_read <= 0:
+                cache_read = self._coerce_int(getattr(usage, "cache_read_input_tokens", 0))
 
+        fresh_in = max(0, in_tokens - cache_read)
         left = f"✻ {verb} for {duration_text}"
-        right = f"↑ {in_tokens:,} ↓ {out_tokens:,}"
+        right = f"↑ {fresh_in:,} ↓ {out_tokens:,}"
         term_width = max(40, int(getattr(self.session.console, "width", 100) or 100))
         inner_width = max(10, term_width - 2)
         if len(left) + len(right) + 1 <= inner_width:
@@ -3274,6 +3366,29 @@ class AgentRunner:
     # ------------------------------------------------------------------
     # Error handling
     # ------------------------------------------------------------------
+
+    def _print_friendly_error(self, title: str, body: str) -> None:
+        """Render a concise, actionable error to the console (no traceback)."""
+        if getattr(self, "_headless", False):
+            return
+        console = getattr(getattr(self, "session", None), "console", None)
+        if console is None:
+            return
+        try:
+            from rich.panel import Panel
+
+            console.print()
+            console.print(
+                Panel(
+                    body,
+                    title=f"[bold red]{title}[/bold red]",
+                    border_style="red",
+                    expand=False,
+                    padding=(0, 1),
+                )
+            )
+        except Exception:  # noqa: BLE001
+            console.print(f"\n  [red]{title}:[/red] {body}")
 
     @staticmethod
     def _make_error_result(query: str, error: str, duration: float) -> ExecutionResult:

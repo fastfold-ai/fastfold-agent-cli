@@ -41,6 +41,27 @@ _SAFE_PIPE_RHS = {
     "cat", "less", "more", "tr", "tee", "xargs",
 }
 
+# A leading ``cd <dir> &&`` prefix is a near-universal habit for running a
+# script from a specific directory. Rather than blocking it (which causes the
+# agent to retry repeatedly), we extract the directory and run the remaining
+# single command there. The directory is a plain path (no operators/expansion).
+_CD_PREFIX = re.compile(r"""^\s*cd\s+("[^"]+"|'[^']+'|[^\s&;|<>`$]+)\s*&&\s*(.+)$""", re.DOTALL)
+
+
+def _split_cd_prefix(command: str) -> tuple[str | None, str]:
+    """Split a leading ``cd <dir> &&`` off a command.
+
+    Returns ``(dir_or_None, remaining_command)``. If there is no such prefix,
+    ``dir`` is ``None`` and the command is returned unchanged.
+    """
+    match = _CD_PREFIX.match(command or "")
+    if not match:
+        return None, command
+    raw_dir = match.group(1).strip()
+    if (raw_dir[:1], raw_dir[-1:]) in (('"', '"'), ("'", "'")):
+        raw_dir = raw_dir[1:-1]
+    return raw_dir, match.group(2).strip()
+
 
 def _is_blocked(command: str) -> str | None:
     """Return a reason string if the command is blocked, else None."""
@@ -95,24 +116,48 @@ def _is_blocked(command: str) -> str | None:
 
 @registry.register(
     name="shell.run",
-    description="Run a shell command in the current working directory",
+    description=(
+        "Run a single shell command. To run in a specific directory, pass "
+        "working_dir (preferred) or a leading 'cd <dir> &&' prefix — do not chain "
+        "multiple commands with && or use redirection."
+    ),
     category="shell",
     parameters={
-        "command": "Shell command to execute",
+        "command": "Shell command to execute (a single command)",
+        "working_dir": "Directory to run the command in (optional; absolute path preferred)",
         "timeout": "Timeout in seconds (default 30, max 300)",
     },
     usage_guide=(
         "Use to run a single shell command: scripts, data processing, git, pip, etc. "
-        "Commands run in the current working directory. Dangerous commands and shell "
-        "operators (pipes/redirection/chaining) are blocked for safety."
+        "Set working_dir to run from a directory (e.g. a skill folder) instead of "
+        "'cd ... &&'. Dangerous commands and shell operators (multi-command chaining, "
+        "redirection) are blocked for safety."
     ),
 )
-def shell_run(command: str, timeout: int = 30, **kwargs) -> dict:
+def shell_run(command: str, working_dir: str = None, timeout: int = 30, **kwargs) -> dict:
     """Run a shell command and return stdout/stderr."""
-    # Safety check
+    # Accommodate the common ``cd <dir> && <cmd>`` habit: extract the directory
+    # and run the remaining single command there instead of blocking it.
+    cd_dir, command = _split_cd_prefix(command)
+    if cd_dir and not working_dir:
+        working_dir = cd_dir
+
+    # Safety check (on the remaining single command)
     blocked = _is_blocked(command)
     if blocked:
         return {"summary": f"Command blocked: {blocked}", "error": "blocked_command"}
+
+    # Resolve and validate the working directory
+    cwd = Path.cwd()
+    if working_dir:
+        candidate = Path(working_dir).expanduser()
+        if not candidate.is_dir():
+            return {
+                "summary": f"Working directory not found: {working_dir}",
+                "error": "invalid_working_dir",
+                "exit_code": -1,
+            }
+        cwd = candidate
 
     # Cap timeout
     timeout = min(max(timeout, 1), 300)
@@ -135,7 +180,7 @@ def shell_run(command: str, timeout: int = 30, **kwargs) -> dict:
         result = subprocess.run(
             run_args,
             shell=use_shell,
-            cwd=str(Path.cwd()),
+            cwd=str(cwd),
             capture_output=True,
             text=True,
             timeout=timeout,

@@ -176,7 +176,8 @@ def _make_tool_handler(tool_obj, session):
 # run_python sandbox tool
 # ---------------------------------------------------------------------------
 
-def _make_run_python_handler(session, code_trace_buffer: list | None = None):
+def _make_run_python_handler(session, code_trace_buffer: list | None = None,
+                             tools_namespace=None):
     """Create the run_python MCP tool handler with a persistent Sandbox.
 
     The sandbox is created lazily on first invocation and persists across
@@ -190,6 +191,9 @@ def _make_run_python_handler(session, code_trace_buffer: list | None = None):
             appends structured execution metadata after each call. This
             bypasses the SDK message stream (which may truncate tool results)
             so the trace collector gets full code, stdout, and plot data.
+        tools_namespace: Optional Programmatic Tool Calling (PTC) namespace of
+            domain-tool callables to bind as ``tools`` in the sandbox. See
+            :mod:`agent.ptc_tools`.
     """
     from agent.sandbox import Sandbox
 
@@ -213,6 +217,8 @@ def _make_run_python_handler(session, code_trace_buffer: list | None = None):
         extra_read_dirs=extra_read_dirs or None,
     )
     sandbox.load_datasets()
+    if tools_namespace is not None:
+        sandbox.inject_tools(tools_namespace)
 
     async def handler(args: dict[str, Any]) -> dict[str, Any]:
         code = args.get("code", "")

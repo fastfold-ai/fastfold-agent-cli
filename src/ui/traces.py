@@ -44,6 +44,20 @@ def truncate_output(text: str, max_chars: int = 200) -> str:
     return text[:max_chars] + f"... [{len(text)} chars total]"
 
 
+def format_duration(seconds: float) -> str:
+    """Format an elapsed duration with a sensible unit.
+
+    Sub-second durations show milliseconds (e.g. ``42ms``) so fast tool calls
+    don't all collapse to ``0.0s``; longer ones show seconds or ``m s``.
+    """
+    seconds = max(0.0, float(seconds))
+    if seconds < 1:
+        return f"{int(round(seconds * 1000))}ms"
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    return f"{int(seconds // 60)}m {int(seconds % 60)}s"
+
+
 class TraceRenderer:
     """Renders tool call traces to a Rich Console.
 
@@ -83,7 +97,7 @@ class TraceRenderer:
         header.append("  \u2713 ", style="bold green")
         header.append(clean, style="green")
         if duration > 0:
-            header.append(f"  {duration:.1f}s", style="dim")
+            header.append(f"  {format_duration(duration)}", style="dim")
         self.console.print(header)
 
         if args_str:
@@ -101,6 +115,40 @@ class TraceRenderer:
         if error:
             err_text = truncate_output(error)
             self.console.print(f"    [red]{err_text}[/red]")
+
+    def render_todos(self, todos) -> None:
+        """Render a deepagents ``write_todos`` update as a checklist.
+
+        ``todos`` is a list of ``{"content": str, "status": str}`` dicts. Status
+        is one of pending / in_progress / completed (others rendered as pending).
+        """
+        if not isinstance(todos, list) or not todos:
+            return
+
+        marks = {
+            "completed": ("[x]", "green"),
+            "in_progress": ("[~]", "yellow"),
+            "pending": ("[ ]", "dim"),
+        }
+        header = Text()
+        header.append("  \u25b8 ", style="bold cyan")
+        header.append("todos", style="cyan")
+        done = sum(1 for t in todos if isinstance(t, dict) and t.get("status") == "completed")
+        header.append(f"  {done}/{len(todos)}", style="dim")
+        self.console.print(header)
+
+        for todo in todos:
+            if not isinstance(todo, dict):
+                continue
+            content = str(todo.get("content", "")).strip()
+            if not content:
+                continue
+            status = str(todo.get("status", "pending")).lower()
+            mark, style = marks.get(status, marks["pending"])
+            line = Text("    ")
+            line.append(f"{mark} ", style=style)
+            line.append(content, style=("dim" if status == "completed" else style))
+            self.console.print(line)
 
     def render_reasoning(self, text: str) -> None:
         """Render Claude's reasoning text between tool calls."""

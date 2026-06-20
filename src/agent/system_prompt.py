@@ -123,6 +123,8 @@ def build_system_prompt(
     user_request: str | None = None,
     include_skills: bool = True,
     runtime: str = "sdk",
+    tool_mode: str = "native",
+    exclude_categories: set[str] | None = None,
 ) -> str:
     """Build the unified system prompt for the agent runner.
 
@@ -137,6 +139,11 @@ def build_system_prompt(
             progressive disclosure, so it passes ``include_skills=False``.
         runtime: Either ``"sdk"`` or ``"deepagents"`` — selects runtime-specific
             execution notes.
+        tool_mode: ``"native"`` (per-tool schemas) or ``"ptc"`` (Programmatic
+            Tool Calling). In PTC mode a compact catalog of domain tools is
+            embedded and the model calls them as Python inside ``run_python``.
+        exclude_categories: Tool categories omitted from the runtime, so the PTC
+            catalog matches the tools actually available.
 
     Returns:
         The complete system prompt string.
@@ -146,11 +153,27 @@ def build_system_prompt(
     # 1. Identity
     parts.append(_IDENTITY)
 
-    # 2. Tool catalog (concise reference — full descriptions are in MCP tool defs)
-    # NOTE: The Agent SDK exposes tool names+descriptions+schemas via MCP natively.
-    # We only include a brief orientation here, NOT the full tool_descriptions_for_llm()
-    # which would blow up the system prompt to 155K chars and hit ARG_MAX limits.
-    if tool_names:
+    ptc = str(tool_mode).strip().lower() == "ptc"
+
+    # 2. Tool catalog. In PTC mode we embed a compact domain-tool catalog
+    # (category counts + names-only listing) instead of relying on per-tool
+    # schemas; the model invokes tools as Python inside run_python.
+    if ptc:
+        try:
+            from agent.ptc_tools import build_tool_catalog
+
+            parts.append(
+                "\n"
+                + build_tool_catalog(exclude_categories=exclude_categories or set())
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Could not build PTC tool catalog: %s", e)
+        parts.append(
+            "\nOther tools: **run_python** (write code here; the `tools` namespace is "
+            "pre-bound), **run_r** (R via rpy2), **shell_run** (run skill scripts / shell "
+            "commands), **search_tools** (look up domain-tool signatures).\n"
+        )
+    elif tool_names:
         parts.append(f"\n## Available Tools ({len(tool_names)} total)\n")
         parts.append(
             "You have access to all tools via MCP. Key tools:\n"

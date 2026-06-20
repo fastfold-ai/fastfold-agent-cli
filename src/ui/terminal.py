@@ -786,8 +786,13 @@ class InteractiveTerminal:
         except Exception:
             return 0
 
-    def _set_active_usage(self, input_tokens=None, output_tokens=None) -> None:
-        in_tokens = self._coerce_token_count(input_tokens)
+    def _set_active_usage(self, input_tokens=None, output_tokens=None,
+                          cache_read_tokens=None) -> None:
+        # Track fresh (non-cached) input only — subtract prompt-cache reads so the
+        # live counter doesn't balloon when a large cached prefix is re-sent on
+        # every model call of a long agentic turn.
+        cache_read = self._coerce_token_count(cache_read_tokens)
+        in_tokens = max(0, self._coerce_token_count(input_tokens) - cache_read)
         out_tokens = self._coerce_token_count(output_tokens)
         with self._run_lock:
             if in_tokens > self._active_input_tokens:
@@ -1032,6 +1037,7 @@ class InteractiveTerminal:
                             self._set_active_usage(
                                 payload.get("input_tokens"),
                                 payload.get("output_tokens"),
+                                payload.get("cache_read_input_tokens"),
                             )
                         if "streamed_chars" in payload:
                             self._set_active_streamed_chars(payload.get("streamed_chars"))
@@ -2182,7 +2188,12 @@ class InteractiveTerminal:
             if idx < len(rows_snapshot):
                 row = rows_snapshot[idx]
                 if isinstance(row, dict):
-                    input_tokens = self._coerce_int(row.get("input_tokens"))
+                    # Show fresh (non-cached) input only, matching the live footer.
+                    input_tokens = max(
+                        0,
+                        self._coerce_int(row.get("input_tokens"))
+                        - self._coerce_int(row.get("cache_read_tokens")),
+                    )
                     output_tokens = self._coerce_int(row.get("output_tokens"))
             if answer and not rendered_from_trace:
                 print_markdown_with_mermaid(

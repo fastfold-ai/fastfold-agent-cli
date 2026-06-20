@@ -207,6 +207,45 @@ def _cap_tools_for_openai(tools: list, max_total: int = OPENAI_TOOL_BUDGET) -> l
     return selected
 
 
+def _make_search_tools_tool(exclude_categories: set[str], exclude_tools: set[str]):
+    """Build the on-demand ``search_tools`` StructuredTool used in PTC mode."""
+    from langchain_core.tools import StructuredTool
+    from pydantic import BaseModel, ConfigDict, Field
+    from agent.ptc_tools import search_tools_text
+
+    class SearchToolsArgs(BaseModel):
+        model_config = ConfigDict(protected_namespaces=())
+        query: str = Field(description="Keywords describing the tool you need")
+        category: Optional[str] = Field(
+            default=None, description="Optional category to restrict the search"
+        )
+        limit: Optional[int] = Field(default=12, description="Max results (default 12)")
+
+    async def _coroutine(query: str, category: str | None = None, limit: int | None = 12):
+        return search_tools_text(
+            query,
+            category=category,
+            limit=int(limit or 12),
+            exclude_categories=exclude_categories,
+            exclude_tools=exclude_tools,
+        )
+
+    def _sync_unsupported(**_kwargs):  # pragma: no cover - deepagents runs async
+        raise NotImplementedError("This tool is async-only; call via ainvoke.")
+
+    return StructuredTool(
+        name="search_tools",
+        description=(
+            "Search the domain-tool catalog and return exact call signatures "
+            "(tools.<category>.<name>(params) -> dict) for tools matching a query. "
+            "Use before calling an unfamiliar domain tool inside run_python."
+        ),
+        args_schema=SearchToolsArgs,
+        func=_sync_unsupported,
+        coroutine=_coroutine,
+    )
+
+
 def create_ct_langchain_tools(
     session,
     *,
@@ -214,8 +253,19 @@ def create_ct_langchain_tools(
     exclude_tools: set[str] | None = None,
     include_run_python: bool = True,
     provider: str = "anthropic",
+    tool_mode: str = "native",
 ) -> tuple[list, Any, list[dict], dict[str, str]]:
     """Build LangChain tools for the deepagents graph from the ct registry.
+
+    ``tool_mode`` selects the strategy:
+
+    - ``"native"`` (default): every domain tool is exposed as its own
+      ``StructuredTool`` schema.
+    - ``"ptc"``: Programmatic Tool Calling. Domain tools are injected as Python
+      callables into the run_python sandbox (the model calls them in code), so
+      only ``run_python``/``run_r``/``shell_run``/``search_tools`` are exposed as
+      tool schemas. This sharply reduces per-call input tokens and removes the
+      OpenAI tool-count ceiling.
 
     Returns ``(tools, sandbox, code_trace_buffer, display_name_map)`` where
     ``display_name_map`` maps the sanitized (provider-safe) tool name back to
@@ -247,43 +297,83 @@ def create_ct_langchain_tools(
         used_names.add(candidate)
         return candidate
 
-    for tool_obj in registry.list_tools():
-        if tool_obj.category in exclude_categories:
-            continue
-        if tool_obj.name in exclude_tools:
-            continue
-        if tool_obj.category in EXPERIMENTAL_CATEGORIES:
-            continue
+    ptc = str(tool_mode).strip().lower() == "ptc"
+    tools_namespace = None
 
-        safe_name = _unique(tool_obj.name)
-        display_name_map[safe_name] = tool_obj.name
-        description = tool_obj.description or tool_obj.name
-        if getattr(tool_obj, "usage_guide", ""):
-            description = f"{description}\nUSE WHEN: {tool_obj.usage_guide}"[:1024]
+    if ptc:
+        from agent.ptc_tools import build_tools_namespace
 
-        tools.append(
-            _make_lc_tool(
-                name=safe_name,
-                description=description,
-                args_schema=_args_schema_for(safe_name, tool_obj.parameters),
-                handler=_make_tool_handler(tool_obj, session),
-            )
+        ptc_excludes = set(exclude_categories) | set(EXPERIMENTAL_CATEGORIES)
+        tools_namespace = build_tools_namespace(
+            session, exclude_categories=ptc_excludes, exclude_tools=exclude_tools
         )
+
+        used_names.add("search_tools")
+        display_name_map["search_tools"] = "search_tools"
+        tools.append(_make_search_tools_tool(ptc_excludes, set(exclude_tools)))
+
+        # Expose shell.run as a first-class tool so skills can run scripts
+        # directly (rather than wrapping every command in run_python).
+        shell_obj = registry.get_tool("shell.run")
+        if shell_obj is not None:
+            safe_name = _unique(shell_obj.name)
+            display_name_map[safe_name] = shell_obj.name
+            tools.append(
+                _make_lc_tool(
+                    name=safe_name,
+                    description=shell_obj.description or shell_obj.name,
+                    args_schema=_args_schema_for(safe_name, shell_obj.parameters),
+                    handler=_make_tool_handler(shell_obj, session),
+                )
+            )
+    else:
+        for tool_obj in registry.list_tools():
+            if tool_obj.category in exclude_categories:
+                continue
+            if tool_obj.name in exclude_tools:
+                continue
+            if tool_obj.category in EXPERIMENTAL_CATEGORIES:
+                continue
+
+            safe_name = _unique(tool_obj.name)
+            display_name_map[safe_name] = tool_obj.name
+            description = tool_obj.description or tool_obj.name
+            if getattr(tool_obj, "usage_guide", ""):
+                description = f"{description}\nUSE WHEN: {tool_obj.usage_guide}"[:1024]
+
+            tools.append(
+                _make_lc_tool(
+                    name=safe_name,
+                    description=description,
+                    args_schema=_args_schema_for(safe_name, tool_obj.parameters),
+                    handler=_make_tool_handler(tool_obj, session),
+                )
+            )
 
     sandbox = None
     if include_run_python:
-        rp_handler, sandbox = _make_run_python_handler(session, code_trace_buffer)
+        rp_handler, sandbox = _make_run_python_handler(
+            session, code_trace_buffer, tools_namespace=tools_namespace
+        )
         display_name_map["run_python"] = "run_python"
         used_names.add("run_python")
+        rp_description = (
+            "Execute Python code in a persistent sandbox. Variables persist "
+            "between calls. Pre-imported: pd, np, plt, sns, scipy_stats, sklearn, "
+            "json, re, math, Path, safe_subprocess_run. Save plots to OUTPUT_DIR. "
+            "When done, assign result = {'summary': '...', 'answer': '...'}."
+        )
+        if ptc:
+            rp_description += (
+                " The full domain-tool library is pre-bound as `tools` — call "
+                "tools.<category>.<name>(**kwargs) -> dict and process results here; "
+                "only what you print returns. Use tools.search('...') or the "
+                "search_tools tool to find signatures."
+            )
         tools.append(
             _make_lc_tool(
                 name="run_python",
-                description=(
-                    "Execute Python code in a persistent sandbox. Variables persist "
-                    "between calls. Pre-imported: pd, np, plt, sns, scipy_stats, sklearn, "
-                    "json, re, math, Path, safe_subprocess_run. Save plots to OUTPUT_DIR. "
-                    "When done, assign result = {'summary': '...', 'answer': '...'}."
-                ),
+                description=rp_description,
                 args_schema=_args_schema_for("run_python", None, required_code=True),
                 handler=rp_handler,
                 strip_none=False,
@@ -313,7 +403,9 @@ def create_ct_langchain_tools(
         except ImportError:
             logger.info("rpy2 not available — run_r tool disabled")
 
-    if str(provider).strip().lower() == "openai":
+    # PTC exposes only a handful of tools, so the OpenAI tool-count ceiling
+    # never applies; the cap is only needed for the native fan-out.
+    if not ptc and str(provider).strip().lower() == "openai":
         tools = _cap_tools_for_openai(tools)
 
     return tools, sandbox, code_trace_buffer, display_name_map
@@ -383,11 +475,21 @@ async def process_events(
     on_activity=None,
     code_trace_buffer: list[dict] | None = None,
     display_name_map: dict[str, str] | None = None,
+    group_tools: bool = True,
+    tool_detail_limit: int = 8,
 ) -> dict:
     """Consume ``astream_events`` (v2) into the ct result/trace contract.
 
     Mirrors :func:`agent.runner.process_messages` so downstream ExecutionResult
     construction, trace export, and usage accounting are unchanged.
+
+    Tool-call rendering: when ``group_tools`` is True, the most recent
+    ``tool_detail_limit`` tools in a consecutive batch are shown in full (name,
+    args, output) and older ones collapse progressively to a one-line, still
+    named ``✓ name (Xs)`` entry as newer tools complete — so the current/last
+    call stays detailed while earlier ones compact away. Errors are always shown
+    in full. Todos render as a checklist and the batch flushes whenever the
+    assistant writes text. Set ``group_tools`` False to show every tool in full.
     """
     display_name_map = display_name_map or {}
     full_text: list[str] = []
@@ -397,6 +499,12 @@ async def process_events(
     model_call_count = 0
     code_cursor = 0
     spinner = {"obj": thinking_status}
+    group = {"active": False, "count": 0, "errors": 0, "start": 0.0}
+    # Trailing-detail buffer: the most recent `detail_window` completed tools are
+    # held back and shown in full; as newer tools complete, older ones spill out
+    # of the window and are flushed as compact, still-named lines.
+    pending: list[dict] = []
+    detail_window = max(1, int(tool_detail_limit))
     token_usage = {
         "input_tokens": 0,
         "output_tokens": 0,
@@ -463,6 +571,37 @@ async def process_events(
                 cache_read_input_tokens=int(token_usage["cache_read_input_tokens"]),
             )
 
+    def _flush_one(item: dict, *, full: bool) -> None:
+        """Render one buffered tool result, full or compact (errors always full)."""
+        if headless or trace_renderer is None:
+            return
+        name = item.get("name") or "unknown"
+        if full or item.get("is_error"):
+            if item.get("is_error"):
+                trace_renderer.render_tool_error(name, item.get("result_text", ""))
+            else:
+                trace_renderer.render_tool_complete(
+                    name,
+                    item.get("input") or {},
+                    item.get("result_text", ""),
+                    float(item.get("duration", 0.0)),
+                )
+        else:
+            from ui.traces import format_duration
+
+            dur = format_duration(float(item.get("duration", 0.0)))
+            trace_renderer.console.print(
+                f"  [green]\u2713[/] [dim]{name} ({dur})[/]"
+            )
+
+    def _close_group() -> None:
+        """Flush any buffered tools in full detail and reset the batch state."""
+        while pending:
+            _flush_one(pending.pop(0), full=True)
+        if not group["active"]:
+            return
+        group.update({"active": False, "count": 0, "errors": 0, "start": 0.0})
+
     async for event in events_iter:
         etype = event.get("event", "")
         data = event.get("data", {}) or {}
@@ -471,6 +610,8 @@ async def process_events(
             chunk = data.get("chunk")
             text = _text_from_content(getattr(chunk, "content", "")) if chunk is not None else ""
             if text:
+                if group_tools:
+                    _close_group()
                 _stop_spinner()
                 streamed_len += len(text)
                 _emit_progress("stream", streamed_chars=int(streamed_len))
@@ -482,6 +623,8 @@ async def process_events(
             _add_usage(output)
             text = _text_from_content(getattr(output, "content", "")) if output is not None else ""
             if text.strip():
+                if group_tools:
+                    _close_group()
                 _stop_spinner()
                 full_text.append(text)
                 if trace_events is not None:
@@ -515,8 +658,27 @@ async def process_events(
                         "timestamp": now,
                     }
                 )
+            is_todos = display == "write_todos"
+            if group_tools and not is_todos:
+                # Detail is deferred to tool-end (trailing window), so the
+                # current call surfaces live via the spinner/toolbar instead of a
+                # start line that we'd be unable to collapse later.
+                if not group["active"]:
+                    group.update({"active": True, "count": 0, "errors": 0, "start": now})
+                group["count"] = int(group["count"]) + 1
+                _emit_progress("activity", text=f"\u25b8 {display}")
+                _start_evaluating_spinner()
+                continue
+
             if not headless and trace_renderer:
-                trace_renderer.render_tool_start(display, tool_input)
+                if is_todos:
+                    # Todos stay visible; close any open group first so the
+                    # checklist isn't swallowed by the collapsed summary.
+                    if group_tools:
+                        _close_group()
+                    trace_renderer.render_todos(tool_input.get("todos"))
+                else:
+                    trace_renderer.render_tool_start(display, tool_input)
             _emit_progress("activity", text=f"\u25b8 {display}")
             _start_evaluating_spinner()
             continue
@@ -571,8 +733,31 @@ async def process_events(
                         )
                 trace_events.append(evt)
 
-            if not headless and trace_renderer:
+            if group_tools and display != "write_todos":
                 if is_error:
+                    group["errors"] = int(group["errors"]) + 1
+                # Buffer this result as the new "current" full-detail call; spill
+                # anything older than the trailing window out as a compact line.
+                pending.append(
+                    {
+                        "name": display or "unknown",
+                        "input": tool_input,
+                        "result_text": result_text,
+                        "duration": duration,
+                        "is_error": is_error,
+                    }
+                )
+                while len(pending) > detail_window:
+                    _flush_one(pending.pop(0), full=False)
+                _emit_progress("activity", text=f"\u25b8 {display}")
+                continue
+
+            if not headless and trace_renderer:
+                if display == "write_todos":
+                    # The checklist was already rendered at tool-start; the raw
+                    # Command(update=...) echo would just add noise.
+                    pass
+                elif is_error:
                     trace_renderer.render_tool_error(display or "unknown", result_text)
                 else:
                     trace_renderer.render_tool_complete(
@@ -580,6 +765,8 @@ async def process_events(
                     )
             continue
 
+    if group_tools:
+        _close_group()
     _stop_spinner()
 
     return {

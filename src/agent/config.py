@@ -183,6 +183,24 @@ DEFAULTS = {
     # Agent SDK + OpenAI loop). In-process providers (local, gluelm) always use
     # the sdk path regardless of this setting.
     "agent.runtime": "deepagents",
+    # Tool-calling strategy for the deepagents runtime: "ptc" (Programmatic Tool
+    # Calling, default — domain tools are injected as Python callables inside
+    # run_python and the model invokes them in code, with only a compact catalog
+    # + search_tools in context) or "native" (each domain tool exposed as its own
+    # LangChain tool schema). PTC sharply cuts per-call input tokens (~38K on the
+    # full catalog) and removes the OpenAI tool-count ceiling. Ignored by the sdk
+    # runtime. Set to "native" to restore per-tool schemas.
+    "agent.tool_mode": "ptc",
+    # Tool-call rendering (deepagents runtime only). When True, the most recent
+    # `agent.tool_trace_detail_limit` tool calls in a consecutive batch stay in
+    # full detail (name, args, output) and older ones collapse progressively to a
+    # one-line, still named "✓ name (Xs)" entry as newer calls complete — the
+    # current/last call stays detailed while earlier ones compact away. Errors
+    # always show in full. Set False to show every tool call fully verbose.
+    "agent.group_tool_traces": True,
+    # Trailing window: how many most-recent tool calls keep full detail before
+    # older ones collapse to compact named lines. 1 = only the last call full.
+    "agent.tool_trace_detail_limit": 1,
     "agent.enable_experimental_tools": False,
     "skills.allow_agent_install": False,
     "agent.observer_model": None,
