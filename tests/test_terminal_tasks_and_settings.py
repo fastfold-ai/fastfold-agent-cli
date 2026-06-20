@@ -64,9 +64,7 @@ class TestTerminalTasksAndUsage:
         term.agent = SimpleNamespace(_runner=runner)
         with patch("ui.terminal.time.time", return_value=90.0):
             term._show_tasks(force_refresh=True)
-        runner.refresh_background_watch_status.assert_called_once_with(
-            force=True, include_taskoutput=True
-        )
+        runner.refresh_background_watch_status.assert_called_once_with(force=True)
         term.console.print.assert_called()
 
     def test_show_usage_fallback_no_calls(self):

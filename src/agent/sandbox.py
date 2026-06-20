@@ -288,6 +288,15 @@ class Sandbox:
                 pass  # Dataset not configured — skip silently
         return loaded
 
+    def inject_tools(self, tools_namespace) -> None:
+        """Bind a ``tools`` namespace of domain-tool callables (PTC mode).
+
+        Enables Programmatic Tool Calling: the model invokes domain tools as
+        ``tools.<category>.<name>(...)`` inside executed code rather than via
+        individual tool-call schemas. See :mod:`agent.ptc_tools`.
+        """
+        self._namespace["tools"] = tools_namespace
+
     def get_variable(self, name: str, default=None):
         """Retrieve a variable from the sandbox namespace."""
         return self._namespace.get(name, default)
@@ -313,6 +322,17 @@ class Sandbox:
                 libs.append(name)
         lines.append(f"**Libraries**: {', '.join(libs)}")
         lines.append(f"**OUTPUT_DIR**: Path('{self.output_dir}') — save plots/CSVs here\n")
+
+        # PTC: domain tools injected as callables (see agent.ptc_tools)
+        tools_ns = self._namespace.get("tools")
+        if tools_ns is not None:
+            cats = getattr(tools_ns, "categories", None)
+            total = sum(cats.values()) if isinstance(cats, dict) else 0
+            lines.append(
+                f"**tools**: {total} domain tools as callables — "
+                "`tools.<category>.<name>(**kwargs) -> dict`. "
+                "Use `tools.search('query')` / `tools.list('<category>')` to discover.\n"
+            )
 
         # Datasets
         dataset_names = ["crispr", "prism", "l1000", "proteomics", "mutations", "model_metadata"]

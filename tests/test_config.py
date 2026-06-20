@@ -480,13 +480,6 @@ def test_install_uv_flavor_roundtrip():
     assert cfg.get("install.uv_flavor") == "all"
 
 
-def test_llm_preflight_requires_model_for_local():
-    cfg = Config(data={"llm.provider": "local", "llm.model": None})
-    issue = cfg.llm_preflight_issue()
-    assert issue is not None
-    assert "llm.model is required" in issue
-
-
 def test_llm_preflight_rejects_unknown_provider():
     cfg = Config(data={"llm.provider": "mystery_provider"})
     issue = cfg.llm_preflight_issue()

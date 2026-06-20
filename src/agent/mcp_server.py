@@ -1,45 +1,17 @@
 """
-MCP tool server for the Claude Agent SDK.
+Shared tool handlers for the deepagents runtime.
 
-Wraps the existing ct ToolRegistry so every registered tool is exposed as an
-MCP tool that the Agent SDK can invoke. Also provides a persistent ``run_python``
-sandbox tool for multi-turn code execution.
+Wraps the ct ToolRegistry so each registered tool can be invoked as a handler,
+and provides the persistent ``run_python`` / ``run_r`` sandbox handlers used by
+the deepagents LangChain tool layer.
 """
 
 import asyncio
 import logging
 from pathlib import Path
 from typing import Any
-from dataclasses import dataclass
-
-from claude_agent_sdk import SdkMcpTool, create_sdk_mcp_server
 
 logger = logging.getLogger("mcp_server")
-
-
-@dataclass
-class RuntimeToolSpec:
-    """Provider-neutral tool specification."""
-
-    name: str
-    description: str
-    input_schema: dict[str, Any]
-
-
-class RuntimeToolExecutor:
-    """Executes provider-neutral tool calls against ct tools."""
-
-    def __init__(self, handlers: dict[str, Any]):
-        self._handlers = handlers
-
-    async def run(self, tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
-        handler = self._handlers.get(tool_name)
-        if handler is None:
-            return {
-                "content": [{"type": "text", "text": f"Error: unknown tool '{tool_name}'"}],
-                "is_error": True,
-            }
-        return await handler(args)
 
 
 # ---------------------------------------------------------------------------
@@ -176,7 +148,8 @@ def _make_tool_handler(tool_obj, session):
 # run_python sandbox tool
 # ---------------------------------------------------------------------------
 
-def _make_run_python_handler(session, code_trace_buffer: list | None = None):
+def _make_run_python_handler(session, code_trace_buffer: list | None = None,
+                             tools_namespace=None):
     """Create the run_python MCP tool handler with a persistent Sandbox.
 
     The sandbox is created lazily on first invocation and persists across
@@ -190,6 +163,9 @@ def _make_run_python_handler(session, code_trace_buffer: list | None = None):
             appends structured execution metadata after each call. This
             bypasses the SDK message stream (which may truncate tool results)
             so the trace collector gets full code, stdout, and plot data.
+        tools_namespace: Optional Programmatic Tool Calling (PTC) namespace of
+            domain-tool callables to bind as ``tools`` in the sandbox. See
+            :mod:`agent.ptc_tools`.
     """
     from agent.sandbox import Sandbox
 
@@ -213,6 +189,8 @@ def _make_run_python_handler(session, code_trace_buffer: list | None = None):
         extra_read_dirs=extra_read_dirs or None,
     )
     sandbox.load_datasets()
+    if tools_namespace is not None:
+        sandbox.inject_tools(tools_namespace)
 
     async def handler(args: dict[str, Any]) -> dict[str, Any]:
         code = args.get("code", "")
@@ -359,247 +337,3 @@ def _make_run_r_handler(code_trace_buffer: list | None = None):
 
     return handler
 
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-def create_ct_mcp_server(
-    session,
-    *,
-    exclude_categories: set[str] | None = None,
-    exclude_tools: set[str] | None = None,
-    include_run_python: bool = True,
-):
-    """Create an in-process MCP server exposing all ct tools.
-
-    Args:
-        session: Active ct Session (provides config, LLM client).
-        exclude_categories: Tool categories to omit.
-        exclude_tools: Specific tool names to omit.
-        include_run_python: Whether to include the run_python sandbox tool.
-
-    Returns:
-        A tuple of ``(mcp_server, sandbox_or_none, tool_names, code_trace_buffer)``
-        where sandbox is the Sandbox instance (if run_python is enabled) for
-        post-query inspection, and code_trace_buffer is a shared list that
-        MCP handlers append structured execution metadata to.
-    """
-    from tools import registry, ensure_loaded, EXPERIMENTAL_CATEGORIES
-
-    ensure_loaded()
-
-    exclude_categories = exclude_categories or set()
-    exclude_tools = exclude_tools or set()
-
-    # Shared buffer: code tool handlers append structured metadata here.
-    # The runner reads from this to enrich trace events — bypasses the SDK
-    # stream which may truncate/omit tool result content.
-    code_trace_buffer: list[dict] = []
-
-    runtime_specs: list[RuntimeToolSpec] = []
-    runtime_handlers: dict[str, Any] = {}
-    tool_names: list[str] = []
-
-    for tool_obj in registry.list_tools():
-        if tool_obj.category in exclude_categories:
-            continue
-        if tool_obj.name in exclude_tools:
-            continue
-        # Skip experimental categories by default
-        if tool_obj.category in EXPERIMENTAL_CATEGORIES:
-            continue
-
-        handler = _make_tool_handler(tool_obj, session)
-        schema = _params_to_json_schema(tool_obj.parameters)
-
-        runtime_specs.append(
-            RuntimeToolSpec(
-                name=tool_obj.name,
-                description=tool_obj.description,
-                input_schema=schema,
-            )
-        )
-        runtime_handlers[tool_obj.name] = handler
-        tool_names.append(tool_obj.name)
-
-    # Add run_python tool
-    sandbox = None
-    if include_run_python:
-        rp_handler, sandbox = _make_run_python_handler(session, code_trace_buffer)
-        runtime_specs.append(
-            RuntimeToolSpec(
-                name="run_python",
-                description=(
-                    "Execute Python code in a sandboxed environment. Variables persist "
-                    "between calls. Pre-imported: pd, np, plt, sns, scipy_stats, sklearn, "
-                    "json, re, math, collections, itertools, os, glob, gzip, csv, zipfile, "
-                    "io, tempfile, struct, datetime, Path, safe_subprocess_run, "
-                    "compute_pi_percentage, run_r (R via rpy2). "
-                    "Save plots to OUTPUT_DIR. When done, assign "
-                    "result = {'summary': '...', 'answer': '...'}"
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "code": {
-                            "type": "string",
-                            "description": "Python code to execute",
-                        }
-                    },
-                    "required": ["code"],
-                },
-            )
-        )
-        runtime_handlers["run_python"] = rp_handler
-        tool_names.append("run_python")
-
-    # Add run_r tool (R code execution via rpy2)
-    if include_run_python:  # R tool follows same gating as Python
-        try:
-            import importlib.util
-
-            if importlib.util.find_spec("rpy2.robjects") is None:
-                raise ImportError("rpy2 unavailable")
-            rr_handler = _make_run_r_handler(code_trace_buffer)
-            runtime_specs.append(
-                RuntimeToolSpec(
-                    name="run_r",
-                    description=(
-                        "Execute R code via rpy2. Use for: natural splines (ns()), "
-                        "wilcox.test(), p.adjust(), fisher.test(), lm(), predict(), "
-                        "survival analysis, KEGG pathway analysis (KEGGREST), and any "
-                        "analysis where R is the reference implementation. "
-                        "Available packages: stats, splines, survival, MASS, KEGGREST. "
-                        "Print results with cat() or print(). "
-                        "Use this instead of run_python when the question asks for R, or when "
-                        "R's implementation is the reference (splines, multiple testing correction, "
-                        "nonparametric tests, organism-specific KEGG ORA)."
-                    ),
-                    input_schema={
-                        "type": "object",
-                        "properties": {
-                            "code": {
-                                "type": "string",
-                                "description": "R code to execute",
-                            }
-                        },
-                        "required": ["code"],
-                    },
-                )
-            )
-            runtime_handlers["run_r"] = rr_handler
-            tool_names.append("run_r")
-        except ImportError:
-            logger.info("rpy2 not available — run_r tool disabled")
-
-    sdk_tools: list[SdkMcpTool] = []
-    for spec in runtime_specs:
-        sdk_tools.append(
-            SdkMcpTool(
-                name=spec.name,
-                description=spec.description,
-                input_schema=spec.input_schema,
-                handler=runtime_handlers[spec.name],
-            )
-        )
-
-    server = create_sdk_mcp_server(
-        name="ct-tools",
-        version="1.0.0",
-        tools=sdk_tools,
-    )
-
-    logger.info(
-        "Created MCP server with %d tools (%d domain + %s)",
-        len(sdk_tools),
-        len(sdk_tools) - (1 if include_run_python else 0) - (1 if "run_r" in tool_names else 0),
-        ", ".join(t for t in ["run_python", "run_r"] if t in tool_names) or "no sandbox",
-    )
-
-    return server, sandbox, tool_names, code_trace_buffer
-
-
-def create_ct_tool_runtime(
-    session,
-    *,
-    exclude_categories: set[str] | None = None,
-    exclude_tools: set[str] | None = None,
-    include_run_python: bool = True,
-) -> tuple[list[RuntimeToolSpec], RuntimeToolExecutor, Any, list[str], list[dict]]:
-    """Create provider-neutral tool runtime for non-Claude adapters."""
-    from tools import registry, ensure_loaded, EXPERIMENTAL_CATEGORIES
-
-    ensure_loaded()
-    exclude_categories = exclude_categories or set()
-    exclude_tools = exclude_tools or set()
-    code_trace_buffer: list[dict] = []
-
-    specs: list[RuntimeToolSpec] = []
-    handlers: dict[str, Any] = {}
-    tool_names: list[str] = []
-    sandbox = None
-
-    for tool_obj in registry.list_tools():
-        if tool_obj.category in exclude_categories:
-            continue
-        if tool_obj.name in exclude_tools:
-            continue
-        if tool_obj.category in EXPERIMENTAL_CATEGORIES:
-            continue
-        schema = _params_to_json_schema(tool_obj.parameters)
-        handlers[tool_obj.name] = _make_tool_handler(tool_obj, session)
-        specs.append(
-            RuntimeToolSpec(
-                name=tool_obj.name,
-                description=tool_obj.description,
-                input_schema=schema,
-            )
-        )
-        tool_names.append(tool_obj.name)
-
-    if include_run_python:
-        rp_handler, sandbox = _make_run_python_handler(session, code_trace_buffer)
-        handlers["run_python"] = rp_handler
-        specs.append(
-            RuntimeToolSpec(
-                name="run_python",
-                description=(
-                    "Execute Python code in a sandboxed environment. Variables persist between calls."
-                ),
-                input_schema={
-                    "type": "object",
-                    "properties": {
-                        "code": {"type": "string", "description": "Python code to execute"}
-                    },
-                    "required": ["code"],
-                },
-            )
-        )
-        tool_names.append("run_python")
-
-        try:
-            import importlib.util
-
-            if importlib.util.find_spec("rpy2.robjects") is None:
-                raise ImportError("rpy2 unavailable")
-
-            handlers["run_r"] = _make_run_r_handler(code_trace_buffer)
-            specs.append(
-                RuntimeToolSpec(
-                    name="run_r",
-                    description="Execute R code via rpy2 for statistical workflows.",
-                    input_schema={
-                        "type": "object",
-                        "properties": {
-                            "code": {"type": "string", "description": "R code to execute"}
-                        },
-                        "required": ["code"],
-                    },
-                )
-            )
-            tool_names.append("run_r")
-        except ImportError:
-            logger.info("rpy2 not available — run_r tool disabled")
-
-    return specs, RuntimeToolExecutor(handlers), sandbox, tool_names, code_trace_buffer

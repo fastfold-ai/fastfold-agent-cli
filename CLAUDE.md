@@ -8,10 +8,11 @@ multi-step research workflows using computational biology tools.
 
 ## Architecture
 
-**Claude Agent SDK agentic loop**: Query → Claude (plans, calls tools, self-corrects, synthesizes) → Report
+**Deep Agents (LangGraph) agentic loop**: Query → model (plans, calls tools, self-corrects, synthesizes) → Report
 
-Uses ClaudeSDKClient with an in-process MCP server exposing all domain tools. Claude orchestrates
-the full research workflow within a single agentic session (up to 30 tool-use turns).
+Built on `deepagents`/LangGraph. A single agentic session orchestrates all domain tools, with native
+progressive skill discovery and Programmatic Tool Calling (tools injected as Python callables in the
+sandbox). Supports Anthropic and OpenAI (including OpenAI-compatible endpoints via `llm.openai_base_url`).
 
 ### Key directories:
 ```

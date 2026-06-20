@@ -117,8 +117,6 @@ class LLMClient:
     DEFAULT_MODELS = {
         "anthropic": "claude-sonnet-4-5-20250929",
         "openai": "gpt-4o",
-        "local": None,  # User must specify
-        "gluelm": None,  # CellType's own model
     }
 
     def __init__(self, provider: str = "anthropic", model: str = None,
@@ -153,14 +151,6 @@ class LLMClient:
                 client_kwargs["base_url"] = self.base_url
             self._client = openai.OpenAI(**client_kwargs)
 
-        elif self.provider == "local":
-            # Local model via vLLM, ollama, or direct transformers
-            self._client = self._init_local()
-
-        elif self.provider == "gluelm":
-            # CellType's own model — direct Python import
-            self._client = self._init_gluelm()
-
         else:
             raise ValueError(f"Unknown provider: {self.provider}")
 
@@ -181,10 +171,6 @@ class LLMClient:
             resp = self._chat_anthropic(client, system, messages, temperature, max_tokens, tools=tools)
         elif self.provider == "openai":
             resp = self._chat_openai(client, system, messages, temperature, max_tokens)
-        elif self.provider == "local":
-            resp = self._chat_local(client, system, messages, temperature, max_tokens)
-        elif self.provider == "gluelm":
-            resp = self._chat_gluelm(client, system, messages, temperature, max_tokens)
         else:
             raise ValueError(f"Unknown provider: {self.provider}")
 
@@ -332,62 +318,3 @@ class LLMClient:
             raw=response,
         )
 
-    def _init_local(self):
-        """Initialize local model (vLLM or transformers)."""
-        # Try vLLM first (fastest for local inference)
-        try:
-            from vllm import LLM
-            return LLM(model=self.model)
-        except ImportError:
-            pass
-
-        # Fall back to transformers
-        try:
-            from transformers import pipeline
-            return pipeline("text-generation", model=self.model, device_map="auto")
-        except ImportError:
-            raise ImportError("Install vllm or transformers for local model support")
-
-    def _chat_local(self, client, system, messages, temperature, max_tokens):
-        """Chat with local model."""
-        # Format for local model
-        prompt = f"System: {system}\n\n"
-        for msg in messages:
-            role = msg["role"].capitalize()
-            prompt += f"{role}: {msg['content']}\n\n"
-        prompt += "Assistant: "
-
-        if hasattr(client, 'generate'):
-            # vLLM
-            from vllm import SamplingParams
-            params = SamplingParams(temperature=temperature, max_tokens=max_tokens)
-            outputs = client.generate([prompt], params)
-            text = outputs[0].outputs[0].text
-        else:
-            # transformers pipeline
-            outputs = client(prompt, max_new_tokens=max_tokens, temperature=temperature)
-            text = outputs[0]["generated_text"][len(prompt):]
-
-        return LLMResponse(content=text, model=self.model or "local")
-
-    def _init_gluelm(self):
-        """Initialize CellType's GlueLM model."""
-        try:
-            from gluelm import GlueLMModel
-            return GlueLMModel.from_pretrained(self.model)
-        except ImportError:
-            raise ImportError(
-                "GlueLM not installed. Install from CellType/GlueLM or "
-                "set llm.provider to 'anthropic' for cloud inference."
-            )
-
-    def _chat_gluelm(self, client, system, messages, temperature, max_tokens):
-        """Chat with GlueLM — specialized for degradation queries."""
-        # GlueLM is a domain-specific model, not a general chat model
-        # Route degradation-specific queries to it, general queries to fallback
-        query = messages[-1]["content"] if messages else ""
-        result = client.predict(query)
-        return LLMResponse(
-            content=str(result),
-            model="gluelm",
-        )

@@ -95,15 +95,19 @@ class TestBuildSkillsPrompt:
         bundled = tmp_path / "bundled"
         _write_skill(bundled, "docs_only", "Docs only skill")
         monkeypatch.setattr(skills_mod, "BUNDLED_SKILLS_DIR", bundled)
-        prompt = skills_mod.build_skills_prompt(project_root=tmp_path)
-        assert "no scripts" in prompt.lower()
+        prompt = skills_mod.build_skills_prompt(
+            project_root=tmp_path, user_request="docs only skill"
+        )
+        assert "no `scripts/` directory" in prompt
 
     def test_build_skills_prompt_with_scripts(self, tmp_path, monkeypatch):
         global_dir = tmp_path / "global"
         _write_skill(global_dir, "runner", "Runner", body="Use `python scripts/run.py`.", scripts=True)
         monkeypatch.setattr(skills_mod, "BUNDLED_SKILLS_DIR", tmp_path / "nobundled")
         monkeypatch.setattr(skills_mod, "GLOBAL_SKILLS_DIR", global_dir)
-        prompt = skills_mod.build_skills_prompt(project_root=tmp_path)
+        prompt = skills_mod.build_skills_prompt(
+            project_root=tmp_path, user_request="runner"
+        )
         assert "runner" in prompt
         assert "/scripts/run.py" in prompt
 

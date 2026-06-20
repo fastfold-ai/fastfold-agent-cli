@@ -197,6 +197,22 @@ def download_all(output: Path = None):
         download_dataset(name, output=output)
 
 
+def dataset_catalog() -> Table:
+    """List all known datasets with description, size, and download mode."""
+    table = Table(title="Available Datasets")
+    table.add_column("Dataset", style="cyan", no_wrap=True)
+    table.add_column("Auto-DL")
+    table.add_column("Size", style="dim")
+    table.add_column("Description", style="white")
+
+    for name, ds in DATASETS.items():
+        auto = "[green]yes[/green]" if ds.get("auto_download") else "[dim]manual[/dim]"
+        size = ds.get("size_hint", "-") or "-"
+        table.add_row(name, auto, size, ds.get("description", ""))
+
+    return table
+
+
 def dataset_status() -> Table:
     """Check which datasets are available locally."""
     cfg = Config.load()

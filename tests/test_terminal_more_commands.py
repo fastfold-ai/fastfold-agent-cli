@@ -407,7 +407,7 @@ class TestTasksClipboardAndTraceHelpers:
         with patch("time.time", return_value=100):
             term._show_tasks(force_refresh=True)
 
-        runner.refresh_background_watch_status.assert_called_once_with(force=True, include_taskoutput=True)
+        runner.refresh_background_watch_status.assert_called_once_with(force=True)
         table_calls = [c for c in term.console.print.call_args_list if c.args and isinstance(c.args[0], Table)]
         assert table_calls
         table = table_calls[-1].args[0]
@@ -913,8 +913,3 @@ class TestTerminalCompatibleProfilePrompts:
         assert provider2 == "openai"
         assert "OpenAI-compatible custom endpoint" in label2
         assert endpoint2 == "http://localhost:8000/v1"
-
-        values["llm.provider"] = "local"
-        assert term._current_provider_status() == ("local", "Local", None)
-        values["llm.provider"] = "gluelm"
-        assert term._current_provider_status() == ("gluelm", "GlueLM", None)

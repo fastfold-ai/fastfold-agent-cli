@@ -48,6 +48,7 @@ class MentionCandidate:
 SLASH_COMMANDS = {
     "/help": "Show command reference with examples",
     "/tools": "List all tools with status (stable/experimental)",
+    "/data": "Manage local datasets (/data list | status | pull <name> | pull-all)",
     "/skills": "List currently loaded skills",
     "/skills-add": "Install a skill from GitHub/local path/name",
     "/skills-find": "Discover installable skills from the catalog",
@@ -60,7 +61,6 @@ SLASH_COMMANDS = {
     "/model-manager": "Manage OpenAI-compatible profiles (add/edit/delete)",
     "/upgrade": "Upgrade fastfold-agent-cli via uv",
     "/doctor": "Run readiness diagnostics and fix hints",
-    "/autofix": "Apply automatic local fixes for common runtime issues",
     "/usage": "Show session token/cost usage",
     "/tasks": "Show background task watcher status (/tasks refresh for live probe)",
     "/interrupt": "Interrupt the active generation (add ! to force)",
@@ -786,8 +786,13 @@ class InteractiveTerminal:
         except Exception:
             return 0
 
-    def _set_active_usage(self, input_tokens=None, output_tokens=None) -> None:
-        in_tokens = self._coerce_token_count(input_tokens)
+    def _set_active_usage(self, input_tokens=None, output_tokens=None,
+                          cache_read_tokens=None) -> None:
+        # Track fresh (non-cached) input only — subtract prompt-cache reads so the
+        # live counter doesn't balloon when a large cached prefix is re-sent on
+        # every model call of a long agentic turn.
+        cache_read = self._coerce_token_count(cache_read_tokens)
+        in_tokens = max(0, self._coerce_token_count(input_tokens) - cache_read)
         out_tokens = self._coerce_token_count(output_tokens)
         with self._run_lock:
             if in_tokens > self._active_input_tokens:
@@ -1032,6 +1037,7 @@ class InteractiveTerminal:
                             self._set_active_usage(
                                 payload.get("input_tokens"),
                                 payload.get("output_tokens"),
+                                payload.get("cache_read_input_tokens"),
                             )
                         if "streamed_chars" in payload:
                             self._set_active_streamed_chars(payload.get("streamed_chars"))
@@ -1344,10 +1350,6 @@ class InteractiveTerminal:
                     return "openai", "OpenAI-compatible custom endpoint", openai_base_url
                 return "openai", f"OpenAI-compatible custom endpoint ({label})", openai_base_url
             return "anthropic", "Anthropic", None
-        if raw_provider == "local":
-            return "local", "Local", None
-        if raw_provider == "gluelm":
-            return "gluelm", "GlueLM", None
         return raw_provider or "anthropic", (raw_provider or "anthropic"), None
 
     @staticmethod
@@ -1692,6 +1694,10 @@ class InteractiveTerminal:
                 self._show_skills()
                 self._advance_suggestion()
                 continue
+            if cmd_head in ("data", "/data"):
+                self._handle_data_command(query)
+                self._advance_suggestion()
+                continue
             if cmd in ("model", "/model"):
                 self._switch_model()
                 self._advance_suggestion()
@@ -1746,23 +1752,6 @@ class InteractiveTerminal:
                     self.console.print("  [red]Blocking issues found.[/red]")
                 else:
                     self.console.print("  [green]No blocking issues found.[/green]")
-                self._advance_suggestion()
-                continue
-            if cmd in ("autofix", "/autofix"):
-                if os.name != "nt":
-                    self.console.print("  [green]No autofix needed on this platform.[/green]")
-                    self._advance_suggestion()
-                    continue
-                from agent.claude_code_cli import run_windows_autofix
-
-                self.console.print("  [cyan]Running Windows autofix...[/cyan]")
-                fix_result = run_windows_autofix()
-                if fix_result.get("ok"):
-                    self.console.print(f"  [green]{fix_result.get('summary')}[/green]")
-                    if fix_result.get("path"):
-                        self.console.print(f"  [dim]Using launcher:[/dim] {fix_result.get('path')}")
-                else:
-                    self.console.print(f"  [red]{fix_result.get('summary')}[/red]")
                 self._advance_suggestion()
                 continue
             if cmd in ("clear", "/clear"):
@@ -2182,7 +2171,12 @@ class InteractiveTerminal:
             if idx < len(rows_snapshot):
                 row = rows_snapshot[idx]
                 if isinstance(row, dict):
-                    input_tokens = self._coerce_int(row.get("input_tokens"))
+                    # Show fresh (non-cached) input only, matching the live footer.
+                    input_tokens = max(
+                        0,
+                        self._coerce_int(row.get("input_tokens"))
+                        - self._coerce_int(row.get("cache_read_tokens")),
+                    )
                     output_tokens = self._coerce_int(row.get("output_tokens"))
             if answer and not rendered_from_trace:
                 print_markdown_with_mermaid(
@@ -3787,12 +3781,9 @@ class InteractiveTerminal:
             return
 
         # Reconcile pending tasks before rendering so /tasks reflects
-        # any just-completed tasks from SDK notifications or fallback probes.
+        # any just-completed tasks detected by the local output-file probe.
         if hasattr(runner, "refresh_background_watch_status"):
-            runner.refresh_background_watch_status(
-                force=force_refresh,
-                include_taskoutput=force_refresh,
-            )
+            runner.refresh_background_watch_status(force=force_refresh)
 
         statuses = runner.get_background_watch_status(include_inactive=True)
         if not statuses:
@@ -4617,6 +4608,60 @@ class InteractiveTerminal:
             self.console.print("\n  [yellow]Interrupted.[/yellow]")
         except Exception as e:
             self.console.print(f"\n  [red]Case study error:[/red] {e}")
+
+    def _handle_data_command(self, query: str) -> None:
+        """Interactive dataset management: /data [list | status | pull <name> | pull-all]."""
+        try:
+            from data.downloader import (
+                DATASETS,
+                dataset_catalog,
+                dataset_status,
+                download_all,
+                download_dataset,
+            )
+        except Exception as e:  # noqa: BLE001
+            self.console.print(f"  [red]Data module unavailable:[/red] {e}")
+            return
+
+        parts = query.strip().split()
+        sub = parts[1].lower() if len(parts) > 1 else "status"
+        args = parts[2:]
+
+        if sub in ("list", "ls", "catalog"):
+            self.console.print(dataset_catalog())
+            return
+        if sub in ("status", "st"):
+            self.console.print(dataset_status())
+            return
+        if sub in ("pull-all", "pullall", "all"):
+            auto = [n for n, ds in DATASETS.items() if ds.get("auto_download")]
+            self.console.print(
+                f"  [cyan]Downloading all auto-downloadable datasets:[/cyan] {', '.join(auto)}"
+            )
+            self.console.print("  [dim]This can be large (depmap alone is ~580MB). Ctrl+C to stop.[/dim]")
+            try:
+                download_all()
+            except KeyboardInterrupt:
+                self.console.print("\n  [yellow]Download interrupted.[/yellow]")
+            return
+        if sub == "pull":
+            if not args:
+                self.console.print("  [yellow]Usage:[/yellow] /data pull <name|all>")
+                self.console.print(f"  [dim]Available:[/dim] {', '.join(DATASETS.keys())}")
+                return
+            name = args[0].lower()
+            if name not in DATASETS and name not in ("all",):
+                self.console.print(f"  [red]Unknown dataset:[/red] {name}")
+                self.console.print(f"  [dim]Available:[/dim] {', '.join(DATASETS.keys())} (or 'all')")
+                return
+            try:
+                download_dataset(name)
+            except KeyboardInterrupt:
+                self.console.print("\n  [yellow]Download interrupted.[/yellow]")
+            return
+
+        self.console.print(f"  [yellow]Unknown /data subcommand:[/yellow] {sub}")
+        self.console.print(r"  [dim]Usage:[/dim] /data \[list | status | pull <name> | pull-all]")
 
     def _show_help(self):
         command_lines = ["**Slash Commands:**"]

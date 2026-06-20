@@ -27,7 +27,7 @@ from rich.table import Table
 CONFIG_DIR = Path.home() / ".fastfold-cli"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 CONFIG_BACKUP_FILE = CONFIG_DIR / "config.json.bak"
-VALID_LLM_PROVIDERS = frozenset({"anthropic", "openai", "local", "gluelm"})
+VALID_LLM_PROVIDERS = frozenset({"anthropic", "openai"})
 logger = logging.getLogger("config")
 OPENAI_API_KEY_PATTERN = re.compile(r"^sk-[A-Za-z0-9_-]{6,}$")
 ANTHROPIC_API_KEY_PATTERN = re.compile(r"^sk-ant-[A-Za-z0-9_-]{6,}$")
@@ -158,7 +158,6 @@ DEFAULTS = {
     "ui.mermaid.ascii": False,
     "ui.mermaid.theme": "default",
 
-    "models.gluelm": None,
     "models.deepternary": None,
     "models.boltz2": None,
 
@@ -178,6 +177,24 @@ DEFAULTS = {
     "sandbox.max_retries": 2,
 
     "agent.max_iterations": 3,
+    # Tool-calling strategy for the deepagents runtime: "ptc" (Programmatic Tool
+    # Calling, default — domain tools are injected as Python callables inside
+    # run_python and the model invokes them in code, with only a compact catalog
+    # + search_tools in context) or "native" (each domain tool exposed as its own
+    # LangChain tool schema). PTC significantly reduces per-call input tokens and
+    # removes the OpenAI tool-count ceiling. Set to "native" to restore per-tool
+    # schemas.
+    "agent.tool_mode": "ptc",
+    # Tool-call rendering (deepagents runtime only). When True, the most recent
+    # `agent.tool_trace_detail_limit` tool calls in a consecutive batch stay in
+    # full detail (name, args, output) and older ones collapse progressively to a
+    # one-line, still named "✓ name (Xs)" entry as newer calls complete — the
+    # current/last call stays detailed while earlier ones compact away. Errors
+    # always show in full. Set False to show every tool call fully verbose.
+    "agent.group_tool_traces": True,
+    # Trailing window: how many most-recent tool calls keep full detail before
+    # older ones collapse to compact named lines. 1 = only the last call full.
+    "agent.tool_trace_detail_limit": 1,
     "agent.enable_experimental_tools": False,
     "skills.allow_agent_install": False,
     "agent.observer_model": None,
@@ -220,6 +237,11 @@ DEFAULTS = {
     "agent.tool_health_failure_window_s": 1800,
     "agent.tool_health_suppress_seconds": 900,
     "agent.preflight_validation_enabled": True,
+    "agent.skills.max_catalog_entries": 250,
+    "agent.skills.max_active": 6,
+    "agent.skills.max_prompt_chars": 120000,
+    "agent.skills.catalog_description_chars": 140,
+    "agent.skills.index_snippet_chars": 8000,
 
     "enterprise.enforce_policy": False,
     "enterprise.audit_enabled": True,
@@ -429,6 +451,11 @@ def _validate_config(config_dict: dict) -> list[str]:
     _check_positive_int("agent.parallel_max_threads", "parallel max threads")
     _check_positive_int("agent.background_watch_timeout_s", "background watch timeout")
     _check_positive_int("agent.interrupt_drain_timeout_s", "interrupt drain timeout")
+    _check_positive_int("agent.skills.max_catalog_entries", "skills catalog entries")
+    _check_positive_int("agent.skills.max_active", "active skills")
+    _check_positive_int("agent.skills.max_prompt_chars", "skills prompt character budget")
+    _check_positive_int("agent.skills.catalog_description_chars", "skills catalog description chars")
+    _check_positive_int("agent.skills.index_snippet_chars", "skills index snippet chars")
     _check_min("agent.synthesis_max_tokens", 512, "synthesis max tokens")
     _check_min("sandbox.timeout", 1, "sandbox timeout")
 
@@ -1428,14 +1455,6 @@ class Config:
                 f"Unsupported llm.provider '{provider}'. "
                 f"Valid providers: {valid}. Set it with: fastfold config set llm.provider <provider>"
             )
-
-        if provider in {"local", "gluelm"}:
-            if not self.get("llm.model"):
-                return (
-                    f"llm.model is required for provider '{provider}'. "
-                    "Set it with: fastfold config set llm.model <model-id-or-path>"
-                )
-            return None
 
         provider_key = self.llm_api_key(provider)
         if provider_key:

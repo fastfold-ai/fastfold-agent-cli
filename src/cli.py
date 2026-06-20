@@ -598,6 +598,14 @@ def setup_cmd(
     skip_skills: bool = typer.Option(
         False, "--skip-skills", help="Skip the agent-skills install step"
     ),
+    datasets: Optional[str] = typer.Option(
+        None,
+        "--datasets",
+        help="Comma-separated datasets to download non-interactively (e.g. 'depmap,msigdb' or 'all')",
+    ),
+    skip_datasets: bool = typer.Option(
+        False, "--skip-datasets", help="Skip the dataset download step"
+    ),
 ):
     """Interactive setup wizard — configure fastfold for first use."""
     from agent.config import Config
@@ -632,6 +640,10 @@ def setup_cmd(
         skills = None
     if isinstance(skip_skills, OptionInfo):
         skip_skills = False
+    if isinstance(datasets, OptionInfo):
+        datasets = None
+    if isinstance(skip_datasets, OptionInfo):
+        skip_datasets = False
 
     if profile_endpoint and not openai_base_url:
         openai_base_url = profile_endpoint
@@ -898,14 +910,8 @@ def setup_cmd(
     # Optional: install agent skills (live catalog + custom sources)
     _prompt_install_skills(skills_arg=skills, skip=skip_skills)
 
-    if sys.platform == "win32":
-        from agent.claude_code_cli import run_windows_autofix
-
-        fix = run_windows_autofix()
-        if fix.get("ok"):
-            console.print(f"  [green]{fix.get('summary')}[/green]")
-        else:
-            console.print(f"  [yellow]{fix.get('summary')}[/yellow]")
+    # Optional: download local datasets (auto-downloadable ones, all preselected)
+    _prompt_install_datasets(datasets_arg=datasets, skip=skip_datasets)
 
     # Quick health check
     console.print()
@@ -2281,6 +2287,127 @@ def _prompt_install_skills(skills_arg: Optional[str] = None, skip: bool = False)
     _install_skill_sources(selected)
 
 
+def _select_datasets_from_catalog(catalog: list[tuple[str, dict]]) -> list[str]:
+    """Let the user pick auto-downloadable datasets to download. Returns dataset names."""
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        try:
+            import questionary
+            from prompt_toolkit.styles import Style
+
+            selector_style = Style.from_dict(
+                {
+                    "qmark": "fg:#00bcd4 bold",
+                    "question": "bold",
+                    "answer": "fg:#4caf50 bold",
+                    "pointer": "fg:#4caf50",
+                    "highlighted": "noreverse bold",
+                    "selected": "fg:#4caf50 bold",
+                    "instruction": "fg:#858585",
+                    "text": "fg:#858585",
+                }
+            )
+            choices = [
+                questionary.Choice(
+                    title=f"{name} — {(ds.get('description') or '').strip()[:70]} "
+                    f"({ds.get('size_hint', '?')})",
+                    value=name,
+                    checked=True,
+                )
+                for name, ds in catalog
+            ]
+            picked = questionary.checkbox(
+                "Select datasets to download (all selected by default)",
+                choices=choices,
+                instruction="(↑/↓ move, space toggle, enter confirm — all preselected)",
+                style=selector_style,
+                qmark="❯",
+                pointer="▸",
+            ).ask()
+            return list(picked or [])
+        except typer.Exit:
+            raise
+        except Exception:
+            pass
+
+    # Inline fallback: numbered list + comma-separated selection.
+    console.print("  [cyan]Available datasets[/cyan] [dim](all downloaded by default)[/dim]")
+    for idx, (name, ds) in enumerate(catalog, 1):
+        console.print(
+            f"    [{idx}] {name} — [dim]{(ds.get('description') or '').strip()[:70]} "
+            f"({ds.get('size_hint', '?')})[/dim]"
+        )
+    try:
+        raw = input(
+            "  Select datasets (comma-separated numbers, 'all', or 'none'; Enter for all): "
+        ).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return []
+    if not raw or raw == "all":
+        return [name for name, _ in catalog]
+    if raw == "none":
+        return []
+    names: list[str] = []
+    for token in raw.split(","):
+        token = token.strip()
+        if token.isdigit() and 1 <= int(token) <= len(catalog):
+            names.append(catalog[int(token) - 1][0])
+    return names
+
+
+def _prompt_install_datasets(datasets_arg: Optional[str] = None, skip: bool = False) -> None:
+    """Setup step: download local datasets (auto-downloadable, all preselected)."""
+    from data.downloader import DATASETS, download_all, download_dataset
+
+    if skip:
+        return
+
+    auto = [(name, ds) for name, ds in DATASETS.items() if ds.get("auto_download")]
+
+    # Non-interactive explicit list (CI/scripting): `--datasets depmap,msigdb` or `all`.
+    if datasets_arg:
+        arg = datasets_arg.strip().lower()
+        console.print("\n  [cyan]Datasets[/cyan]")
+        if arg == "all":
+            download_all()
+            return
+        for name in [s.strip() for s in datasets_arg.split(",") if s.strip()]:
+            download_dataset(name)
+        return
+
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    if not interactive:
+        console.print(
+            "\n  [dim]Skipping dataset download (non-interactive). "
+            "Add later with `fastfold data pull-all` or `fastfold data pull <name>`.[/dim]"
+        )
+        return
+
+    console.print("\n  [cyan]Datasets[/cyan]")
+    console.print(
+        "  [dim]Optional reference datasets power offline tools (DepMap dependencies, "
+        "gene sets, interaction networks). Some are large (depmap is ~580MB).[/dim]"
+    )
+    try:
+        proceed = input("  Download datasets now? [y/N] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n  [dim]Setup cancelled.[/dim]")
+        raise typer.Exit()
+    if proceed not in ("y", "yes"):
+        console.print(
+            "  [dim]Skipped. Download later with `fastfold data pull-all` "
+            "or `fastfold data pull <name>`.[/dim]"
+        )
+        return
+
+    selected = _select_datasets_from_catalog(auto)
+    if not selected:
+        console.print("  [dim]No datasets selected.[/dim]")
+        return
+
+    for name in selected:
+        download_dataset(name)
+
+
 @app.command("doctor")
 def doctor_cmd():
     """Run environment and configuration health checks."""
@@ -2300,26 +2427,6 @@ def doctor_cmd():
     console.print("\n[green]No blocking issues found.[/green]")
 
 
-@app.command("autofix")
-def autofix_cmd():
-    """Apply automatic local fixes for common install/runtime issues."""
-    if sys.platform != "win32":
-        console.print("[green]No autofix needed on this platform.[/green]")
-        return
-
-    from agent.claude_code_cli import run_windows_autofix
-
-    console.print("[cyan]Running Windows autofix...[/cyan]")
-    result = run_windows_autofix()
-    if result.get("ok"):
-        console.print(f"[green]{result.get('summary')}[/green]")
-        if result.get("path"):
-            console.print(f"[dim]Using launcher:[/dim] {result.get('path')}")
-    else:
-        console.print(f"[red]{result.get('summary')}[/red]")
-        raise typer.Exit(code=2)
-
-
 # ─── Data subcommand ──────────────────────────────────────────
 
 data_app = typer.Typer(help="Manage local datasets")
@@ -2328,18 +2435,39 @@ app.add_typer(data_app, name="data")
 
 @data_app.command("pull")
 def data_pull(
-    dataset: str = typer.Argument(help="Dataset to download (depmap, prism, msigdb, alphafold)"),
+    dataset: str = typer.Argument(
+        help="Dataset to download, or 'all' for every auto-downloadable dataset "
+        "(depmap, msigdb, string, prism, l1000, alphafold)"
+    ),
     output: Optional[Path] = typer.Option(None, help="Output directory"),
 ):
-    """Download a dataset for local use."""
+    """Download a dataset for local use (use 'all' to fetch everything auto-downloadable)."""
     from data.downloader import download_dataset
 
     download_dataset(dataset, output)
 
 
+@data_app.command("pull-all")
+def data_pull_all(
+    output: Optional[Path] = typer.Option(None, help="Output directory"),
+):
+    """Download every auto-downloadable dataset (depmap, msigdb, string)."""
+    from data.downloader import download_all
+
+    download_all(output)
+
+
+@data_app.command("list")
+def data_list():
+    """List all known datasets (description, size, download mode)."""
+    from data.downloader import dataset_catalog
+
+    console.print(dataset_catalog())
+
+
 @data_app.command("status")
 def data_status():
-    """Show status of local datasets."""
+    """Show download status of local datasets."""
     from data.downloader import dataset_status
 
     console.print(dataset_status())

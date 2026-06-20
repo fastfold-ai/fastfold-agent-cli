@@ -1,60 +1,70 @@
 # Changelog
 
-All notable changes to `fastfold-agent-cli` will be documented in this file.
+All notable changes to `fastfold-agent-cli` are documented here.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [0.0.56] - 2026-06-19
-
-### Changed
-- Reordered OpenAI-compatible endpoint/template selectors so `Other` now appears
-  as the final option after the standard templates.
-- Removed install/reference links for `Other` endpoint options in `/model-manager`
-  and `fastfold setup` menus, keeping links only for known templates.
-- Updated `/keys` profile rows so `other` backends show `—` in the **Sign Up**
-  column instead of a generic install URL.
-
-## [0.0.55] - 2026-06-19
-
-### Changed
-- OpenAI-compatible key prompts now allow blank input to save a profile with no
-  key (clear/unset key), with `:keep` to preserve an existing key and
-  `:default` to use backend defaults like `ollama`.
-- `/keys` now shows backend-specific install/reference URLs in the **Sign Up**
-  column for each OpenAI-compatible profile row (Ollama, Unsloth, oMLX, DS4,
-  llama.cpp, LM Studio, custom).
-- `/model-manager` and setup endpoint-type selectors now print install links
-  next to each compatible backend option.
-
-## [0.0.54] - 2026-06-19
+## [0.0.57] - 2026-06-20
 
 ### Added
-- Changelog tracking started for `fastfold-agent-cli`.
-- Terminal Mermaid diagram rendering via `termaid` for assistant responses containing
-  fenced `mermaid` blocks.
-- New `/model-manager` interactive command for OpenAI-compatible profile
-  diagnostics and CRUD operations (add/edit/delete).
-- New OpenAI-compatible profile templates for `ds4`, `llama_cpp`, and
-  `lm_studio`, available in both `/model-manager` and `fastfold setup`.
+
+- **Deep Agents (LangGraph) runtime** as the agent engine, with native
+  progressive skill discovery so many installed skills no longer bloat the
+  system prompt.
+- Unit-test coverage for the Deep Agents runtime (`deepagents_runtime` model
+  factory, tool adapter, and `process_events` event stream), the
+  `_run_async_deepagents` dispatch, and the trace renderer.
+- **Programmatic Tool Calling (PTC)** tool mode (`agent.tool_mode=ptc`, now the
+  default): domain tools are exposed as Python callables inside the sandbox and
+  discovered via a compact catalog plus a `search_tools` helper, significantly
+  reducing per-turn input tokens and removing the OpenAI tool-count ceiling.
+  `agent.tool_mode=native` restores per-tool schemas.
+- **Data management commands**: `fastfold data list` (catalog) and
+  `fastfold data pull-all` (download every auto-downloadable dataset), plus a
+  `/data` interactive command (`/data list | status | pull <name> | pull-all`).
+- **Dataset step in `fastfold setup`**: optionally download datasets during the
+  wizard with a multi-select (all auto-downloadable datasets preselected).
+  Non-interactive via `--datasets depmap,msigdb` / `--datasets all` /
+  `--skip-datasets`.
+- Configurable tool-trace rendering: `agent.group_tool_traces` and
+  `agent.tool_trace_detail_limit` keep the current/last tool call in full detail
+  and progressively collapse older ones to compact, still-named lines.
+- `shell.run` gains a `working_dir` parameter and auto-extracts a leading
+  `cd <dir> &&` so chained-directory commands are no longer blocked.
 
 ### Changed
-- Markdown rendering now detects Mermaid fences in trace/live/resumed output paths
-  and falls back to source fences when rendering is unavailable.
-- `/model` is now selection-only; profile creation/editing moved to
-  `/model-manager`.
-- `fastfold setup` now prints a profile summary (label/template/endpoint)
-  before compatible model selection.
-- README compatibility docs now include local/self-hosted LLM engine install
-  references for DS4, llama.cpp, LM Studio, Ollama, oMLX, and Unsloth.
+
+- Minimum Python version is now **3.11** (required by deepagents); install and
+  docs updated accordingly.
+- Token usage display in the footer/toolbar now shows fresh (non-cached) input
+  tokens, subtracting Anthropic prompt-cache reads.
+- Tool-call durations under a second now render in milliseconds (e.g. `42ms`)
+  instead of `0.0s`.
+- `write_todos` renders as a checklist in the interactive trace output.
+- README and CLI docs rewritten around the Deep Agents / PTC stack, with an
+  Acknowledgements section (CellType, BixBench, Deep Agents, open-ptc-agent) and
+  a Benchmarks (coming soon) section.
+
+### Removed
+
+- **Legacy Claude Agent SDK runtime** and the redundant non-deepagents OpenAI
+  loop. Deep Agents is now the only runtime, so the `agent.runtime` setting and
+  the `claude-agent-sdk` dependency are gone.
+- **In-process `local` / `gluelm` providers**, which only ran on the old SDK
+  path. Use `anthropic` or `openai` (OpenAI-compatible local servers such as
+  Ollama/LM Studio/vLLM/llama.cpp still work via `provider=openai` +
+  `llm.openai_base_url`).
+- The `/autofix` command, the `fastfold autofix` CLI command, and the Windows
+  Claude Code launcher safeguards (they only repaired the SDK CLI).
 
 ### Fixed
-- OpenAI-compatible profile key projection no longer mixes stale legacy key
-  values across profiles (e.g., Unsloth key overwritten by oMLX key).
 
-## [0.0.53] - 2026-06-18
-
-### Notes
-- Baseline release when changelog tracking was introduced.
+- Auth, rate-limit, and connection failures now show a concise, actionable
+  message instead of dumping a LangGraph/Anthropic traceback.
+- Tests no longer clobber the real `~/.fastfold-cli/config.json`: an autouse
+  fixture redirects the CLI config directory to a temp path for every test.
+- Resolved an `OSError: [Errno 7] Argument list too long` when many/long-named
+  skills were installed, by moving skill discovery onto the deepagents runtime.
