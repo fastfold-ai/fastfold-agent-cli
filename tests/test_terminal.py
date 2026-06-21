@@ -850,6 +850,45 @@ class TestTerminalMethods:
         terminal._request_interrupt.assert_called_once_with(force=True)
         terminal._print_exit_with_resume_hint.assert_called_once()
 
+    def test_handle_keys_command_set_boltz_updates_key(self, terminal, monkeypatch):
+        cfg = MagicMock()
+        cfg.get.return_value = None
+        cfg.keys_table.return_value = Table(title="API Keys")
+        terminal.session.config = cfg
+        terminal._secret_prompt_session = MagicMock()
+        terminal._plain_prompt_session = MagicMock()
+        terminal._secret_prompt_session.prompt.return_value = "sk_bc_local_test_key"
+        terminal._plain_prompt_session.prompt.side_effect = ["n", "n"]
+        terminal._install_boltz_skill = MagicMock()
+        terminal._ensure_boltz_cli_ready = MagicMock()
+        monkeypatch.delenv("BOLTZ_API_KEY", raising=False)
+
+        terminal._handle_keys_command("/keys set-boltz")
+
+        cfg.set.assert_called_once_with("api.boltz_api_key", "sk_bc_local_test_key")
+        cfg.save.assert_called_once()
+        terminal._install_boltz_skill.assert_not_called()
+        terminal._ensure_boltz_cli_ready.assert_not_called()
+
+    def test_handle_keys_command_set_boltz_can_clear_key(self, terminal, monkeypatch):
+        cfg = MagicMock()
+        cfg.get.return_value = "sk_bc_existing"
+        cfg.keys_table.return_value = Table(title="API Keys")
+        terminal.session.config = cfg
+        terminal._secret_prompt_session = MagicMock()
+        terminal._plain_prompt_session = MagicMock()
+        terminal._secret_prompt_session.prompt.return_value = ""
+        terminal._install_boltz_skill = MagicMock()
+        terminal._ensure_boltz_cli_ready = MagicMock()
+        monkeypatch.setenv("BOLTZ_API_KEY", "sk_bc_existing")
+
+        terminal._handle_keys_command("/keys set-boltz")
+
+        cfg.unset.assert_called_once_with("api.boltz_api_key")
+        cfg.save.assert_called_once()
+        terminal._install_boltz_skill.assert_not_called()
+        terminal._ensure_boltz_cli_ready.assert_not_called()
+
     def test_run_resume_last_renders_history(self, terminal):
         terminal.console.width = 80
         terminal._prompt_session = MagicMock()

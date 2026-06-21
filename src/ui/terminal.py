@@ -7,6 +7,7 @@ Provides a REPL-style interface for continuous research sessions.
 import random
 import re
 import shlex
+import shutil
 import subprocess
 import time
 import threading
@@ -57,7 +58,7 @@ SLASH_COMMANDS = {
     "/model": "Switch LLM model/provider interactively",
     "/settings": "Configure UI and agent preferences",
     "/config": "Show active runtime configuration",
-    "/keys": "Show API key status (/keys profile | /keys set-compatible)",
+    "/keys": "Show API key status (/keys profile | /keys set-compatible | /keys set-boltz)",
     "/model-manager": "Manage OpenAI-compatible profiles (add/edit/delete)",
     "/upgrade": "Upgrade fastfold-agent-cli via uv",
     "/doctor": "Run readiness diagnostics and fix hints",
@@ -106,6 +107,8 @@ AVAILABLE_MODELS = {
 from ui.suggestions import DEFAULT_SUGGESTIONS
 
 _ANTHROPIC_MODEL_IDS = {m[0] for m in AVAILABLE_MODELS.get("anthropic", [])}
+_BOLTZ_SKILL_SOURCE = "fastfold-ai/skills@skills/boltz"
+_BOLTZ_INSTALL_SCRIPT = "set -euo pipefail; curl -fsSL https://install.boltz.bio/boltz-api/install.sh | sh"
 
 
 def _is_openai_managed_base_url(base_url: str | None) -> bool:
@@ -3400,6 +3403,188 @@ class InteractiveTerminal:
                 continue
             self.console.print("  [dim]Invalid choice.[/dim]")
 
+    def _prompt_yes_no(self, prompt: str, *, default: bool = True) -> bool:
+        """Prompt a yes/no question with a sensible default."""
+        suffix = "[Y/n]" if default else "[y/N]"
+        try:
+            prompt_session = getattr(self, "_plain_prompt_session", None)
+            if prompt_session is not None and hasattr(prompt_session, "prompt"):
+                raw = prompt_session.prompt([("class:prompt", f"  {prompt} {suffix} ")]).strip().lower()
+            else:
+                raw = input(f"  {prompt} {suffix} ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            self.console.print("  [dim]Cancelled.[/dim]")
+            return False
+
+        if not raw:
+            return default
+        if raw in {"y", "yes"}:
+            return True
+        if raw in {"n", "no"}:
+            return False
+        return default
+
+    @staticmethod
+    def _resolve_boltz_cli_path() -> Path | None:
+        """Return the first available boltz-api executable path."""
+        candidates: list[str] = []
+        in_path = shutil.which("boltz-api")
+        if in_path:
+            candidates.append(in_path)
+        candidates.extend(
+            [
+                str(Path.home() / ".local" / "bin" / "boltz-api"),
+                str(Path.home() / ".boltz" / "bin" / "boltz-api"),
+            ]
+        )
+        for candidate in candidates:
+            p = Path(candidate).expanduser()
+            if p.exists() and p.is_file() and os.access(str(p), os.X_OK):
+                return p
+        return None
+
+    @staticmethod
+    def _boltz_cli_version(executable: Path) -> str:
+        """Return a compact boltz-api version string when callable."""
+        try:
+            proc = subprocess.run(
+                [str(executable), "--version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except Exception:  # noqa: BLE001
+            return "unknown version"
+        output = (proc.stdout or proc.stderr or "").strip()
+        if not output:
+            return "unknown version"
+        return output.splitlines()[0].strip()
+
+    def _install_boltz_skill(self) -> bool:
+        """Install the official Fastfold boltz skill if missing."""
+        from agent.skills import install_skill, installed_skill_names
+
+        installed = set(installed_skill_names())
+        if "boltz" in installed:
+            self.console.print("  [green]Boltz skill already installed.[/green]")
+            return True
+
+        with self.console.status("[green]Installing Fastfold Boltz skill...[/green]", spinner="dots"):
+            result = install_skill(_BOLTZ_SKILL_SOURCE, prefer_npx=True)
+        if result.get("ok"):
+            self.console.print(f"  [green]{result.get('summary', 'Installed boltz skill.')}[/green]")
+            self.console.print("  [dim]Skill will be available on your next message.[/dim]")
+            return True
+
+        self.console.print(
+            "  [yellow]Could not auto-install Boltz skill.[/yellow] "
+            f"[dim]{result.get('summary', '')}[/dim]"
+        )
+        self.console.print(
+            f"  [dim]Install manually with:[/dim] /skills-add {_BOLTZ_SKILL_SOURCE}"
+        )
+        return False
+
+    def _ensure_boltz_cli_ready(self) -> bool:
+        """Ensure boltz-api CLI is installed locally."""
+        existing = self._resolve_boltz_cli_path()
+        if existing:
+            version = self._boltz_cli_version(existing)
+            self.console.print(f"  [green]boltz-api ready:[/green] {existing} [dim]({version})[/dim]")
+            if shutil.which("boltz-api") is None:
+                self.console.print(
+                    "  [dim]Tip: add ~/.local/bin to PATH if you want `boltz-api` by name in shell.[/dim]"
+                )
+            return True
+
+        if not shutil.which("curl") or not shutil.which("sh"):
+            self.console.print(
+                "  [yellow]Could not install boltz-api automatically (missing curl/sh).[/yellow]"
+            )
+            self.console.print(
+                "  [dim]Install manually:[/dim] curl -fsSL https://install.boltz.bio/boltz-api/install.sh | sh"
+            )
+            return False
+
+        with self.console.status("[green]Installing boltz-api CLI...[/green]", spinner="dots"):
+            proc = subprocess.run(
+                ["sh", "-lc", _BOLTZ_INSTALL_SCRIPT],
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+        if proc.returncode != 0:
+            detail = (proc.stderr or proc.stdout or "").strip()
+            detail = detail.splitlines()[-1] if detail else "installer exited with a non-zero code"
+            self.console.print(f"  [yellow]boltz-api install failed:[/yellow] {detail}")
+            self.console.print(
+                "  [dim]Retry manually:[/dim] curl -fsSL https://install.boltz.bio/boltz-api/install.sh | sh"
+            )
+            return False
+
+        installed_path = self._resolve_boltz_cli_path()
+        if not installed_path:
+            self.console.print(
+                "  [yellow]boltz-api installer completed, but executable was not found on disk.[/yellow]"
+            )
+            return False
+
+        version = self._boltz_cli_version(installed_path)
+        self.console.print(f"  [green]Installed boltz-api:[/green] {installed_path} [dim]({version})[/dim]")
+        if shutil.which("boltz-api") is None:
+            self.console.print(
+                "  [dim]Tip: add ~/.local/bin to PATH if you want `boltz-api` by name in shell.[/dim]"
+            )
+        return True
+
+    def _handle_set_boltz_key(self, cfg) -> None:
+        """Prompt/update BOLTZ_API_KEY and offer skill/CLI setup."""
+        existing_value = str(cfg.get("api.boltz_api_key") or os.environ.get("BOLTZ_API_KEY") or "").strip()
+        current_state = "configured" if existing_value else "not set"
+        self.console.print(
+            f"  [cyan]Update BOLTZ_API_KEY[/cyan] [dim](currently {current_state})[/dim]"
+        )
+        try:
+            api_key_input = self._secret_prompt_session.prompt(
+                [("class:prompt", "  New BOLTZ_API_KEY [Enter clears key; :keep keeps existing]: ")],
+                is_password=True,
+            ).strip()
+        except (EOFError, KeyboardInterrupt):
+            self.console.print("  [dim]Cancelled.[/dim]")
+            return
+
+        api_key = self._resolve_optional_api_key_input(
+            api_key_input,
+            existing_key=existing_value,
+            default_key=existing_value,
+        )
+
+        if api_key:
+            cfg.set("api.boltz_api_key", api_key)
+            os.environ["BOLTZ_API_KEY"] = api_key
+            self.console.print("  [green]BOLTZ_API_KEY updated.[/green]")
+        else:
+            cfg.unset("api.boltz_api_key")
+            os.environ.pop("BOLTZ_API_KEY", None)
+            self.console.print("  [green]BOLTZ_API_KEY cleared.[/green]")
+
+        cfg.save()
+        self.session.config = cfg
+        self.console.print(cfg.keys_table())
+
+        if not api_key:
+            return
+
+        if self._prompt_yes_no("Install Fastfold Boltz skill now?", default=True):
+            self._install_boltz_skill()
+        else:
+            self.console.print("  [dim]Skipped Boltz skill install.[/dim]")
+
+        if self._prompt_yes_no("Install boltz-api CLI now?", default=True):
+            self._ensure_boltz_cli_ready()
+        else:
+            self.console.print("  [dim]Skipped boltz-api install.[/dim]")
+
     def _handle_keys_command(self, query: str) -> None:
         """Handle /keys with optional compatible-profile actions."""
         from agent.config import Config
@@ -3484,8 +3669,12 @@ class InteractiveTerminal:
             self.console.print(cfg.keys_table())
             return
 
+        if action in {"set-boltz", "boltz", "set-boltz-key"}:
+            self._handle_set_boltz_key(cfg)
+            return
+
         self.console.print(
-            "  [dim]Usage:[/dim] /keys  |  /keys profile  |  /keys set-compatible [profile_id]"
+            "  [dim]Usage:[/dim] /keys  |  /keys profile  |  /keys set-compatible [profile_id]  |  /keys set-boltz"
         )
         self.console.print(cfg.keys_table())
 

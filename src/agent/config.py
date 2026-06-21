@@ -146,6 +146,7 @@ DEFAULTS = {
     "api.data_endpoint": None,
     "api.clue_key": None,
     "api.fastfold_cloud_key": None,
+    "api.boltz_api_key": None,
     "fastfold.subscription_tier": None,
 
     "output.format": "markdown",
@@ -361,6 +362,13 @@ API_KEYS = {
         "url": "https://cloud.fastfold.ai/api-keys",
         "free": False,
     },
+    "api.boltz_api_key": {
+        "name": "Boltz",
+        "env_var": "BOLTZ_API_KEY",
+        "description": "Boltz structure/binding, design, and screening skills",
+        "url": "https://api.boltz.bio/console",
+        "free": False,
+    },
     "notification.sendgrid_api_key": {
         "name": "SendGrid",
         "env_var": "SENDGRID_API_KEY",
@@ -571,6 +579,22 @@ class Config:
         """Best-effort check for Anthropic model identifiers."""
         value = str(model_id or "").strip().lower()
         return value.startswith("claude-")
+
+    @staticmethod
+    def _looks_like_openai_cloud_model(model_id: Optional[str]) -> bool:
+        """Best-effort check for OpenAI cloud model identifiers."""
+        value = str(model_id or "").strip().lower()
+        if not value:
+            return False
+        if value.startswith("gpt-oss"):
+            return False
+        return (
+            value.startswith("gpt-4")
+            or value.startswith("gpt-5")
+            or value.startswith("o1")
+            or value.startswith("o3")
+            or value.startswith("chatgpt")
+        )
 
     @staticmethod
     def _slugify_profile_id(value: str) -> str:
@@ -788,6 +812,27 @@ class Config:
                         model_match_profile = profile_id
                         break
                 active_profile = model_match_profile or compatible_profile_ids[0]
+
+        # Heal cloud-model/local-backend mismatch (e.g. GPT-5 + Ollama endpoint).
+        active_profile_data = profiles.get(active_profile) if isinstance(profiles, dict) else None
+        active_backend = str((active_profile_data or {}).get("backend") or "").strip().lower()
+        local_compatible_backends = {"ollama", "unsloth", "omlx", "ds4", "llama_cpp", "lm_studio"}
+        if (
+            provider_raw == "openai"
+            and active_backend in local_compatible_backends
+            and cls._looks_like_openai_cloud_model(configured_model)
+        ):
+            fallback_model = (
+                str((active_profile_data or {}).get("default_model") or "").strip()
+                or str(
+                    OPENAI_PROFILE_DEFAULTS.get(active_backend, OPENAI_PROFILE_DEFAULTS["other"]).get(
+                        "default_model"
+                    )
+                    or "llama3.1"
+                ).strip()
+            )
+            if fallback_model and fallback_model != configured_model:
+                data["llm.model"] = fallback_model
 
         data["llm.openai_profiles"] = profiles
         data["llm.openai_active_profile"] = active_profile
@@ -1079,6 +1124,7 @@ class Config:
             "IBM_RXN_API_KEY": "api.ibm_rxn_key",
             "LENS_API_KEY": "api.lens_key",
             "FASTFOLD_API_KEY": "api.fastfold_cloud_key",
+            "BOLTZ_API_KEY": "api.boltz_api_key",
             "SENDGRID_API_KEY": "notification.sendgrid_api_key",
             "LAMBDA_API_KEY": "compute.lambda_api_key",
             "RUNPOD_API_KEY": "compute.runpod_api_key",

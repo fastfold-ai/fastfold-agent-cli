@@ -28,6 +28,13 @@ class _Err(Exception):
         self.code = code
 
 
+class _OpenAIStyleErr(Exception):
+    pass
+
+
+_OpenAIStyleErr.__module__ = "openai"
+
+
 class TestClassifyLlmError:
     def test_auth_by_status(self):
         title, body = _classify_llm_error(_Err("nope", status_code=401))
@@ -47,6 +54,23 @@ class TestClassifyLlmError:
         title, body = _classify_llm_error(ConnectionError("connection error"))
         assert title == "Connection problem"
         assert "network" in body.lower()
+
+    def test_connection_refused_text(self):
+        title, body = _classify_llm_error(_Err("dial tcp: connection refused"))
+        assert title == "Connection problem"
+        assert "could not reach" in body.lower()
+
+    def test_model_or_endpoint_not_found(self):
+        title, body = _classify_llm_error(
+            _Err("model 'gpt-5-nano' not found", status_code=404)
+        )
+        assert title == "Model or endpoint not found"
+        assert "llm.model" in body
+
+    def test_openai_style_error_falls_back_to_provider_message(self):
+        title, body = _classify_llm_error(_OpenAIStyleErr("something odd happened"))
+        assert title == "Model provider request failed"
+        assert "openai-compatible" in body.lower()
 
     def test_unrecognized(self):
         assert _classify_llm_error(_Err("completely unknown")) is None

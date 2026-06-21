@@ -76,6 +76,9 @@ def spinner(message: str, *, console: Console = console):
 
 
 FASTFOLD_CLOUD_API_KEYS_URL = "https://cloud.fastfold.ai/api-keys"
+BOLTZ_API_KEYS_URL = "https://api.boltz.bio/console"
+BOLTZ_SKILL_SOURCE = "fastfold-ai/skills@skills/boltz"
+BOLTZ_INSTALL_SCRIPT = "set -euo pipefail; curl -fsSL https://install.boltz.bio/boltz-api/install.sh | sh"
 SETUP_PROVIDER_ORDER = ("anthropic", "openai", "openai_compatible")
 UV_INSTALL_FLAVORS = frozenset({"all", "win_build"})
 PYPI_PROJECT_JSON_URL = "https://pypi.org/pypi/fastfold-agent-cli/json"
@@ -200,12 +203,29 @@ def _random_command_tip_markup() -> str:
     return f"[dim]Tip: try [/][bold #D4148E]{command}[/][dim] — {description}[/dim]"
 
 
+_BOLTZ_NEWS_USE_CASES = (
+    "structure and binding",
+    "protein design",
+    "protein screening",
+    "small-molecule design",
+    "small-molecule screening",
+    "ADME prediction",
+)
+
+
 def _random_news_item_markup() -> str:
-    """Return the BoltzGen-only news/action line."""
+    """Return a rotating Boltz API news/action line."""
     installed = set(_installed_claude_skill_names())
-    if "protein_design_boltzgen" in installed:
-        return "[bold #25C19F]BoltzGen universal protein design now available![/] [#7A7A7A]· Try: Show me Boltzgen protein design examples[/]"
-    return "[bold #25C19F]BoltzGen universal protein design now available[/] [#7A7A7A]· Try: Show me Boltzgen protein design examples[/]"
+    use_case = random.choice(_BOLTZ_NEWS_USE_CASES)
+    if "boltz" in installed:
+        return (
+            "[bold #25C19F]Boltz API skill now available![/] "
+            f"[#7A7A7A]· Try: Show me Boltz API examples for {use_case}[/]"
+        )
+    return (
+        "[bold #25C19F]Boltz API skill now available[/] "
+        f"[#7A7A7A]· Try: Show me Boltz API examples for {use_case}[/]"
+    )
 
 
 def _normalize_upgrade_flavor(value: object) -> Optional[str]:
@@ -321,6 +341,7 @@ def _start_skills_update_check() -> None:
 
 
 _FASTFOLD_CORE_SKILL_NAMES = {
+    "boltz",
     "fold",
     "protein_design_boltzgen",
     "md_openmm_calvados",
@@ -589,6 +610,9 @@ def setup_cmd(
     fastfold_api_key: Optional[str] = typer.Option(
         None, "--fastfold-api-key", help="Fastfold AI Cloud API key (non-interactive mode)"
     ),
+    boltz_api_key: Optional[str] = typer.Option(
+        None, "--boltz-api-key", help="Boltz API key (non-interactive mode)"
+    ),
     provider: Optional[str] = typer.Option(
         None, "--provider", help="LLM provider(s): anthropic, openai, openai_compatible"
     ),
@@ -634,6 +658,8 @@ def setup_cmd(
         set_default_profile = False
     if isinstance(fastfold_api_key, OptionInfo):
         fastfold_api_key = None
+    if isinstance(boltz_api_key, OptionInfo):
+        boltz_api_key = None
     if isinstance(provider, OptionInfo):
         provider = None
     if isinstance(skills, OptionInfo):
@@ -825,6 +851,7 @@ def setup_cmd(
 
     # Determine Fastfold AI Cloud API key (optional, but recommended for cloud-integrated skills)
     cloud_key = _prompt_fastfold_cloud_api_key(cfg, fastfold_api_key)
+    boltz_key = _prompt_boltz_api_key(cfg, boltz_api_key)
 
     # Save
     resolved_compatible_profile_id: Optional[str] = None
@@ -884,6 +911,9 @@ def setup_cmd(
         cfg.set("api.fastfold_cloud_key", cloud_key)
         # Make available immediately to subprocess tools/skills in this run.
         os.environ["FASTFOLD_API_KEY"] = cloud_key
+    if boltz_key:
+        cfg.set("api.boltz_api_key", boltz_key)
+        os.environ["BOLTZ_API_KEY"] = boltz_key
     cfg.save()
     provider_labels = ", ".join(
         (
@@ -906,9 +936,18 @@ def setup_cmd(
             f"Set later with `fastfold config set api.fastfold_cloud_key <key>` "
             f"or visit {FASTFOLD_CLOUD_API_KEYS_URL}"
         )
+    if boltz_key:
+        console.print("  [green]Boltz API key saved.[/green]")
+    else:
+        console.print(
+            "  [yellow]Boltz API key skipped.[/yellow] "
+            "Set later with `fastfold config set api.boltz_api_key <key>` "
+            f"or visit {BOLTZ_API_KEYS_URL}"
+        )
 
     # Optional: install agent skills (live catalog + custom sources)
     _prompt_install_skills(skills_arg=skills, skip=skip_skills)
+    _prompt_install_boltz_stack(boltz_key)
 
     # Optional: download local datasets (auto-downloadable ones, all preselected)
     _prompt_install_datasets(datasets_arg=datasets, skip=skip_datasets)
@@ -1992,6 +2031,167 @@ def _prompt_fastfold_cloud_api_key(cfg, cli_value: Optional[str] = None) -> Opti
         console.print("\n  [dim]Setup cancelled.[/dim]")
         raise typer.Exit()
     return key or None
+
+
+def _prompt_boltz_api_key(cfg, cli_value: Optional[str] = None) -> Optional[str]:
+    """Prompt for Boltz API key, allowing users to keep/skip."""
+    existing = cfg.get("api.boltz_api_key") or os.environ.get("BOLTZ_API_KEY")
+    if isinstance(cli_value, str) and cli_value:
+        return cli_value.strip() or None
+
+    console.print()
+    console.print(
+        "  Boltz API keys: "
+        f"[link={BOLTZ_API_KEYS_URL}]{BOLTZ_API_KEYS_URL}[/link]"
+    )
+    if existing:
+        masked = existing[:7] + "..." + existing[-4:] if len(existing) > 11 else "***"
+        console.print(f"  Existing Boltz key detected: [green]{masked}[/green]")
+        try:
+            keep = input("  Keep existing Boltz key? [Y/n] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            console.print("\n  [dim]Setup cancelled.[/dim]")
+            raise typer.Exit()
+        if keep in ("", "y", "yes"):
+            return existing
+
+    console.print("  Press Enter to skip this step.")
+    try:
+        key = _prompt_masked_secret("  Enter your Boltz API key: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n  [dim]Setup cancelled.[/dim]")
+        raise typer.Exit()
+    return key or None
+
+
+def _find_boltz_cli_path() -> Optional[Path]:
+    """Return the first available boltz-api executable path."""
+    candidates: list[str] = []
+    in_path = shutil.which("boltz-api")
+    if in_path:
+        candidates.append(in_path)
+    candidates.extend(
+        [
+            str(Path.home() / ".local" / "bin" / "boltz-api"),
+            str(Path.home() / ".boltz" / "bin" / "boltz-api"),
+        ]
+    )
+    for candidate in candidates:
+        path = Path(candidate).expanduser()
+        if path.exists() and path.is_file() and os.access(str(path), os.X_OK):
+            return path
+    return None
+
+
+def _boltz_cli_version(path: Path) -> str:
+    """Return a compact boltz-api version string when available."""
+    try:
+        proc = subprocess.run(
+            [str(path), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception:  # noqa: BLE001
+        return "unknown version"
+    output = (proc.stdout or proc.stderr or "").strip()
+    if not output:
+        return "unknown version"
+    return output.splitlines()[0].strip()
+
+
+def _install_boltz_skill_from_setup() -> bool:
+    """Install Fastfold's boltz skill if not already present."""
+    from agent.skills import install_skill, installed_skill_names
+
+    installed = set(installed_skill_names())
+    if "boltz" in installed:
+        console.print("  [green]Boltz skill already installed.[/green]")
+        return True
+
+    with spinner("Installing Fastfold Boltz skill..."):
+        result = install_skill(BOLTZ_SKILL_SOURCE, prefer_npx=True)
+    if result.get("ok"):
+        console.print(f"  [green]{result.get('summary', 'Installed boltz skill.')}[/green]")
+        return True
+
+    console.print(
+        "  [yellow]Could not auto-install Boltz skill.[/yellow] "
+        f"[dim]{result.get('summary', '')}[/dim]"
+    )
+    console.print(f"  [dim]Install manually with:[/dim] fastfold skills add {BOLTZ_SKILL_SOURCE}")
+    return False
+
+
+def _ensure_boltz_cli_installed_from_setup() -> bool:
+    """Install boltz-api CLI when missing."""
+    current = _find_boltz_cli_path()
+    if current:
+        version = _boltz_cli_version(current)
+        console.print(f"  [green]boltz-api ready:[/green] {current} [dim]({version})[/dim]")
+        return True
+
+    if not shutil.which("curl") or not shutil.which("sh"):
+        console.print(
+            "  [yellow]Could not install boltz-api automatically (missing curl/sh).[/yellow]"
+        )
+        console.print(
+            "  [dim]Install manually:[/dim] curl -fsSL https://install.boltz.bio/boltz-api/install.sh | sh"
+        )
+        return False
+
+    with spinner("Installing boltz-api CLI..."):
+        proc = subprocess.run(
+            ["sh", "-lc", BOLTZ_INSTALL_SCRIPT],
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        detail = detail.splitlines()[-1] if detail else "installer exited with a non-zero code"
+        console.print(f"  [yellow]boltz-api install failed:[/yellow] {detail}")
+        console.print(
+            "  [dim]Retry manually:[/dim] curl -fsSL https://install.boltz.bio/boltz-api/install.sh | sh"
+        )
+        return False
+
+    installed = _find_boltz_cli_path()
+    if not installed:
+        console.print(
+            "  [yellow]boltz-api installer completed, but executable was not found on disk.[/yellow]"
+        )
+        return False
+    version = _boltz_cli_version(installed)
+    console.print(f"  [green]Installed boltz-api:[/green] {installed} [dim]({version})[/dim]")
+    return True
+
+
+def _prompt_install_boltz_stack(boltz_key: Optional[str]) -> None:
+    """Offer Boltz skill + CLI installation when a Boltz key is configured."""
+    if not boltz_key:
+        return
+
+    interactive = sys.stdin.isatty() and sys.stdout.isatty()
+    if not interactive:
+        console.print(
+            "  [dim]Boltz key configured. Optional setup:[/dim] "
+            f"`fastfold skills add {BOLTZ_SKILL_SOURCE}` and "
+            "`curl -fsSL https://install.boltz.bio/boltz-api/install.sh | sh`."
+        )
+        return
+
+    try:
+        answer = input("\n  Install Boltz skill + boltz-api CLI now? [Y/n] ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n  [dim]Skipped Boltz install step.[/dim]")
+        return
+    if answer in {"n", "no"}:
+        console.print("  [dim]Skipped Boltz install step.[/dim]")
+        return
+
+    _install_boltz_skill_from_setup()
+    _ensure_boltz_cli_installed_from_setup()
 
 
 _PROVIDER_BY_OWNER = {

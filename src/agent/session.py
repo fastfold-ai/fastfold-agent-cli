@@ -2,6 +2,7 @@
 Session management: holds config, LLM clients, and shared state for a ct session.
 """
 
+import os
 import time
 from pathlib import Path
 from rich.console import Console
@@ -21,6 +22,23 @@ class Session:
         self._scratchpad = []
         self._tool_health_failures: dict[str, list[float]] = {}
         self._tool_health_suppressed_until: dict[str, float] = {}
+        self._sync_tool_env_from_config()
+
+    def _sync_tool_env_from_config(self) -> None:
+        """Expose configured provider/tool keys to subprocess-based tools.
+
+        Some installed skills and CLIs (for example ``boltz-api``) read credentials
+        directly from process environment variables. The CLI persists keys in config,
+        so mirror those values into ``os.environ`` when missing to keep shell-based
+        tool execution deterministic across fresh sessions.
+        """
+        env_from_config = {
+            "FASTFOLD_API_KEY": str(self.config.get("api.fastfold_cloud_key") or "").strip(),
+            "BOLTZ_API_KEY": str(self.config.get("api.boltz_api_key") or "").strip(),
+        }
+        for env_name, value in env_from_config.items():
+            if value and not str(os.environ.get(env_name) or "").strip():
+                os.environ[env_name] = value
 
     def get_llm(self):
         """Get or create the LLM client based on config."""

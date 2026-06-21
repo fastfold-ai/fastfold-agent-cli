@@ -721,19 +721,23 @@ class TestMarkupAndVersionHelpers:
         tip = _random_command_tip_markup()
         assert "/help" in tip
 
-    def test_random_news_item_without_boltzgen(self, monkeypatch):
+    def test_random_news_item_without_boltz_skill(self, monkeypatch):
         monkeypatch.setattr("cli._installed_claude_skill_names", lambda: ["fold"])
+        monkeypatch.setattr("cli.random.choice", lambda seq: "protein screening")
         news = _random_news_item_markup()
-        assert "BoltzGen" in news
-        assert "!" not in news.split("BoltzGen")[1][:20]
+        assert "Boltz API skill now available" in news
+        assert "Show me Boltz API examples for protein screening" in news
+        assert "available!" not in news
 
-    def test_random_news_item_with_boltzgen_installed(self, monkeypatch):
+    def test_random_news_item_with_boltz_skill_installed(self, monkeypatch):
         monkeypatch.setattr(
             "cli._installed_claude_skill_names",
-            lambda: ["fold", "protein_design_boltzgen"],
+            lambda: ["fold", "boltz"],
         )
+        monkeypatch.setattr("cli.random.choice", lambda seq: "ADME prediction")
         news = _random_news_item_markup()
-        assert "BoltzGen universal protein design now available!" in news
+        assert "Boltz API skill now available!" in news
+        assert "Show me Boltz API examples for ADME prediction" in news
 
     def test_resolve_upgrade_flavor_uses_configured_value(self, tmp_path, monkeypatch):
         cfg = Config(data={"install.uv_flavor": "win_build"})

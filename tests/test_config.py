@@ -211,6 +211,17 @@ def test_keys_table_includes_llm_provider_keys():
     assert "OpenAI" in first_col
 
 
+def test_keys_table_includes_boltz_provider():
+    cfg = Config(data={"api.boltz_api_key": "sk_bc_test_1234567890"})
+    table = cfg.keys_table()
+    services = list(getattr(table.columns[0], "_cells", []))
+    previews = list(getattr(table.columns[2], "_cells", []))
+    assert "Boltz" in services
+    boltz_idx = services.index("Boltz")
+    assert previews[boltz_idx].startswith("sk_bc_te")
+    assert "..." in previews[boltz_idx]
+
+
 def test_keys_table_includes_preview_column_and_masked_openai_value():
     cfg = Config(data={"llm.openai_api_key": "sk-proj-AbCdEf1234567890xyz"})
     table = cfg.keys_table()
@@ -327,6 +338,17 @@ def test_save_merges_only_dirty_keys_and_preserves_existing_secrets(monkeypatch,
     assert backup_path.exists()
 
 
+def test_load_reads_boltz_api_key_from_env(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.json"
+    backup_path = tmp_path / "config.json.bak"
+    monkeypatch.setattr(config_mod, "CONFIG_FILE", config_path)
+    monkeypatch.setattr(config_mod, "CONFIG_BACKUP_FILE", backup_path)
+    monkeypatch.setenv("BOLTZ_API_KEY", "sk_bc_env_key")
+
+    cfg = Config.load()
+    assert cfg.get("api.boltz_api_key") == "sk_bc_env_key"
+
+
 def test_set_openai_key_accepts_project_format():
     cfg = Config(data={})
     key = "sk-proj-AbCdEf1234567890xyz"
@@ -381,6 +403,59 @@ def test_load_bootstraps_compatible_profile_when_legacy_key_exists_without_endpo
     assert active_profile["default_model"] == "omlx-model"
     assert cfg.get("llm.provider") == "openai"
     assert cfg.llm_openai_base_url() == "http://localhost:8000/v1"
+
+
+def test_heals_openai_cloud_model_when_active_profile_is_local_backend():
+    cfg = Config(
+        data={
+            "llm.provider": "openai",
+            "llm.model": "gpt-5-nano",
+            "llm.openai_profiles": {
+                "openai_cloud": {
+                    "label": "OpenAI Cloud",
+                    "backend": "openai",
+                    "base_url": "https://api.openai.com/v1",
+                    "default_model": "gpt-5.5",
+                },
+                "ollama_local": {
+                    "label": "Ollama Local",
+                    "backend": "ollama",
+                    "base_url": "http://localhost:11434/v1",
+                    "default_model": "qwen3.6:32b",
+                },
+            },
+            "llm.openai_active_profile": "ollama_local",
+        }
+    )
+
+    assert cfg.get("llm.model") == "qwen3.6:32b"
+    assert cfg.llm_openai_base_url() == "http://localhost:11434/v1"
+
+
+def test_does_not_heal_openai_cloud_model_for_other_compatible_backend():
+    cfg = Config(
+        data={
+            "llm.provider": "openai",
+            "llm.model": "gpt-5-nano",
+            "llm.openai_profiles": {
+                "openai_cloud": {
+                    "label": "OpenAI Cloud",
+                    "backend": "openai",
+                    "base_url": "https://api.openai.com/v1",
+                    "default_model": "gpt-5.5",
+                },
+                "gateway_proxy": {
+                    "label": "Gateway Proxy",
+                    "backend": "other",
+                    "base_url": "https://my-gateway.example/v1",
+                    "default_model": "gpt-5-nano",
+                },
+            },
+            "llm.openai_active_profile": "gateway_proxy",
+        }
+    )
+
+    assert cfg.get("llm.model") == "gpt-5-nano"
 
 
 def test_upsert_profile_key_does_not_get_overwritten_by_stale_legacy_projection():

@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.58] - 2026-06-21
+
+### Added
+
+- Native Boltz provider onboarding in both interactive (`/keys set-boltz`) and
+  setup flows, including optional installation of the Fastfold `boltz` skill and
+  `boltz-api` CLI with health checks in `fastfold doctor`.
+- Provider integration docs updates in CLI and docs pages, including direct key
+  setup links and provider matrix guidance.
+- Regression coverage for Boltz setup/doctor/config flows and OpenAI-compatible
+  profile prompts.
+
+### Changed
+
+- Startup news banner now promotes the unified Boltz API skill with rotating use
+  cases instead of the legacy BoltzGen-only message.
+- OpenAI-compatible profile handling now heals cloud-model/local-backend mismatch
+  states (for example GPT-5 model ids with Ollama endpoints) by aligning to the
+  active profile default model.
+
+### Fixed
+
+- OpenAI-compatible provider failures (including model-not-found and unavailable
+  local endpoints) now show concise, actionable errors instead of deep tracebacks.
+- Session startup now mirrors configured tool credentials (`BOLTZ_API_KEY`,
+  `FASTFOLD_API_KEY`) into process env when missing so shell/skill subprocesses
+  authenticate consistently.
+
 ## [0.0.57] - 2026-06-20
 
 ### Added

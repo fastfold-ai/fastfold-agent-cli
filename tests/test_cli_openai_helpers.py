@@ -15,6 +15,7 @@ from cli import (
     _openai_models_url_from_base,
     _ollama_tags_url_from_base,
     _parse_provider_list,
+    _prompt_boltz_api_key,
     _prompt_compatible_model_for_setup,
     _prompt_fastfold_cloud_api_key,
     _prompt_openai_compatible_backend,
@@ -382,6 +383,7 @@ class TestPromptFastfoldCloudApiKey:
     def test_skip_and_interrupt_paths(self, captured_console, monkeypatch):
         console, _ = captured_console
         monkeypatch.setattr("cli.console", console)
+        monkeypatch.delenv("BOLTZ_API_KEY", raising=False)
         cfg = Config(data={})
 
         monkeypatch.setattr("cli._prompt_masked_secret", lambda _message: "")
@@ -393,3 +395,28 @@ class TestPromptFastfoldCloudApiKey:
         )
         with pytest.raises(typer.Exit):
             _prompt_fastfold_cloud_api_key(cfg, None)
+
+
+class TestPromptBoltzApiKey:
+    def test_keeps_existing_key(self, captured_console, monkeypatch):
+        console, _ = captured_console
+        monkeypatch.setattr("cli.console", console)
+        cfg = Config(data={"api.boltz_api_key": "sk_bc_existing_123456"})
+        monkeypatch.setattr("builtins.input", lambda _: "y")
+        assert _prompt_boltz_api_key(cfg, None) == "sk_bc_existing_123456"
+
+    def test_skip_and_interrupt_paths(self, captured_console, monkeypatch):
+        console, _ = captured_console
+        monkeypatch.setattr("cli.console", console)
+        monkeypatch.delenv("BOLTZ_API_KEY", raising=False)
+        cfg = Config(data={})
+
+        monkeypatch.setattr("cli._prompt_masked_secret", lambda _message: "")
+        assert _prompt_boltz_api_key(cfg, None) is None
+
+        monkeypatch.setattr(
+            "cli._prompt_masked_secret",
+            lambda _message: (_ for _ in ()).throw(KeyboardInterrupt()),
+        )
+        with pytest.raises(typer.Exit):
+            _prompt_boltz_api_key(cfg, None)

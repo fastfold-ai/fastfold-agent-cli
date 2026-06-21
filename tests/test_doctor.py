@@ -7,6 +7,7 @@ from agent.config import Config
 from agent.doctor import (
     DoctorCheck,
     _check_api_connectivity,
+    _check_boltz_cli,
     _check_data_availability,
     _check_downloads_dir,
     _check_tool_health,
@@ -188,6 +189,34 @@ class TestToolHealth:
         assert check.status == "warn"
         assert "Recent failures" in check.detail
         assert "uniprot_lookup" in check.detail
+
+
+class TestBoltzDoctorCheck:
+    def test_boltz_not_configured_is_ok(self, monkeypatch):
+        monkeypatch.delenv("BOLTZ_API_KEY", raising=False)
+        cfg = Config(data={})
+        monkeypatch.setattr("agent.doctor._locate_boltz_cli_path", lambda: None)
+        check = _check_boltz_cli(cfg)
+        assert check.name == "boltz_cli"
+        assert check.status == "ok"
+
+    def test_boltz_key_without_cli_warns(self, monkeypatch):
+        cfg = Config(data={"api.boltz_api_key": "sk_bc_test"})
+        monkeypatch.setattr("agent.doctor._locate_boltz_cli_path", lambda: None)
+        check = _check_boltz_cli(cfg)
+        assert check.status == "warn"
+        assert "missing" in check.detail
+
+    def test_boltz_cli_with_key_is_ok(self, monkeypatch, tmp_path):
+        cfg = Config(data={"api.boltz_api_key": "sk_bc_test"})
+        fake_cli = tmp_path / "boltz-api"
+        fake_cli.write_text("#!/bin/sh\necho boltz-api 0.0.1\n")
+        fake_cli.chmod(0o755)
+        monkeypatch.setattr("agent.doctor._locate_boltz_cli_path", lambda: fake_cli)
+        monkeypatch.setattr("agent.doctor._boltz_cli_version", lambda _path: "boltz-api 0.0.1")
+        check = _check_boltz_cli(cfg)
+        assert check.status == "ok"
+        assert "BOLTZ_API_KEY configured" in check.detail
 
 
 class TestDoctorWithSession:

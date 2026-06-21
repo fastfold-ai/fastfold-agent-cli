@@ -40,7 +40,9 @@ def _stub_setup_flow(monkeypatch):
         ),
     )
     monkeypatch.setattr("cli._prompt_fastfold_cloud_api_key", lambda cfg, cli_key: None)
+    monkeypatch.setattr("cli._prompt_boltz_api_key", lambda cfg, cli_key: None)
     monkeypatch.setattr("cli._prompt_install_skills", lambda skills_arg=None, skip=False: None)
+    monkeypatch.setattr("cli._prompt_install_boltz_stack", lambda boltz_key: None)
     monkeypatch.setattr("agent.doctor.run_checks", lambda cfg: [])
     monkeypatch.setattr("agent.doctor.to_table", lambda checks: "")
     monkeypatch.setattr("agent.doctor.has_errors", lambda checks: False)
@@ -141,6 +143,20 @@ class TestSetupCmd:
         )
         assert result.exit_code == 0
         assert cfg.get("llm.anthropic_api_key") == "sk-ant-api03-cli"
+
+    def test_setup_cmd_saves_boltz_api_key(self, monkeypatch):
+        cfg = _mock_cfg(monkeypatch)
+        _stub_setup_flow(monkeypatch)
+        monkeypatch.setattr("cli._prompt_boltz_api_key", lambda _cfg, cli_key: cli_key)
+
+        setup_cmd(
+            provider="anthropic",
+            api_key="sk-ant-api03-cli",
+            boltz_api_key="sk_bc_test_cli",
+            skip_skills=True,
+        )
+
+        assert cfg.get("api.boltz_api_key") == "sk_bc_test_cli"
 
 
 class TestSkillAddInstall:

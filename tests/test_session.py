@@ -1,5 +1,6 @@
 """Tests for Session: model switching, LLM client management."""
 
+import os
 from unittest.mock import MagicMock, patch
 from agent.session import Session
 from agent.config import Config
@@ -104,6 +105,28 @@ class TestSessionBasics:
         assert kwargs["provider"] == "openai"
         assert kwargs["api_key"] == "openai-key"
         assert kwargs["base_url"] == "http://localhost:11434/v1"
+
+    def test_session_exports_tool_keys_to_env_when_missing(self, monkeypatch):
+        monkeypatch.delenv("BOLTZ_API_KEY", raising=False)
+        monkeypatch.delenv("FASTFOLD_API_KEY", raising=False)
+        cfg = Config(data={
+            "api.boltz_api_key": "sk_bc_cfg_value",
+            "api.fastfold_cloud_key": "sk_ff_cfg_value",
+        })
+        Session(config=cfg)
+        assert os.environ.get("BOLTZ_API_KEY") == "sk_bc_cfg_value"
+        assert os.environ.get("FASTFOLD_API_KEY") == "sk_ff_cfg_value"
+
+    def test_session_does_not_override_existing_env_keys(self, monkeypatch):
+        monkeypatch.setenv("BOLTZ_API_KEY", "sk_bc_env_wins")
+        monkeypatch.setenv("FASTFOLD_API_KEY", "sk_ff_env_wins")
+        cfg = Config(data={
+            "api.boltz_api_key": "sk_bc_cfg_value",
+            "api.fastfold_cloud_key": "sk_ff_cfg_value",
+        })
+        Session(config=cfg)
+        assert os.environ.get("BOLTZ_API_KEY") == "sk_bc_env_wins"
+        assert os.environ.get("FASTFOLD_API_KEY") == "sk_ff_env_wins"
 
 
 class TestToolHealth:

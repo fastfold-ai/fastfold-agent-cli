@@ -112,13 +112,42 @@ Prefer environment variables? Set keys directly:
 export ANTHROPIC_API_KEY="sk-ant-..."
 export OPENAI_API_KEY="sk-..."
 export FASTFOLD_API_KEY="sk-..."
+export BOLTZ_API_KEY="sk_bc_..."
 ```
+
+### Provider integrations (`/keys`)
+
+Use `/keys` (interactive) or `fastfold keys` (shell) to see integration status, masked previews, config keys, and setup links.
+
+| Service | Env var | Config key | Unlocks | Get key / setup |
+| --- | --- | --- | --- | --- |
+| Anthropic | `ANTHROPIC_API_KEY` | `llm.anthropic_api_key` | Claude model access (default provider) | [console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys) |
+| OpenAI | `OPENAI_API_KEY` | `llm.openai_api_key` | OpenAI model access | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
+| OpenAI-compatible | `OPENAI_COMPATIBLE_API_KEY` | `llm.openai_compatible_api_key` / profile key | Local/self-hosted OpenAI-compatible endpoints | [Ollama API docs](https://docs.ollama.com/api/introduction) |
+| Fastfold AI Cloud | `FASTFOLD_API_KEY` | `api.fastfold_cloud_key` | Fastfold cloud skills and integrations | [cloud.fastfold.ai/api-keys](https://cloud.fastfold.ai/api-keys) |
+| Boltz | `BOLTZ_API_KEY` | `api.boltz_api_key` | Boltz API skills (`boltz` skill modes) | [api.boltz.bio/console](https://api.boltz.bio/console) |
+| IBM RXN | `IBM_RXN_API_KEY` | `api.ibm_rxn_key` | Retrosynthesis workflows | [rxn.res.ibm.com](https://rxn.res.ibm.com) |
+| Lens.org | `LENS_API_KEY` | `api.lens_key` | Patent search workflows | [lens.org subscriptions](https://www.lens.org/lens/user/subscriptions) |
+| SendGrid | `SENDGRID_API_KEY` | `notification.sendgrid_api_key` | Email notification delivery | [sendgrid.com](https://sendgrid.com) |
+| Lambda Labs | `LAMBDA_API_KEY` | `compute.lambda_api_key` | GPU compute job submission | [cloud.lambdalabs.com](https://cloud.lambdalabs.com) |
+| RunPod | `RUNPOD_API_KEY` | `compute.runpod_api_key` | GPU compute job submission | [runpod.io](https://www.runpod.io) |
+
+Boltz quick setup from interactive mode:
+
+```bash
+/keys set-boltz
+```
+
+That flow prompts for `BOLTZ_API_KEY`, then offers to install:
+- the Fastfold Boltz skill (`fastfold-ai/skills@skills/boltz`)
+- the `boltz-api` CLI (`curl -fsSL https://install.boltz.bio/boltz-api/install.sh | sh`)
 
 For CI or scripting, pass keys non-interactively:
 
 ```bash
 fastfold setup --api-key sk-ant-... --fastfold-api-key sk-...
 fastfold setup --provider openai --openai-api-key sk-... --fastfold-api-key sk-...
+fastfold setup --provider anthropic --api-key sk-ant-... --fastfold-api-key sk-... --boltz-api-key sk_bc_...
 ```
 
 Local/compatible endpoints can also be configured in one line:
@@ -276,7 +305,7 @@ Inside `fastfold` interactive mode (run `/help` for the full reference):
 - `/model-manager`: manage OpenAI-compatible profiles (add/edit/delete + diagnostics)
 - `/settings`: configure UI and agent preferences
 - `/config`: show active runtime configuration
-- `/keys`: show API key setup status by service (`/keys profile`, `/keys set-compatible <profile_id>`)
+- `/keys`: show API key setup status by service (`/keys profile`, `/keys set-compatible <profile_id>`, `/keys set-boltz`)
 
 **Run control**
 

@@ -36,6 +36,7 @@ def _classify_llm_error(exc: Exception) -> tuple[str, str] | None:
     text = str(exc)
     low = text.lower()
     status = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    exc_mod = str(getattr(exc.__class__, "__module__", "") or "").lower()
 
     is_auth = (
         status == 401
@@ -67,17 +68,56 @@ def _classify_llm_error(exc: Exception) -> tuple[str, str] | None:
             "Wait a few seconds and try again.",
         )
 
+    is_not_found = (
+        status == 404
+        or ("model" in low and "not found" in low)
+        or "not_found_error" in low
+    )
+    if is_not_found:
+        return (
+            "Model or endpoint not found",
+            "The configured provider returned 404 (model or endpoint not found).\n"
+            "Verify `llm.model` and `llm.openai_base_url` for your selected profile,\n"
+            "then retry (you can update via `/model` or `fastfold setup`).",
+        )
+
     is_conn = (
         isinstance(exc, (ConnectionError, TimeoutError))
         or "connection error" in low
         or "timed out" in low
         or "timeout" in low
+        or "connection refused" in low
+        or "failed to establish a new connection" in low
+        or "max retries exceeded" in low
+        or "temporary failure in name resolution" in low
+        or "name or service not known" in low
     )
     if is_conn:
         return (
             "Connection problem",
             "Could not reach the model provider.\n"
             "Check your network connection and try again.",
+        )
+
+    is_server_unavailable = status in {500, 502, 503, 504} or "service unavailable" in low
+    if is_server_unavailable:
+        return (
+            "Provider unavailable",
+            "The model provider is temporarily unavailable.\n"
+            "Try again shortly, or switch models/providers with `/model`.",
+        )
+
+    # Keep OpenAI-compatible failures concise (including custom providers like
+    # Ollama/LM Studio/proxy gateways) instead of printing deep tracebacks.
+    if (
+        exc_mod.startswith("openai")
+        or exc_mod.startswith("httpx")
+        or "langchain_openai" in exc_mod
+    ):
+        return (
+            "Model provider request failed",
+            "The configured OpenAI-compatible provider rejected or failed the request.\n"
+            "Check provider health, `llm.model`, and `llm.openai_base_url`, then retry.",
         )
 
     return None
