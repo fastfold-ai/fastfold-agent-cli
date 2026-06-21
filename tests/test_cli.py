@@ -436,7 +436,7 @@ def test_build_upgrade_command_for_win_build():
         "install",
         "fastfold-agent-cli[win_build]",
         "--python",
-        "3.10",
+        "3.11",
         "--upgrade",
     ]
 

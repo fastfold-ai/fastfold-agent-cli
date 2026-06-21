@@ -82,6 +82,7 @@ BOLTZ_SKILL_SOURCE = "fastfold-ai/skills@skills/boltz"
 BOLTZ_INSTALL_SCRIPT = "set -euo pipefail; curl -fsSL https://install.boltz.bio/boltz-api/install.sh | sh"
 SETUP_PROVIDER_ORDER = ("anthropic", "openai", "openai_compatible")
 UV_INSTALL_FLAVORS = frozenset({"all", "win_build"})
+UV_UPGRADE_PYTHON_VERSION = "3.11"
 PYPI_PROJECT_JSON_URL = "https://pypi.org/pypi/fastfold-agent-cli/json"
 _SEMVER_TRIPLET_PATTERN = re.compile(r"^\s*v?(\d+)\.(\d+)\.(\d+)")
 _UPGRADE_CACHE_PATH = Path.home() / ".fastfold-cli" / "cache" / "upgrade-version.json"
@@ -265,7 +266,7 @@ def resolve_upgrade_flavor(cfg=None, persist: bool = True) -> str:
 def build_upgrade_command(flavor: str) -> list[str]:
     normalized = _normalize_upgrade_flavor(flavor) or _default_upgrade_flavor()
     package_ref = f"fastfold-agent-cli[{normalized}]"
-    return ["uv", "tool", "install", package_ref, "--python", "3.10", "--upgrade"]
+    return ["uv", "tool", "install", package_ref, "--python", UV_UPGRADE_PYTHON_VERSION, "--upgrade"]
 
 
 def _parse_semver_triplet(version: str) -> Optional[tuple[int, int, int]]:

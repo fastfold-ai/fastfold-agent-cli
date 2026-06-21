@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.60] - 2026-06-21
+
+### Fixed
+
+- `/upgrade` now targets Python `3.11` (matching the CLI runtime requirement)
+  instead of an outdated `3.10` tool install target.
+
 ## [0.0.59] - 2026-06-21
 
 ### Changed
