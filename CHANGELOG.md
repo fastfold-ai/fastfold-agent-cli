@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.61] - 2026-06-21
+
+### Changed
+
+- `/upgrade` now runs a full skills sync automatically after the CLI package
+  upgrade (same behavior as `/skills-upgrade`), including catalog refresh and
+  tracked skill source updates.
+
 ## [0.0.60] - 2026-06-21
 
 ### Fixed

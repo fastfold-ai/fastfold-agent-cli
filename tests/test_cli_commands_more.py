@@ -104,8 +104,11 @@ class TestUpgradeCommand:
     def test_upgrade_cmd_success(self):
         cfg = Config(data={"install.uv_flavor": "all"})
         proc = MagicMock(returncode=0, stdout="installed", stderr="")
+        skills_result = {"added": [], "updated": [], "failed": [], "npx_synced": 0, "summary": "ok"}
         with patch("agent.config.Config.load", return_value=cfg), patch(
             "cli.subprocess.run", return_value=proc
+        ), patch(
+            "agent.skills.upgrade_skills", return_value=skills_result
         ):
             result = runner.invoke(app, ["upgrade"])
         assert result.exit_code == 0

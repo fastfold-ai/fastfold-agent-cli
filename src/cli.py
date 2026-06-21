@@ -525,6 +525,33 @@ def execute_upgrade(
         install_missing=install_missing_skills,
         prompt_if_missing=prompt_missing_skills,
     )
+    ui.print("[cyan]Running skills-upgrade...[/cyan]")
+    try:
+        from agent.skills import upgrade_skills, GLOBAL_SKILLS_DIR
+
+        with ui.status("[green]Syncing agent skills...[/green]", spinner="dots") as status:
+            result = upgrade_skills(
+                include_catalog=True,
+                include_npx=True,
+                progress=lambda msg: status.update(f"[green]{msg}[/green]"),
+            )
+    except Exception as exc:
+        ui.print(f"[yellow]skills-upgrade failed:[/yellow] {exc}")
+        return True
+
+    if result["added"]:
+        ui.print(f"  [green]Added:[/green] {', '.join(result['added'])}")
+    if result["updated"]:
+        ui.print(f"  [green]Updated:[/green] {', '.join(result['updated'])}")
+    if result.get("npx_synced"):
+        ui.print(
+            f"  [green]npx-synced:[/green] {result['npx_synced']} project-local source(s)"
+        )
+    if result["failed"]:
+        for source, reason in result["failed"]:
+            ui.print(f"  [yellow]Failed:[/yellow] {source} — {reason}")
+    ui.print(f"  [dim]{result['summary']}[/dim]")
+    ui.print(f"  [dim]Location: {GLOBAL_SKILLS_DIR}[/dim]")
     return True
 
 

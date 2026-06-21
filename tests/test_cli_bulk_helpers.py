@@ -126,9 +126,26 @@ class TestUpgradeHelpers:
         proc = subprocess.CompletedProcess(
             args=["uv"], returncode=0, stdout="Installed", stderr=""
         )
+        skills_result = {
+            "added": [],
+            "updated": ["fastfold-ai/skills"],
+            "failed": [],
+            "npx_synced": 1,
+            "summary": "skills upgraded",
+        }
+        captured_kwargs = {}
         monkeypatch.setattr("cli.subprocess.run", lambda *a, **k: proc)
+        monkeypatch.setattr(
+            "agent.skills.upgrade_skills",
+            lambda **kwargs: (captured_kwargs.update(kwargs), skills_result)[1],
+        )
         assert execute_upgrade(console_obj=console, cfg=cfg) is True
+        assert captured_kwargs["include_catalog"] is True
+        assert captured_kwargs["include_npx"] is True
+        assert callable(captured_kwargs["progress"])
         assert "Upgrade complete" in buf.getvalue()
+        assert "skills-upgrade" in buf.getvalue()
+        assert "skills upgraded" in buf.getvalue()
 
     def test_execute_upgrade_uv_not_found(self, captured_console, monkeypatch):
         console, buf = captured_console
