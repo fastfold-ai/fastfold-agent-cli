@@ -18,7 +18,7 @@ from dataclasses import dataclass
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse, urlunparse
-from typing import Any
+from typing import Any, Callable
 
 from rich.console import Console
 from rich.panel import Panel
@@ -318,11 +318,36 @@ class MentionCompleter(Completer):
         4: "workflow",    # Flows
     }
 
-    def __init__(self, candidates: list[tuple[str, str, str, str]] | None = None):
+    def __init__(
+        self,
+        candidates: list[tuple[str, str, str, str]] | None = None,
+        *,
+        lazy_loader: Callable[[], list[tuple[str, str, str, str]]] | None = None,
+    ):
         self.candidates = candidates or []
         self._active_tab = 0
+        self._lazy_loader = lazy_loader
+        self._lazy_loaded = lazy_loader is None
+
+    def set_candidates(self, candidates: list[tuple[str, str, str, str]]) -> None:
+        self.candidates = candidates
+
+    def _ensure_lazy_loaded(self) -> None:
+        if self._lazy_loaded:
+            return
+        self._lazy_loaded = True
+        if self._lazy_loader is None:
+            return
+        try:
+            loaded = self._lazy_loader()
+            if loaded:
+                self.set_candidates(loaded)
+        except Exception:
+            # Keep initial lightweight candidates if background loading fails.
+            pass
 
     def get_completions(self, document, complete_event):
+        self._ensure_lazy_loaded()
         text = document.text_before_cursor
         # Find the last @ in the text
         at_pos = text.rfind("@")
@@ -615,10 +640,18 @@ class InteractiveTerminal:
         self._toolbar_spinner_palette = ["#50fa7b", "#8be9fd", "#7aa2f7", "#ffb86c"]
         self._init_toolbar_animation_profile()
         # Build @ mention completer with tool + dataset + file candidates
-        mention_candidates = self._build_mention_candidates()
+        mention_candidates = self._build_mention_candidates(include_tools=False, include_files=False)
+        mention_completer = MentionCompleter(
+            mention_candidates,
+            lazy_loader=lambda: self._build_mention_candidates(
+                include_tools=True,
+                include_files=True,
+                max_file_candidates=500,
+            ),
+        )
         self._merged_completer = MergedCompleter(
             slash=SlashCompleter(),
-            mention=MentionCompleter(mention_candidates),
+            mention=mention_completer,
         )
         self._prompt_session = PromptSession(
             history=FileHistory(str(self.history_file)),
@@ -670,7 +703,14 @@ class InteractiveTerminal:
         except Exception:
             pass
 
-    def _build_mention_candidates(self) -> list[tuple[str, str, str, str]]:
+    def _build_mention_candidates(
+        self,
+        *,
+        include_tools: bool = True,
+        include_workflows: bool = True,
+        include_files: bool = True,
+        max_file_candidates: int = 500,
+    ) -> list[tuple[str, str, str, str]]:
         """Build the candidate list for @ mention completion.
 
         Returns (name, category, description, kind) tuples.
@@ -680,38 +720,48 @@ class InteractiveTerminal:
         for name, category, description in DATASET_CANDIDATES:
             candidates.append((name, category, description, "dataset"))
         # Add tools from registry (lazy load)
-        try:
-            from tools import registry, ensure_loaded
-            ensure_loaded()
-            for tool in registry.list_tools():
-                candidates.append(
-                    (tool.name, tool.category, tool.description[:80], "tool")
-                )
-        except Exception:
-            pass  # Registry not available — datasets still work
+        if include_tools:
+            try:
+                from tools import registry, ensure_loaded
+
+                ensure_loaded()
+                for tool in registry.list_tools():
+                    candidates.append(
+                        (tool.name, tool.category, tool.description[:80], "tool")
+                    )
+            except Exception:
+                pass  # Registry not available — datasets still work
         # Add workflow candidates
-        try:
-            from agent.workflows import WORKFLOWS
-            for wf_name, wf in WORKFLOWS.items():
-                n_steps = len(wf.get("steps", []))
-                candidates.append(
-                    (wf_name, "workflow", f"{wf['description']} ({n_steps} steps)", "workflow")
-                )
-        except Exception:
-            pass  # Workflows not available
+        if include_workflows:
+            try:
+                from agent.workflows import WORKFLOWS
+
+                for wf_name, wf in WORKFLOWS.items():
+                    n_steps = len(wf.get("steps", []))
+                    candidates.append(
+                        (wf_name, "workflow", f"{wf['description']} ({n_steps} steps)", "workflow")
+                    )
+            except Exception:
+                pass  # Workflows not available
         # Add file candidates from configured data directory
-        try:
-            data_base = self.session.config.get("data.base", "")
-            if data_base:
-                data_path = Path(data_base)
-                if data_path.is_dir():
-                    for f in sorted(data_path.rglob("*")):
-                        if f.is_file() and not f.name.startswith("."):
+        if include_files:
+            try:
+                data_base = self.session.config.get("data.base", "")
+                if data_base:
+                    data_path = Path(data_base)
+                    if data_path.is_dir():
+                        file_count = 0
+                        for f in data_path.rglob("*"):
+                            if not f.is_file() or f.name.startswith("."):
+                                continue
                             candidates.append(
                                 (f.name, "file", str(f.relative_to(data_path)), "file")
                             )
-        except Exception:
-            pass  # Best-effort file scanning
+                            file_count += 1
+                            if file_count >= max(0, int(max_file_candidates)):
+                                break
+            except Exception:
+                pass  # Best-effort file scanning
         return candidates
 
     def _has_active_query(self) -> bool:

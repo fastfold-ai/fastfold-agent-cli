@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.request
 from urllib.parse import urlparse
@@ -83,6 +84,9 @@ SETUP_PROVIDER_ORDER = ("anthropic", "openai", "openai_compatible")
 UV_INSTALL_FLAVORS = frozenset({"all", "win_build"})
 PYPI_PROJECT_JSON_URL = "https://pypi.org/pypi/fastfold-agent-cli/json"
 _SEMVER_TRIPLET_PATTERN = re.compile(r"^\s*v?(\d+)\.(\d+)\.(\d+)")
+_UPGRADE_CACHE_PATH = Path.home() / ".fastfold-cli" / "cache" / "upgrade-version.json"
+_UPGRADE_CACHE_MAX_AGE_S = 60 * 60 * 6
+_BANNER_TOOL_COUNT_HINT = 192
 
 
 def _installed_claude_skill_names() -> list[str]:
@@ -310,6 +314,81 @@ def get_upgrade_available_version(current_version: str = __version__) -> Optiona
     if not latest:
         return None
     return latest if is_newer_version(latest, current_version) else None
+
+
+def _get_cached_upgrade_available_version(current_version: str = __version__) -> Optional[str]:
+    """Return cached upgrade notice if fresh; never performs network I/O."""
+    try:
+        if not _UPGRADE_CACHE_PATH.exists():
+            return None
+        payload = json.loads(_UPGRADE_CACHE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    checked_at = float(payload.get("checked_at") or 0)
+    if checked_at <= 0 or (time.time() - checked_at) > _UPGRADE_CACHE_MAX_AGE_S:
+        return None
+    latest = str(payload.get("latest") or "").strip()
+    if not latest:
+        return None
+    return latest if is_newer_version(latest, current_version) else None
+
+
+def _write_upgrade_cache(latest: Optional[str]) -> None:
+    """Persist latest seen PyPI version for non-blocking future boots."""
+    try:
+        _UPGRADE_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _UPGRADE_CACHE_PATH.write_text(
+            json.dumps(
+                {
+                    "latest": str(latest or "").strip(),
+                    "checked_at": time.time(),
+                }
+            ),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _start_upgrade_check_refresh() -> None:
+    """Refresh cached PyPI latest version in a daemon thread."""
+    import threading
+
+    def _worker():
+        latest = fetch_pypi_latest_version()
+        _write_upgrade_cache(latest)
+
+    try:
+        threading.Thread(target=_worker, daemon=True).start()
+    except Exception:
+        pass
+
+
+def _resolve_fastfold_subscription_tier_local(cfg) -> str:
+    """Resolve tier from local/env hints only (no network)."""
+    raw = str(
+        os.environ.get("FASTFOLD_SUBSCRIPTION_TIER")
+        or cfg.get("fastfold.subscription_tier", "")
+        or ""
+    ).strip().lower()
+    if raw in {"pro+", "pro-plus", "pro plus"}:
+        return "pro_plus"
+    return raw
+
+
+def _get_loaded_tool_count_hint() -> int:
+    """Return loaded tool count when already available, else a static hint."""
+    try:
+        from tools import registry
+
+        count = len(registry.list_tools())
+        if count > 0:
+            return count
+    except Exception:
+        pass
+    return _BANNER_TOOL_COUNT_HINT
 
 
 def _get_cached_skills_update_safe() -> Optional[dict]:
@@ -4080,13 +4159,11 @@ def print_banner():
     """Print the startup banner with molecule illustration."""
     from agent.config import Config
     from rich.padding import Padding
-    from tools import registry, ensure_loaded
     from rich.table import Table
     from rich.text import Text
 
-    ensure_loaded()
     cfg = Config.load()
-    n_tools = len(registry.list_tools())
+    n_tools = _get_loaded_tool_count_hint()
     n_skills = _count_installed_claude_skills()
     model_raw = str(cfg.get("llm.model") or "").strip()
     model_names = {
@@ -4098,7 +4175,7 @@ def print_banner():
     }
     model_name = model_names.get(model_raw, model_raw)
 
-    tier = _resolve_fastfold_subscription_tier(cfg)
+    tier = _resolve_fastfold_subscription_tier_local(cfg)
     tier_display = _format_plan_label(tier)
     status_parts: list[str] = []
     if model_name:
@@ -4106,7 +4183,7 @@ def print_banner():
     if tier_display:
         status_parts.append(tier_display)
     status_line = " · ".join(status_parts)
-    upgrade_version = get_upgrade_available_version(__version__)
+    upgrade_version = _get_cached_upgrade_available_version(__version__)
 
     logo_text = Text.from_markup(BANNER.strip("\n"))
     meta_lines = [
@@ -4187,6 +4264,7 @@ def run_interactive(
     # Refresh the skills-update cache in the background so the next boot's banner
     # notice is fresh — no network on this boot's path.
     _start_skills_update_check()
+    _start_upgrade_check_refresh()
 
     console.print()
 

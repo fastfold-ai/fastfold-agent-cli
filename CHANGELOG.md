@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.59] - 2026-06-21
+
+### Changed
+
+- Interactive boot now avoids blocking startup work in the initial banner path:
+  upgrade checks use a local cache plus background refresh, and tool counts use a
+  lightweight hint when the registry is not loaded yet.
+- `@` mention autocomplete now uses a lightweight initial candidate set and lazy
+  loads heavy tool/file candidates on first mention use, with file-scan caps to
+  avoid startup stalls in large workspaces.
+
+### Fixed
+
+- Reduced first-run cold-start latency after `fastfold upgrade` by removing
+  synchronous tool-loading and network calls from pre-prompt startup.
+
 ## [0.0.58] - 2026-06-21
 
 ### Added
