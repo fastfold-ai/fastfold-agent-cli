@@ -14,8 +14,9 @@ Skills are resolved from three tiers (highest priority first):
 
 Higher tiers override lower tiers on a name collision.
 
-Installation is native (``git clone``) with a fallback to the external
-``npx skills`` CLI when git is unavailable or the clone fails.
+Installation is native (``git clone``), with GitHub archive download when git
+is unavailable or clone fails, and an optional fallback to the external
+``npx skills`` CLI when Node.js is installed.
 """
 
 from __future__ import annotations
@@ -959,13 +960,128 @@ def refresh_skills_update_cache(
         }
     )
 
+def _owner_repo_from_clone_url(url: str) -> Optional[str]:
+    m = re.search(r"github\.com/(?P<owner>[\w.-]+)/(?P<repo>[\w.-]+?)(?:\.git)?$", url)
+    if not m:
+        return None
+    return f"{m.group('owner')}/{m.group('repo')}"
+
+
+def _format_git_error(exc: subprocess.CalledProcessError) -> str:
+    detail = (exc.stderr or exc.stdout or str(exc)).strip()
+    if len(detail) > 200:
+        detail = detail[:197] + "..."
+    return detail or "git clone failed"
+
+
+def _download_github_archive(owner: str, repo: str, ref: Optional[str], extract_parent: Path) -> Path:
+    """Download and extract a GitHub repo archive without git."""
+    import io
+    import urllib.error
+    import urllib.request
+    import zipfile
+
+    ref_key = ref or "HEAD"
+    url = f"https://codeload.github.com/{owner}/{repo}/zip/{ref_key}"
+    req = urllib.request.Request(url, headers={"User-Agent": "fastfold-agent-cli"})
+    try:
+        with urllib.request.urlopen(req, timeout=_CLONE_TIMEOUT_S) as resp:
+            data = resp.read()
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"GitHub archive download failed (HTTP {exc.code})") from exc
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise RuntimeError(f"GitHub archive download failed: {exc}") from exc
+
+    extract_parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(io.BytesIO(data)) as zf:
+        zf.extractall(extract_parent)
+    roots = [p for p in extract_parent.iterdir() if p.is_dir()]
+    if len(roots) == 1:
+        return roots[0]
+    if not roots:
+        raise RuntimeError("GitHub archive contained no directories")
+    return extract_parent
+
+
+def _install_from_repo_tree(
+    repo_root: Path,
+    subpath: Optional[str],
+    dest: Path,
+    source: str,
+    commit: Optional[str],
+    release_tag: Optional[str],
+    via: str,
+) -> dict:
+    skill_dirs = _resolve_skill_dirs(repo_root, subpath)
+    if not skill_dirs:
+        return {"ok": False, "summary": f"No SKILL.md found in {source}.", "via": via}
+    installed = _copy_skill_dirs(skill_dirs, dest, source, commit, release_tag)
+    return {
+        "ok": True,
+        "installed": installed,
+        "summary": f"Installed {len(installed)} skill(s) to {dest}: {', '.join(installed)}.",
+        "via": via,
+    }
+
+
+def _install_github_source(
+    source: str,
+    url: str,
+    ref: Optional[str],
+    subpath: Optional[str],
+    dest: Path,
+    release_tag: Optional[str],
+) -> dict:
+    """Install a GitHub source via git clone, archive download, then optional npx."""
+    errors: list[str] = []
+
+    if _git_available():
+        try:
+            with tempfile.TemporaryDirectory(prefix="fastfold-skill-") as tmp:
+                clone_root = Path(tmp) / "repo"
+                commit = _git_clone(url, ref, clone_root)
+                return _install_from_repo_tree(
+                    clone_root, subpath, dest, source, commit, release_tag, "git"
+                )
+        except subprocess.CalledProcessError as exc:
+            logger.debug("git clone failed: %s", exc)
+            errors.append(f"git clone failed: {_format_git_error(exc)}")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("git install failed: %s", exc)
+            errors.append(f"git install failed: {exc}")
+
+    owner_repo = _owner_repo_from_clone_url(url)
+    if owner_repo:
+        owner, repo = owner_repo.split("/", 1)
+        try:
+            with tempfile.TemporaryDirectory(prefix="fastfold-skill-") as tmp:
+                extract_parent = Path(tmp)
+                repo_root = _download_github_archive(owner, repo, ref, extract_parent)
+                return _install_from_repo_tree(
+                    repo_root, subpath, dest, source, None, release_tag, "archive"
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("GitHub archive install failed: %s", exc)
+            errors.append(str(exc))
+
+    if _npx_available():
+        result = _npx_install(source)
+        if result.get("ok"):
+            return result
+        errors.append(result.get("summary", "npx install failed"))
+
+    summary = errors[0] if len(errors) == 1 else "; ".join(errors)
+    if not summary:
+        summary = "Could not install skill from GitHub."
+    return {"ok": False, "summary": summary, "via": "git"}
+
 
 def install_skill(source: str, *, dest: Optional[Path] = None, prefer_npx: bool = False) -> dict:
     """Install a skill from a GitHub URL/shorthand, local path, or catalog name.
 
-    By default uses a native ``git clone`` and falls back to ``npx skills add``.
-    When ``prefer_npx`` is True and ``npx`` is available, tries ``npx skills add``
-    first and falls back to the native clone if it fails.
+    By default uses a native ``git clone``, then GitHub archive download, then
+    ``npx skills add`` when available. When ``prefer_npx`` is True and ``npx`` is
+    available, tries ``npx skills add`` first and falls back to git/archive.
 
     Returns a dict with keys: ok, installed (list of names), summary.
     """
@@ -997,35 +1113,12 @@ def install_skill(source: str, *, dest: Optional[Path] = None, prefer_npx: bool 
         result = _npx_install(source)
         if result.get("ok"):
             return result
-        logger.debug("npx skills add failed, falling back to git: %s", result.get("summary"))
+        logger.debug("npx skills add failed, falling back to git/archive: %s", result.get("summary"))
 
-    # GitHub (URL or shorthand) — native clone, fall back to npx.
-    if not _git_available():
-        return _npx_install(source)
-    # Best-effort: record the repo's latest GitHub Release tag so the /skills
-    # table can show a version. Repos without releases simply get no tag.
     owner_repo = _owner_repo_from_source(source)
     release_info = fetch_latest_release(owner_repo) if owner_repo else None
     release_tag = release_info.get("tag") if release_info else None
-    try:
-        with tempfile.TemporaryDirectory(prefix="fastfold-skill-") as tmp:
-            clone_root = Path(tmp) / "repo"
-            commit = _git_clone(url, ref, clone_root)
-            skill_dirs = _resolve_skill_dirs(clone_root, subpath)
-            if not skill_dirs:
-                return {"ok": False, "summary": f"No SKILL.md found in {source}."}
-            installed = _copy_skill_dirs(skill_dirs, dest, source, commit, release_tag)
-        return {
-            "ok": True,
-            "installed": installed,
-            "summary": f"Installed {len(installed)} skill(s) to {dest}: {', '.join(installed)}.",
-            "via": "git",
-        }
-    except subprocess.CalledProcessError as exc:
-        logger.debug("git clone failed: %s", exc)
-        return _npx_install(source)
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "summary": f"Install failed: {exc}"}
+    return _install_github_source(source, url, ref, subpath, dest, release_tag)
 
 
 def _install_local(source: str, dest: Path) -> dict:
@@ -1125,14 +1218,11 @@ def upgrade_skills(
     catalog_owner_repo = catalog.split("@", 1)[0]
     if include_catalog:
         _notify(f"Syncing catalog ({catalog_owner_repo})...")
-        if _git_available() or _npx_available():
-            result = install_skill(catalog_owner_repo, dest=dest)
-            if result.get("ok"):
-                installed_total += result.get("installed", [])
-            else:
-                failed.append((catalog_owner_repo, result.get("summary", "failed")))
+        result = install_skill(catalog_owner_repo, dest=dest)
+        if result.get("ok"):
+            installed_total += result.get("installed", [])
         else:
-            failed.append((catalog_owner_repo, "git and npx are both unavailable"))
+            failed.append((catalog_owner_repo, result.get("summary", "failed")))
 
     # 2) Update other manifest-tracked skills from their recorded sources.
     manifest = _read_manifest(dest)

@@ -1,6 +1,7 @@
 """Tests for the native skills management system (ct.agent.skills + tooling)."""
 
 from pathlib import Path
+import subprocess
 from unittest.mock import MagicMock
 
 import pytest
@@ -416,6 +417,47 @@ def test_install_skill_prefer_npx_falls_back_to_git(monkeypatch, tmp_path):
     assert result["ok"] is True
     assert result["via"] == "git"
     assert "fold" in result["installed"]
+
+
+def test_install_skill_uses_archive_when_git_unavailable(monkeypatch, tmp_path):
+    monkeypatch.setattr(skills_mod, "_npx_available", lambda: False)
+    monkeypatch.setattr(skills_mod, "_git_available", lambda: False)
+    monkeypatch.setattr(skills_mod, "GLOBAL_SKILLS_DIR", tmp_path / "global")
+    monkeypatch.setattr(skills_mod, "fetch_latest_release", lambda _owner_repo: None)
+
+    def fake_download(owner, repo, ref, extract_parent):
+        repo_root = extract_parent / f"{repo}-main"
+        _write_skill(repo_root / "skills", "fold", "Fold skill")
+        return repo_root
+
+    monkeypatch.setattr(skills_mod, "_download_github_archive", fake_download)
+    result = skills_mod.install_skill("fastfold-ai/skills@skills/fold", prefer_npx=False)
+    assert result["ok"] is True
+    assert result["via"] == "archive"
+    assert "fold" in result["installed"]
+
+
+def test_install_skill_git_failure_falls_back_to_archive_without_npx(monkeypatch, tmp_path):
+    monkeypatch.setattr(skills_mod, "_npx_available", lambda: False)
+    monkeypatch.setattr(skills_mod, "_git_available", lambda: True)
+    monkeypatch.setattr(skills_mod, "GLOBAL_SKILLS_DIR", tmp_path / "global")
+    monkeypatch.setattr(skills_mod, "fetch_latest_release", lambda _owner_repo: None)
+    monkeypatch.setattr(
+        skills_mod,
+        "_git_clone",
+        lambda *args, **kwargs: (_ for _ in ()).throw(subprocess.CalledProcessError(1, "git")),
+    )
+
+    def fake_download(owner, repo, ref, extract_parent):
+        repo_root = extract_parent / f"{repo}-main"
+        _write_skill(repo_root / "skills", "boltz", "Boltz skill")
+        return repo_root
+
+    monkeypatch.setattr(skills_mod, "_download_github_archive", fake_download)
+    result = skills_mod.install_skill("fastfold-ai/skills", prefer_npx=False)
+    assert result["ok"] is True
+    assert result["via"] == "archive"
+    assert "boltz" in result["installed"]
 
 
 def test_setup_prompt_install_skills_with_explicit_arg(monkeypatch):

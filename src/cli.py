@@ -2330,6 +2330,15 @@ def _provider_label_for_source(source: str) -> str:
     return _PROVIDER_BY_OWNER.get(owner.lower(), owner or "Custom")
 
 
+def _skill_install_method_label(via: str) -> str:
+    return {
+        "git": "git",
+        "archive": "GitHub download",
+        "local": "local copy",
+        "npx": "npx skills add",
+    }.get(via, via or "?")
+
+
 def _install_skill_sources(sources: list[str]) -> None:
     """Install a list of skill sources, preferring npx when available, else git.
 
@@ -2342,15 +2351,25 @@ def _install_skill_sources(sources: list[str]) -> None:
 
     prefer = _npx_available()
     if not prefer:
-        console.print(f"  [dim]Installing {len(sources)} skill source(s) via `git` (npx not found).[/dim]")
+        console.print(
+            f"  [dim]Installing {len(sources)} skill source(s) via `git`/GitHub download "
+            "(npx not found).[/dim]"
+        )
         for src in sources:
             provider = _provider_label_for_source(src)
             with spinner(f"Installing {provider} ({src})..."):
                 result = install_skill(src, prefer_npx=False)
+            method = _skill_install_method_label(str(result.get("via", "")))
             if result.get("ok"):
-                console.print(f"  [green]\u2713[/green] [cyan]{provider}[/cyan]: {result['summary']} [dim](method: git)[/dim]")
+                console.print(
+                    f"  [green]\u2713[/green] [cyan]{provider}[/cyan]: {result['summary']} "
+                    f"[dim](method: {method})[/dim]"
+                )
             else:
-                console.print(f"  [red]\u2717[/red] [cyan]{provider}[/cyan] {src}: {result.get('summary', 'install failed')} [dim](method: git)[/dim]")
+                console.print(
+                    f"  [red]\u2717[/red] [cyan]{provider}[/cyan] {src}: "
+                    f"{result.get('summary', 'install failed')} [dim](method: {method})[/dim]"
+                )
         return
 
     console.print(
@@ -2386,13 +2405,17 @@ def _install_skill_sources(sources: list[str]) -> None:
                 gres = install_skill(git_src, prefer_npx=False)
             style = "green" if gres.get("ok") else "red"
             mark = "\u2713" if gres.get("ok") else "\u2717"
-            console.print(f"  [{style}]{mark}[/{style}] [cyan]{provider}[/cyan]: {gres.get('summary','')} [dim](method: git)[/dim]")
+            method = _skill_install_method_label(str(gres.get("via", "")))
+            console.print(
+                f"  [{style}]{mark}[/{style}] [cyan]{provider}[/cyan]: "
+                f"{gres.get('summary','')} [dim](method: {method})[/dim]"
+            )
 
     for src in fallback:
         provider = _provider_label_for_source(src)
         with spinner(f"Installing {provider} ({src})..."):
             result = install_skill(src, prefer_npx=False)
-        method = {"git": "git", "local": "local copy"}.get(result.get("via", ""), result.get("via", "?"))
+        method = _skill_install_method_label(str(result.get("via", "")))
         style = "green" if result.get("ok") else "red"
         mark = "\u2713" if result.get("ok") else "\u2717"
         console.print(f"  [{style}]{mark}[/{style}] [cyan]{provider}[/cyan]: {result.get('summary','')} [dim](method: {method})[/dim]")
