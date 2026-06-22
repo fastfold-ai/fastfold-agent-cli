@@ -845,26 +845,42 @@ def _is_newer_tag(latest: str, current: str) -> bool:
     return lt > ct
 
 
+def _http_get_bytes(
+    url: str,
+    *,
+    timeout: float = _CLONE_TIMEOUT_S,
+    headers: Optional[dict[str, str]] = None,
+) -> bytes:
+    """Fetch HTTP(S) bytes with certifi-backed TLS (fixes Windows urllib SSL issues)."""
+    import httpx
+
+    hdrs = {"User-Agent": "fastfold-agent-cli", **(headers or {})}
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        resp = client.get(url, headers=hdrs)
+        resp.raise_for_status()
+        return resp.content
+
+
 def fetch_latest_release(owner_repo: str, *, timeout_s: float = 2.5) -> Optional[dict]:
     """Return ``{"tag", "published_at"}`` for a repo's latest GitHub Release.
 
     Best-effort and network-bound: returns None on any error or when the repo
     has no releases (HTTP 404). Used to surface a version in the /skills table.
     """
-    import urllib.error
-    import urllib.request
+    import httpx
 
     if not owner_repo:
         return None
-    req = urllib.request.Request(
-        url=f"{GITHUB_API}/repos/{owner_repo}/releases/latest",
-        headers={"Accept": "application/vnd.github+json", "User-Agent": "fastfold-agent-cli"},
-        method="GET",
-    )
+    url = f"{GITHUB_API}/repos/{owner_repo}/releases/latest"
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "fastfold-agent-cli"}
     try:
-        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
-            data = json.loads(resp.read().decode("utf-8", errors="replace"))
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError):
+        with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
+            resp = client.get(url, headers=headers)
+            if resp.status_code == 404:
+                return None
+            resp.raise_for_status()
+            data = resp.json()
+    except (httpx.HTTPError, TimeoutError, ValueError):
         return None
     except Exception:  # noqa: BLE001
         return None
@@ -977,19 +993,17 @@ def _format_git_error(exc: subprocess.CalledProcessError) -> str:
 def _download_github_archive(owner: str, repo: str, ref: Optional[str], extract_parent: Path) -> Path:
     """Download and extract a GitHub repo archive without git."""
     import io
-    import urllib.error
-    import urllib.request
     import zipfile
+
+    import httpx
 
     ref_key = ref or "HEAD"
     url = f"https://codeload.github.com/{owner}/{repo}/zip/{ref_key}"
-    req = urllib.request.Request(url, headers={"User-Agent": "fastfold-agent-cli"})
     try:
-        with urllib.request.urlopen(req, timeout=_CLONE_TIMEOUT_S) as resp:
-            data = resp.read()
-    except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"GitHub archive download failed (HTTP {exc.code})") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
+        data = _http_get_bytes(url, timeout=_CLONE_TIMEOUT_S)
+    except httpx.HTTPStatusError as exc:
+        raise RuntimeError(f"GitHub archive download failed (HTTP {exc.response.status_code})") from exc
+    except httpx.HTTPError as exc:
         raise RuntimeError(f"GitHub archive download failed: {exc}") from exc
 
     extract_parent.mkdir(parents=True, exist_ok=True)

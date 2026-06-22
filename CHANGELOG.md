@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.63] - 2026-06-22
+
+### Fixed
+
+- GitHub archive skill downloads now use `httpx` with certifi-backed TLS instead
+  of stdlib `urllib`, fixing `CERTIFICATE_VERIFY_FAILED` failures on Windows
+  when `npx` and `git` are unavailable.
+
 ## [0.0.62] - 2026-06-21
 
 ### Fixed

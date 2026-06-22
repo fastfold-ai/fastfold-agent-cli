@@ -812,71 +812,143 @@ def test_write_update_cache_persists_json_file():
     assert '"latest_release": "v2.0.0"' in raw
 
 
+def test_http_get_bytes_uses_httpx_client(monkeypatch):
+    captured = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            return None
+
+        @property
+        def content(self):
+            return b"payload"
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            captured["client_kwargs"] = kwargs
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, headers=None):
+            captured["url"] = url
+            captured["headers"] = headers
+            return _Resp()
+
+    monkeypatch.setattr("httpx.Client", _Client)
+    out = skills_mod._http_get_bytes("https://example.com/archive.zip", timeout=12.5)
+    assert out == b"payload"
+    assert captured["url"] == "https://example.com/archive.zip"
+    assert captured["headers"]["User-Agent"] == "fastfold-agent-cli"
+    assert captured["client_kwargs"]["follow_redirects"] is True
+
+
 def test_fetch_latest_release_returns_none_without_owner_repo():
     assert _REAL_FETCH_LATEST_RELEASE("") is None
 
 
 def test_fetch_latest_release_success(monkeypatch):
-    import urllib.request
-
     class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"tag_name": "v1.2.3", "published_at": "2026-06-18T00:00:00Z"}
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
         def __enter__(self):
             return self
 
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def read(self):
-            return b'{"tag_name":"v1.2.3","published_at":"2026-06-18T00:00:00Z"}'
+        def get(self, url, headers=None):
+            return _Resp()
 
-    monkeypatch.setattr(urllib.request, "urlopen", lambda *_a, **_k: _Resp())
+    monkeypatch.setattr("httpx.Client", _Client)
     out = _REAL_FETCH_LATEST_RELEASE("fastfold-ai/skills", timeout_s=0.1)
     assert out == {"tag": "v1.2.3", "published_at": "2026-06-18T00:00:00Z"}
 
 
 def test_fetch_latest_release_returns_none_on_url_error(monkeypatch):
-    import urllib.error
-    import urllib.request
+    import httpx
 
-    monkeypatch.setattr(
-        urllib.request,
-        "urlopen",
-        lambda *_a, **_k: (_ for _ in ()).throw(urllib.error.URLError("down")),
-    )
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def get(self, url, headers=None):
+            raise httpx.ConnectError("down")
+
+    monkeypatch.setattr("httpx.Client", _Client)
     assert _REAL_FETCH_LATEST_RELEASE("fastfold-ai/skills", timeout_s=0.1) is None
 
 
 def test_fetch_latest_release_returns_none_on_non_dict_payload(monkeypatch):
-    import urllib.request
-
     class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return ["not-a-dict"]
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
         def __enter__(self):
             return self
 
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def read(self):
-            return b'["not-a-dict"]'
+        def get(self, url, headers=None):
+            return _Resp()
 
-    monkeypatch.setattr(urllib.request, "urlopen", lambda *_a, **_k: _Resp())
+    monkeypatch.setattr("httpx.Client", _Client)
     assert _REAL_FETCH_LATEST_RELEASE("fastfold-ai/skills", timeout_s=0.1) is None
 
 
 def test_fetch_latest_release_returns_none_when_tag_missing(monkeypatch):
-    import urllib.request
-
     class _Resp:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"published_at": "2026-06-18T00:00:00Z"}
+
+    class _Client:
+        def __init__(self, *args, **kwargs):
+            pass
+
         def __enter__(self):
             return self
 
         def __exit__(self, exc_type, exc, tb):
             return False
 
-        def read(self):
-            return b'{"tag_name":"", "published_at":"2026-06-18T00:00:00Z"}'
+        def get(self, url, headers=None):
+            return _Resp()
 
-    monkeypatch.setattr(urllib.request, "urlopen", lambda *_a, **_k: _Resp())
+    monkeypatch.setattr("httpx.Client", _Client)
     assert _REAL_FETCH_LATEST_RELEASE("fastfold-ai/skills", timeout_s=0.1) is None
 
 
