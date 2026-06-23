@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.68] - 2026-06-23
+
+### Changed
+
+- Mermaid diagrams now always attempt to render in the terminal. The 0.0.67
+  complexity guard that fell back to raw fenced source for larger flowcharts and
+  sequence diagrams was removed because it hid diagrams users wanted to see. The
+  `<br/>`/HTML label cleanup from 0.0.67 is retained.
+
 ## [0.0.67] - 2026-06-23
 
 ### Fixed
