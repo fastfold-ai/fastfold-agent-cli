@@ -3,7 +3,7 @@
 <p align="center">
   <a href="https://github.com/fastfold-ai/fastfold-agent-cli/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/fastfold-ai/fastfold-agent-cli/ci.yml?branch=main&label=CI&logo=github" alt="CI status" /></a>
   <a href="https://codecov.io/gh/fastfold-ai/fastfold-agent-cli"><img src="https://img.shields.io/codecov/c/github/fastfold-ai/fastfold-agent-cli?branch=main&logo=codecov&label=coverage" alt="Codecov coverage" /></a>
-  <a href="https://skills.sh/fastfold-ai/skills"><img src="https://img.shields.io/badge/Skills-000000?logo=vercel&logoColor=white" alt="Skills" /></a>
+  <a href="https://www.skills.sh/fastfold-ai/skills"><img src="https://skills.sh/b/fastfold-ai/skills" alt="skills.sh" /></a>
   <a href="https://pypi.org/project/fastfold-agent-cli/"><img src="https://img.shields.io/pypi/v/fastfold-agent-cli.svg?label=agent-cli&color=22c55e" alt="fastfold-agent-cli on PyPI" /></a>
   <a href="https://hub.docker.com/r/fastfold/fastfold-agent-cli"><img src="https://img.shields.io/docker/v/fastfold/fastfold-agent-cli?sort=semver&label=docker&logo=docker" alt="Docker Hub" /></a>
   <a href="https://fastfoldcommunity.slack.com/join/shared_invite/zt-3azbiw7qv-majshu97TymCma_TwFT6mw#/shared-invite/email"><img src="https://img.shields.io/badge/Slack-Join%20Slack-4A154B?logo=slack" alt="Join Slack" /></a>
@@ -150,52 +150,39 @@ fastfold setup --provider openai --openai-api-key sk-... --fastfold-api-key sk-.
 fastfold setup --provider anthropic --api-key sk-ant-... --fastfold-api-key sk-... --boltz-api-key sk_bc_...
 ```
 
-Local/compatible endpoints can also be configured in one line:
+### Local and OpenAI-compatible models
 
-```bash
-fastfold setup --provider openai_compatible --profile-label "Ollama Local" --profile-template ollama --profile-endpoint http://localhost:11434/v1 --profile-key ollama
-fastfold setup --provider openai_compatible --profile-label "Unsloth Local" --profile-template unsloth --profile-endpoint http://localhost:8888/v1 --profile-key sk-unsloth-...
-fastfold setup --provider openai_compatible --profile-label "oMLX Local" --profile-template omlx --profile-endpoint http://localhost:8000/v1 --profile-key sk-omlx-...
-fastfold setup --provider openai_compatible --profile-label "DS4 Local" --profile-template ds4 --profile-endpoint http://localhost:8000/v1 --profile-key dsv4-local
-fastfold setup --provider openai_compatible --profile-label "llama.cpp Local" --profile-template llama_cpp --profile-endpoint http://localhost:8080/v1
-fastfold setup --provider openai_compatible --profile-label "LM Studio Local" --profile-template lm_studio --profile-endpoint http://localhost:1234/v1
-```
+Fastfold supports local/self-hosted OpenAI-compatible endpoints in both `fastfold setup` and interactive mode.
 
-### Local and OpenAI-compatible models (Ollama, Unsloth, oMLX, DS4, llama.cpp, LM Studio, and other gateways)
-
-Fastfold supports local/self-hosted OpenAI-compatible endpoints in both `fastfold setup` and interactive mode:
-
-- `/model`: model/provider selection only
-- `/model-manager`: add/edit/delete compatible profiles and inspect endpoint health/model discovery
-
-Recommended (interactive):
+Recommended setup path:
 
 ```bash
 fastfold setup --provider openai_compatible
 ```
 
-The setup wizard will guide you through:
+Interactive controls:
 
-1. Endpoint type selection:
-  - `Ollama` (`/api/tags`)
-  - `Unsloth` (`/v1/models`, auth)
-  - `oMLX` (`/v1/models`, auth)
-  - `DS4` (`/v1/models`)
-  - `llama.cpp` (`/v1/models`)
-  - `LM Studio` (`/v1/models`)
-  - `Other OpenAI-compatible` (`/v1/models` then `/api/tags`)
-2. Endpoint base URL:
-  - Ollama default: `http://localhost:11434/v1`
-  - Unsloth default: `http://localhost:8888/v1`
-  - oMLX default: `http://localhost:8000/v1`
-  - DS4 default: `http://localhost:8000/v1`
-  - llama.cpp default: `http://localhost:8080/v1`
-  - LM Studio default: `http://localhost:1234/v1`
-3. API key prompt (backend-aware):
-  - Ollama commonly uses `ollama` placeholder key
-  - Unsloth uses your Unsloth Studio key
-  - DS4, llama.cpp, and LM Studio can use optional/custom keys depending on your local server configuration
-4. Profile summary preview (label/template/endpoint), then model discovery + selection (or manual model ID entry)
+- `/model`: switch among configured providers/models.
+- `/model-manager`: add/edit/delete profiles, run endpoint health checks, and inspect discovered model IDs.
+
+Backend quick reference:
+
+| Backend | Default endpoint | Model discovery path | Key behavior | Best for |
+| --- | --- | --- | --- | --- |
+| Ollama | `http://localhost:11434/v1` | `/api/tags` | Usually `ollama` placeholder key | Best out-of-box local default on laptops/workstations |
+| Unsloth | `http://localhost:8888/v1` | `/v1/models` | Requires Unsloth Studio key | Good for optimized local serving with auth |
+| oMLX | `http://localhost:8000/v1` | `/v1/models` | Typically custom key | Useful for Apple Silicon-focused local inference |
+| DS4 | `http://localhost:8000/v1` | `/v1/models` | Optional/custom key | DeepSeek v4-style local endpoint profile |
+| llama.cpp | `http://localhost:8080/v1` | `/v1/models` | Optional/custom key | Lightweight C/C++ runtime for local/server inference |
+| LM Studio | `http://localhost:1234/v1` | `/v1/models` | Optional/custom key | Easiest GUI-first desktop serving workflow |
+| Other gateway | custom | `/v1/models` then `/api/tags` fallback | Provider-specific | Use for vLLM/proxies/self-hosted OpenAI-compatible APIs |
+
+Wizard flow (compressed):
+
+1. Choose backend template.
+2. Confirm/edit endpoint URL.
+3. Enter API key if required.
+4. Review profile summary, then pick discovered model (or enter model ID manually).
 
 ### Inference engine install references
 
