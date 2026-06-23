@@ -97,13 +97,23 @@ class Trajectory:
             return ""
 
         recent = self.turns[-5:]
+        recent_count = len(recent)
         lines = ["## Session Context (prior queries this session)", ""]
         for i, turn in enumerate(recent, 1):
             resolved_entities = self._turn_entities(turn)
             entities_str = ", ".join(resolved_entities) if resolved_entities else "none"
             tools_str = ", ".join(turn.tools_used) if turn.tools_used else "none"
-            # Truncate answer to first 200 chars for context
-            answer_preview = turn.answer[:200] + "..." if len(turn.answer) > 200 else turn.answer
+            # Keep richer detail for the most recent turns so resumed sessions can
+            # reliably reference prior findings without requiring a re-paste.
+            if i >= max(1, recent_count - 1):
+                preview_limit = 1400
+            else:
+                preview_limit = 320
+            answer_preview = (
+                turn.answer[:preview_limit] + "..."
+                if len(turn.answer) > preview_limit
+                else turn.answer
+            )
             lines.append(f"**Turn {i}**: {turn.query}")
             lines.append(f"  Entities: {entities_str}")
             lines.append(f"  Tools: {tools_str}")
