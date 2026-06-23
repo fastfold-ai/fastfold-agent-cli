@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.69] - 2026-06-23
+
+### Changed
+
+- Removed the CLI system-prompt diagram guardrails added in 0.0.67 (node limits,
+  HTML/label restrictions, topology rules). The terminal renderer handles
+  diagrams well now, so the agent is no longer constrained in how it authors
+  Mermaid. The renderer-side `<br/>`/HTML label cleanup is retained.
+
 ## [0.0.68] - 2026-06-23
 
 ### Changed
