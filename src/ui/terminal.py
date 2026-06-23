@@ -4680,7 +4680,7 @@ class InteractiveTerminal:
             self.console.print()
             self.console.print()
             self.console.print()
-            print_banner()
+            print_banner(self.session.config)
             self.console.print()
         except Exception:
             pass

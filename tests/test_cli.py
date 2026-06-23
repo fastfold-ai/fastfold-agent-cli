@@ -97,6 +97,7 @@ def test_setup_cmd_direct_call_handles_typer_option_defaults(monkeypatch):
         lambda cfg, provider, cli_key=None, openai_base_url=None, compatible_backend=None: "sk-ant-api03-test",
     )
     monkeypatch.setattr("cli._prompt_fastfold_cloud_api_key", lambda cfg, cli_key: None)
+    monkeypatch.setattr("cli._prompt_boltz_api_key", lambda cfg, cli_key: None)
 
     setup_cmd()
     assert cfg.get("llm.provider") == "anthropic"
@@ -120,6 +121,7 @@ def test_setup_cmd_openai_compatible_persists_backend(monkeypatch):
         lambda cfg, base_url, backend, api_key=None: "gpt-oss:20b",
     )
     monkeypatch.setattr("cli._prompt_fastfold_cloud_api_key", lambda cfg, cli_key: None)
+    monkeypatch.setattr("cli._prompt_boltz_api_key", lambda cfg, cli_key: None)
     monkeypatch.setattr("agent.doctor.run_checks", lambda cfg: [])
     monkeypatch.setattr("agent.doctor.to_table", lambda checks: "")
     monkeypatch.setattr("agent.doctor.has_errors", lambda checks: False)
@@ -149,6 +151,7 @@ def test_setup_cmd_openai_compatible_model_prompt_can_override_key(monkeypatch):
         lambda cfg, base_url, backend, api_key=None: ("omlx-model", "fresh-key"),
     )
     monkeypatch.setattr("cli._prompt_fastfold_cloud_api_key", lambda cfg, cli_key: None)
+    monkeypatch.setattr("cli._prompt_boltz_api_key", lambda cfg, cli_key: None)
     monkeypatch.setattr("agent.doctor.run_checks", lambda cfg: [])
     monkeypatch.setattr("agent.doctor.to_table", lambda checks: "")
     monkeypatch.setattr("agent.doctor.has_errors", lambda checks: False)

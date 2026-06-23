@@ -3938,7 +3938,7 @@ def case_study_run(
     session = Session(config=cfg, verbose=verbose)
     case = CASE_STUDIES[case_id]
 
-    print_banner()
+    print_banner(cfg)
     console.print(
         Panel(
             f"[bold]{case.name}[/bold]\n[dim]{case.description}[/dim]",
@@ -4053,7 +4053,7 @@ def run_query(
 
     session = Session(config=cfg, verbose=verbose)
 
-    print_banner()
+    print_banner(cfg)
     console.print(
         Panel(
             f"[bold]{query}[/bold]",
@@ -4206,14 +4206,14 @@ def bench(
         )
 
 
-def print_banner():
+def print_banner(cfg=None):
     """Print the startup banner with molecule illustration."""
     from agent.config import Config
     from rich.padding import Padding
     from rich.table import Table
     from rich.text import Text
 
-    cfg = Config.load()
+    cfg = cfg or Config.load()
     n_tools = _get_loaded_tool_count_hint()
     n_skills = _count_installed_claude_skills()
     model_raw = str(cfg.get("llm.model") or "").strip()
@@ -4306,7 +4306,7 @@ def run_interactive(
             return
 
     _pin_startup_to_bottom()
-    print_banner()
+    print_banner(cfg)
     _maybe_offer_fastfold_skills_install_after_upgrade(
         ui=console,
         install_missing=False,

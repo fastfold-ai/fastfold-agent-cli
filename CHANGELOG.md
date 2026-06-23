@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.64] - 2026-06-22
+
+### Added
+
+- Plan preview now renders an automatic Mermaid flowchart in interactive plan mode
+  (respecting existing `ui.mermaid.*` settings) to make execution plans easier
+  to review before approval.
+
+### Fixed
+
+- Startup and `/new` banners now use the active in-memory config/session model so
+  the displayed model/provider stays consistent with the live status bar.
+- Setup wizard regression tests now stub optional Boltz key prompts in non-TTY
+  runs, and runner interrupt/plan-preview tests were expanded to keep the 80%
+  coverage gate stable.
+
 ## [0.0.63] - 2026-06-22
 
 ### Fixed
