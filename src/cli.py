@@ -383,9 +383,23 @@ def _resolve_agents_api_base_url(cli_value: Optional[str] = None) -> str:
     return "https://agents-api.fastfold.ai/v1"
 
 
-def _agents_api_get_json(base_url: str, path: str, *, headers: dict[str, str], timeout: float = 20.0) -> dict:
+def _agents_api_request_json(
+    base_url: str,
+    path: str,
+    *,
+    headers: dict[str, str],
+    method: str = "GET",
+    timeout: float = 20.0,
+    body: dict | None = None,
+) -> dict:
     url = f"{base_url.rstrip('/')}{path}"
-    req = urllib.request.Request(url=url, headers=headers, method="GET")
+    data: bytes | None = None
+    normalized_method = str(method or "GET").upper()
+    request_headers = dict(headers or {})
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        request_headers.setdefault("Content-Type", "application/json")
+    req = urllib.request.Request(url=url, headers=request_headers, method=normalized_method, data=data)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             body = resp.read().decode("utf-8", errors="replace")
@@ -402,6 +416,10 @@ def _agents_api_get_json(base_url: str, path: str, *, headers: dict[str, str], t
     if not isinstance(payload, dict):
         raise RuntimeError(f"Agents API returned unexpected response for {path}")
     return payload
+
+
+def _agents_api_get_json(base_url: str, path: str, *, headers: dict[str, str], timeout: float = 20.0) -> dict:
+    return _agents_api_request_json(base_url, path, headers=headers, method="GET", timeout=timeout)
 
 
 def _safe_workspace_relative_path(raw_path: str) -> Optional[Path]:
@@ -850,6 +868,7 @@ def agent_fork_cmd(
         share_folders_count = 0
         restored_files = 0
         restored_root: Path | None = None
+        fork_count: int | None = None
         if include_files:
             with spinner("Loading shared file manifest..."):
                 files_payload = _agents_api_get_json(base_url, f"/shares/{encoded_share_id}/files", headers=headers)
@@ -884,6 +903,22 @@ def agent_fork_cmd(
                     restored_files += 1
             share_folders_count = len(unique_parent_dirs)
 
+        # Best-effort analytics so public and local CLI forks are reflected in
+        # shared-page fork counts (same metric surface as cloud forks).
+        try:
+            tracked = _agents_api_request_json(
+                base_url,
+                f"/shares/{encoded_share_id}/fork/local",
+                headers=headers,
+                method="POST",
+                timeout=12.0,
+            )
+            raw_count = tracked.get("fork_count")
+            if raw_count is not None:
+                fork_count = max(0, int(raw_count))
+        except Exception:
+            fork_count = None
+
         console.print("[green]Imported shared session locally.[/green]")
         console.print(f"  [dim]Share ID:[/dim] {resolved_share_id}")
         console.print(f"  [dim]Session ID:[/dim] {session_id}")
@@ -896,6 +931,8 @@ def agent_fork_cmd(
             console.print(f"  [dim]Restore location:[/dim] {restored_root}")
         else:
             console.print("  [dim]File import:[/dim] skipped (--no-files)")
+        if fork_count is not None:
+            console.print(f"  [dim]Fork count:[/dim] {fork_count}")
         console.print(f"  [cyan]Resume this session:[/cyan] fastfold --resume {session_id}")
     except RuntimeError as exc:
         message = str(exc)
