@@ -7,6 +7,8 @@ a LeftMarkdown class that renders headings left-aligned instead.
 
 from __future__ import annotations
 
+import html
+import re
 from typing import Any, Callable
 
 from rich import box
@@ -112,6 +114,97 @@ def _split_mermaid_fences(text: str) -> list[tuple[str, str]]:
     return merged or [("markdown", text)]
 
 
+_BR_TAG_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
+_HTML_TAG_RE = re.compile(r"</?[a-zA-Z][^>]*>")
+
+
+def _neaten_mermaid_source(code: str) -> str:
+    """Normalize LLM-generated Mermaid so it renders cleanly in a terminal.
+
+    termaid does not interpret HTML the way the Mermaid web renderer does, so
+    constructs like ``<br/>`` and ``&amp;`` otherwise leak into node labels and
+    blow out the layout. Convert line-break tags to spaces, strip leftover HTML
+    tags, decode entities, and collapse the extra whitespace that introduces.
+    """
+    text = str(code or "")
+    if not text:
+        return text
+    text = _BR_TAG_RE.sub(" ", text)
+    text = _HTML_TAG_RE.sub("", text)
+    text = html.unescape(text)
+    # Collapse interior runs of spaces/tabs left behind by tag removal, but keep
+    # leading indentation and newlines so the diagram structure stays intact.
+    cleaned_lines = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        indent = line[: len(line) - len(stripped)]
+        cleaned_lines.append(indent + re.sub(r"[ \t]{2,}", " ", stripped).rstrip())
+    return "\n".join(cleaned_lines)
+
+
+def _mermaid_diagram_type(code: str) -> str:
+    """Return the Mermaid diagram keyword (e.g. flowchart, sequenceDiagram)."""
+    for raw_line in str(code or "").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("%%"):
+            continue
+        return line.split()[0].strip().lower()
+    return ""
+
+
+def _is_complex_sequence_diagram(code: str) -> bool:
+    """Heuristic: large sequence diagrams often render unreadably in terminals."""
+    diagram_type = _mermaid_diagram_type(code)
+    if diagram_type != "sequencediagram":
+        return False
+
+    participant_count = 0
+    message_count = 0
+    for raw_line in str(code or "").splitlines():
+        line = raw_line.strip().lower()
+        if not line or line.startswith("%%"):
+            continue
+        if line.startswith("participant ") or line.startswith("actor "):
+            participant_count += 1
+        # Mermaid sequence messages usually contain at least one arrow marker.
+        if "->" in line:
+            message_count += 1
+
+    return participant_count >= 7 or message_count >= 16
+
+
+_FLOWCHART_TYPES = {"flowchart", "graph"}
+_EDGE_RE = re.compile(r"-\.->|={2,3}>|-{2,3}>|--[ox]|-{3}|~~~")
+_NODE_DEF_RE = re.compile(r"([A-Za-z0-9_]+)\s*(?:\[\[|\[\(|\(\(|\[|\(|\{|>)")
+
+
+def _is_complex_flowchart(code: str) -> bool:
+    """Heuristic: wide/branchy flowcharts render as unreadable terminal sprawl.
+
+    termaid lays nodes out on a grid, so many nodes, dense edges, or several
+    subgraphs detach boxes from their connectors. The clean fenced source is
+    more useful than a mangled diagram in those cases.
+    """
+    diagram_type = _mermaid_diagram_type(code)
+    if diagram_type not in _FLOWCHART_TYPES:
+        return False
+
+    edge_count = 0
+    subgraph_count = 0
+    node_ids: set[str] = set()
+    for raw_line in str(code or "").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("%%"):
+            continue
+        if line.lower().startswith("subgraph "):
+            subgraph_count += 1
+            continue
+        edge_count += len(_EDGE_RE.findall(line))
+        node_ids.update(_NODE_DEF_RE.findall(line))
+
+    return subgraph_count >= 2 or len(node_ids) > 12 or edge_count > 16
+
+
 def _print_mermaid_block(
     console: Any,
     code: str,
@@ -120,8 +213,14 @@ def _print_mermaid_block(
     theme: str,
     markdown_factory: Callable[[str], Markdown],
 ) -> None:
-    source = str(code or "").strip()
+    source = _neaten_mermaid_source(str(code or "").strip()).strip()
     if not source:
+        return
+    if _is_complex_sequence_diagram(source) or _is_complex_flowchart(source):
+        # Complex diagrams (dense sequence lifelines, or wide/branchy flowcharts
+        # with many nodes/subgraphs) render as unreadable terminal sprawl; keep
+        # the clean fenced source so it stays copyable into a web renderer.
+        console.print(markdown_factory(f"```mermaid\n{source}\n```"))
         return
 
     try:

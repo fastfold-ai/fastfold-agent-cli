@@ -81,6 +81,33 @@ synthesis at the end.
 
 
 # ---------------------------------------------------------------------------
+# Diagram guidance (CLI-specific — terminal renders Mermaid as ASCII)
+# ---------------------------------------------------------------------------
+
+_DIAGRAM_GUIDELINES = """\
+
+## Diagrams (Terminal Output)
+
+Your Mermaid diagrams are rendered as ASCII in a terminal, which cannot lay out
+wide, branchy, or HTML-rich diagrams the way a browser can. When you include a
+Mermaid diagram, keep it terminal-friendly:
+
+- **No HTML in labels.** Never use `<br/>`, `<b>`, or HTML entities. Use one
+  short single-line label per node (aim for <= ~24 characters, verb-first).
+- **Keep it small.** Prefer <= 8 nodes. For larger workflows, show a compact
+  linear overview and move per-stage detail into bullet text below the diagram
+  instead of adding more nodes.
+- **Avoid subgraphs** unless essential; nested boxes sprawl in a terminal. Use
+  at most one.
+- **Prefer a mostly linear topology.** Minimize parallel fan-out and back-edges;
+  a single decision branch is fine, a web of branches is not.
+
+Oversized or HTML-heavy diagrams may be shown as raw source (unrendered) by the
+CLI, so a smaller, simpler diagram is always more useful here.
+"""
+
+
+# ---------------------------------------------------------------------------
 # Synthesis instructions (injected at the end)
 # ---------------------------------------------------------------------------
 
@@ -261,15 +288,18 @@ def build_system_prompt(
     except Exception as e:
         logger.warning("Could not load synthesizer primer: %s", e)
 
-    # 8. Synthesis instructions
+    # 8. Diagram guidance (terminal-friendly Mermaid — CLI-specific)
+    parts.append(_DIAGRAM_GUIDELINES)
+
+    # 9. Synthesis instructions
     parts.append(_SYNTHESIS_INSTRUCTIONS)
 
-    # 9. Dynamic data context
+    # 10. Dynamic data context
     if data_context:
         parts.append("\n## Data Context\n")
         parts.append(data_context)
 
-    # 10. Session history (for multi-turn interactive mode)
+    # 11. Session history (for multi-turn interactive mode)
     if history:
         parts.append("\n## Prior Conversation\n")
         parts.append(history)

@@ -9,6 +9,9 @@ from rich.markdown import Markdown
 
 from ui.markdown import (
     LeftMarkdown,
+    _is_complex_flowchart,
+    _is_complex_sequence_diagram,
+    _neaten_mermaid_source,
     _split_mermaid_fences,
     print_markdown_with_mermaid,
 )
@@ -25,6 +28,128 @@ class TestLeftMarkdown:
 
 
 class TestMermaidMarkdown:
+    def test_neaten_mermaid_source_strips_html_and_entities(self):
+        source = "\n".join(
+            [
+                "flowchart TD",
+                '    A["All<br/>Binders"] --> B["API<BR>Auth?"]',
+                '    B --> C["Tom &amp; Jerry &lt;tag&gt;"]',
+            ]
+        )
+        cleaned = _neaten_mermaid_source(source)
+        assert "<br/>" not in cleaned.lower()
+        assert "<br>" not in cleaned.lower()
+        assert "&amp;" not in cleaned
+        assert "All Binders" in cleaned
+        assert "API Auth?" in cleaned
+        assert "Tom & Jerry" in cleaned
+
+    def test_neaten_mermaid_source_preserves_structure(self):
+        source = "flowchart LR\n    A --> B\n    B --> C"
+        assert _neaten_mermaid_source(source) == source
+
+    def test_print_markdown_with_mermaid_neatens_before_render(self):
+        console = MagicMock()
+        captured = {}
+
+        def _fake_render_rich(src, **_kwargs):
+            captured["src"] = src
+            return "diagram-output"
+
+        with patch("termaid.render_rich", side_effect=_fake_render_rich):
+            print_markdown_with_mermaid(
+                console,
+                '```mermaid\nflowchart TD\n  A["All<br/>Binders"] --> B\n```\n',
+            )
+        assert "<br/>" not in captured["src"]
+        assert "All Binders" in captured["src"]
+
+    def test_simple_flowchart_is_not_complex(self):
+        simple = "\n".join(
+            [
+                "flowchart TD",
+                "    a[Start] --> b[PrepareInputs]",
+                "    b --> c[Execute]",
+                "    c --> d[Results]",
+            ]
+        )
+        assert _is_complex_flowchart(simple) is False
+
+    def test_flowchart_with_multiple_subgraphs_is_complex(self):
+        complex_chart = "\n".join(
+            [
+                "flowchart TD",
+                "    subgraph prep [Preparation]",
+                "        a[Input] --> b[Validate]",
+                "    end",
+                "    subgraph run [Execution]",
+                "        c[Submit] --> d[Wait]",
+                "    end",
+                "    b --> c",
+            ]
+        )
+        assert _is_complex_flowchart(complex_chart) is True
+
+    def test_flowchart_with_many_nodes_is_complex(self):
+        lines = ["flowchart LR"]
+        for i in range(14):
+            lines.append(f"    n{i}[Node{i}] --> n{i + 1}[Node{i + 1}]")
+        assert _is_complex_flowchart("\n".join(lines)) is True
+
+    def test_print_markdown_with_mermaid_complex_flowchart_falls_back(self):
+        console = MagicMock()
+        complex_chart = "\n".join(
+            [
+                "```mermaid",
+                "flowchart TD",
+                "    subgraph prep [Preparation]",
+                "        a[Input] --> b[Validate]",
+                "    end",
+                "    subgraph run [Execution]",
+                "        c[Submit] --> d[Wait]",
+                "    end",
+                "    b --> c",
+                "```",
+            ]
+        )
+        with patch("termaid.render_rich") as mock_render_rich:
+            print_markdown_with_mermaid(console, complex_chart)
+        mock_render_rich.assert_not_called()
+        markdown_calls = [
+            call.args[0]
+            for call in console.print.call_args_list
+            if call.args and isinstance(call.args[0], Markdown)
+        ]
+        assert markdown_calls
+        assert "```mermaid" in markdown_calls[0].markup
+
+    def test_complex_sequence_diagram_heuristic(self):
+        source = "\n".join(
+            [
+                "sequenceDiagram",
+                "participant A",
+                "participant B",
+                "participant C",
+                "participant D",
+                "participant E",
+                "participant F",
+                "participant G",
+                "A->>B: step 1",
+            ]
+        )
+        assert _is_complex_sequence_diagram(source) is True
+
+        simple = "\n".join(
+            [
+                "sequenceDiagram",
+                "participant A",
+                "participant B",
+                "A->>B: hello",
+                "B-->>A: ok",
+            ]
+        )
+        assert _is_complex_sequence_diagram(simple) is False
+
     def test_split_mermaid_fences(self):
         sections = _split_mermaid_fences(
             "Intro\n```mermaid\ngraph LR\nA-->B\n```\nOutro\n"
@@ -58,6 +183,35 @@ class TestMermaidMarkdown:
                 console,
                 "```mermaid\ngraph LR\nA-->B\n```\n",
             )
+        markdown_calls = [
+            call.args[0]
+            for call in console.print.call_args_list
+            if call.args and isinstance(call.args[0], Markdown)
+        ]
+        assert markdown_calls
+        assert "```mermaid" in markdown_calls[0].markup
+
+    def test_print_markdown_with_mermaid_complex_sequence_falls_back_to_fence(self):
+        console = MagicMock()
+        complex_sequence = "\n".join(
+            [
+                "```mermaid",
+                "sequenceDiagram",
+                "participant A",
+                "participant B",
+                "participant C",
+                "participant D",
+                "participant E",
+                "participant F",
+                "participant G",
+                "A->>B: step",
+                "```",
+            ]
+        )
+        with patch("termaid.render_rich") as mock_render_rich:
+            print_markdown_with_mermaid(console, complex_sequence)
+
+        mock_render_rich.assert_not_called()
         markdown_calls = [
             call.args[0]
             for call in console.print.call_args_list

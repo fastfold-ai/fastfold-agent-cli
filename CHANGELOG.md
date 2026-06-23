@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.67] - 2026-06-23
+
+### Fixed
+
+- Mermaid diagrams now render more cleanly in the terminal: HTML in node labels
+  (`<br/>`, tags, entities) is stripped/decoded before rendering, so labels no
+  longer leak literal `<br/>` markup or blow out the layout.
+- Overly complex diagrams (dense sequence lifelines, or wide/branchy flowcharts
+  with many nodes or multiple subgraphs) now fall back to clean, copyable fenced
+  Mermaid source instead of unreadable ASCII sprawl.
+
+### Changed
+
+- The agent system prompt now instructs the model to produce terminal-friendly
+  diagrams by default (short single-line labels, no HTML, few nodes, mostly
+  linear topology), keeping CLI-specific guidance out of shared skills.
+
 ## [0.0.65] - 2026-06-23
 
 ### Added
