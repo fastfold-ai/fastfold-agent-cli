@@ -271,6 +271,38 @@ fastfold tool list
 fastfold skills list
 ```
 
+### Fork a shared cloud session locally
+
+Use this to clone a shared Fastfold Agent thread into your local CLI session history.
+
+```bash
+fastfold agent fork <share_id>
+```
+
+You can pass either a raw share ID or a full shared URL (`.../agents/share/<share_id>`).
+
+Optional flags:
+
+```bash
+# Override agents API endpoint (default: https://agents-api.fastfold.ai/v1)
+fastfold agent fork <share_id> --agents-api-url http://127.0.0.1:8091/v1
+
+# Provide API key for restricted-email shares
+fastfold agent fork <share_id> --fastfold-api-key sk-...
+
+# Import chat only (skip files)
+fastfold agent fork <share_id> --no-files
+```
+
+Behavior:
+
+- Public-link shares work without an API key.
+- Restricted-email shares require a valid `FASTFOLD_API_KEY` from an allowed account.
+- Imported files are restored under:
+  - `<sandbox.output_dir>/shared_forks/<share_id>/...`
+- The command prints a resume hint:
+  - `fastfold --resume <session_id>`
+
 ### Interactive commands
 
 Inside `fastfold` interactive mode (run `/help` for the full reference):

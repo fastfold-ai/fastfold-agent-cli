@@ -19,7 +19,8 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
+from uuid import uuid4
 import typer
 from typing import Optional
 from pathlib import Path
@@ -353,6 +354,77 @@ def _write_upgrade_cache(latest: Optional[str]) -> None:
         pass
 
 
+def _normalize_share_id(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        raise ValueError("share_id is required")
+    if "/agents/share/" in raw:
+        suffix = raw.split("/agents/share/", 1)[1]
+        raw = suffix.split("?", 1)[0].split("#", 1)[0].strip()
+    return raw
+
+
+def _parse_unix_timestamp(value: object) -> float:
+    text = str(value or "").strip()
+    if not text:
+        return time.time()
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        return datetime.fromisoformat(text).timestamp()
+    except Exception:
+        return time.time()
+
+
+def _resolve_agents_api_base_url(cli_value: Optional[str] = None) -> str:
+    candidate = str(cli_value or os.environ.get("FASTFOLD_AGENTS_API_URL") or "").strip()
+    if candidate:
+        return candidate.rstrip("/")
+    return "https://agents-api.fastfold.ai/v1"
+
+
+def _agents_api_get_json(base_url: str, path: str, *, headers: dict[str, str], timeout: float = 20.0) -> dict:
+    url = f"{base_url.rstrip('/')}{path}"
+    req = urllib.request.Request(url=url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Agents API {exc.code} for {path}: {detail or exc.reason}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Could not reach Agents API at {url}: {exc}") from exc
+
+    try:
+        payload = json.loads(body) if body else {}
+    except Exception as exc:
+        raise RuntimeError(f"Agents API returned invalid JSON for {path}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Agents API returned unexpected response for {path}")
+    return payload
+
+
+def _safe_workspace_relative_path(raw_path: str) -> Optional[Path]:
+    normalized = str(raw_path or "").strip().replace("\\", "/").lstrip("/")
+    if not normalized:
+        return None
+    parts = [segment for segment in normalized.split("/") if segment and segment != "."]
+    if any(segment == ".." for segment in parts):
+        return None
+    if not parts:
+        return None
+    return Path(*parts)
+
+
+def _download_binary(url: str, *, timeout: float = 30.0) -> bytes:
+    req = urllib.request.Request(url=url, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Failed to download shared file from {url}: {exc}") from exc
+
+
 def _start_upgrade_check_refresh() -> None:
     """Refresh cached PyPI latest version in a daemon thread."""
     import threading
@@ -560,6 +632,9 @@ def execute_upgrade(
 config_app = typer.Typer(help="Manage fastfold configuration")
 app.add_typer(config_app, name="config")
 
+agent_app = typer.Typer(help="Fork and import shared cloud sessions")
+app.add_typer(agent_app, name="agent")
+
 
 @config_app.command("set")
 def config_set(key: str, value: str):
@@ -664,6 +739,184 @@ def upgrade_cmd(
     )
     if not ok:
         raise typer.Exit(code=1)
+
+
+@agent_app.command("fork")
+def agent_fork_cmd(
+    share_id: str = typer.Argument(..., help="Shared chat ID or full /agents/share/<id> URL"),
+    agents_api_url: Optional[str] = typer.Option(
+        None,
+        "--agents-api-url",
+        envvar="FASTFOLD_AGENTS_API_URL",
+        help="Agents API base URL (defaults to FASTFOLD_AGENTS_API_URL or https://agents-api.fastfold.ai/v1)",
+    ),
+    fastfold_api_key: Optional[str] = typer.Option(
+        None,
+        "--fastfold-api-key",
+        envvar="FASTFOLD_API_KEY",
+        help="Optional Fastfold Cloud API key (required for restricted-email shared chats)",
+    ),
+    include_files: bool = typer.Option(
+        True,
+        "--include-files/--no-files",
+        help="Download shared files into local sandbox.output_dir/shared_forks/<share_id>",
+    ),
+):
+    """Fork a shared cloud chat into a local Fastfold Agent CLI session."""
+    from agent.config import Config
+    from agent.trajectory import Trajectory, Turn
+
+    try:
+        cfg = Config.load()
+        resolved_share_id = _normalize_share_id(share_id)
+        base_url = _resolve_agents_api_base_url(agents_api_url)
+        resolved_key = (
+            str(fastfold_api_key or "").strip()
+            or str(os.environ.get("FASTFOLD_API_KEY") or "").strip()
+            or str(cfg.get("api.fastfold_cloud_key") or "").strip()
+        )
+
+        headers = {
+            "Accept": "application/json",
+            "User-Agent": f"fastfold-agent-cli/{__version__}",
+        }
+        if resolved_key:
+            headers["X-Fastfold-Api-Key"] = resolved_key
+
+        encoded_share_id = quote(resolved_share_id, safe="")
+        with spinner("Fetching shared session metadata..."):
+            bootstrap = _agents_api_get_json(base_url, f"/shares/{encoded_share_id}", headers=headers)
+            history = _agents_api_get_json(base_url, f"/shares/{encoded_share_id}/history", headers=headers)
+        thread = bootstrap.get("thread") if isinstance(bootstrap.get("thread"), dict) else {}
+        title = str(thread.get("title") or "Imported shared session").strip()
+        messages = history.get("messages") if isinstance(history.get("messages"), list) else []
+
+        with spinner("Reconstructing local session trajectory..."):
+            turns: list[Turn] = []
+            pending_query = ""
+            pending_query_ts: float | None = None
+            assistant_parts: list[str] = []
+            for message in messages:
+                if not isinstance(message, dict):
+                    continue
+                role = str(message.get("role") or "").strip().lower()
+                content = str(message.get("content") or "").strip()
+                created_at = _parse_unix_timestamp(message.get("created_at"))
+                if role == "user":
+                    if pending_query:
+                        turns.append(
+                            Turn(
+                                query=pending_query,
+                                answer="\n\n".join(assistant_parts).strip(),
+                                timestamp=pending_query_ts or created_at,
+                            )
+                        )
+                    pending_query = content
+                    pending_query_ts = created_at
+                    assistant_parts = []
+                    continue
+                if role == "assistant" and pending_query and content:
+                    assistant_parts.append(content)
+            if pending_query:
+                turns.append(
+                    Turn(
+                        query=pending_query,
+                        answer="\n\n".join(assistant_parts).strip(),
+                        timestamp=pending_query_ts or time.time(),
+                    )
+                )
+
+            session_id = str(uuid4())[:8]
+            trajectory = Trajectory(session_id=session_id, title=title)
+            trajectory.turns = turns
+            if turns:
+                trajectory.created_at = turns[0].timestamp
+                trajectory.updated_at = turns[-1].timestamp
+            trajectory.model = str(
+                (thread.get("metadata") or {}).get("inspect_base_model_key")
+                if isinstance(thread.get("metadata"), dict)
+                else ""
+            ).strip() or "cloud-shared-session"
+            trajectory.usage_data = {
+                "imported_from_share_id": resolved_share_id,
+                "imported_from_thread_id": str(thread.get("id") or "").strip(),
+                "imported_at": datetime.now(timezone.utc).isoformat(),
+                "messages_count": len(messages),
+                "turns_count": len(turns),
+            }
+            trajectory.save()
+
+        share_files_count = 0
+        share_folders_count = 0
+        restored_files = 0
+        restored_root: Path | None = None
+        if include_files:
+            with spinner("Loading shared file manifest..."):
+                files_payload = _agents_api_get_json(base_url, f"/shares/{encoded_share_id}/files", headers=headers)
+            listed_files = files_payload.get("data") if isinstance(files_payload.get("data"), list) else []
+            share_files_count = len(listed_files)
+            unique_parent_dirs: set[str] = set()
+            output_root = Path(str(cfg.get("sandbox.output_dir") or Path.cwd() / "outputs")).expanduser().resolve()
+            restored_root = output_root / "shared_forks" / resolved_share_id
+            with spinner(f"Downloading {share_files_count} shared files..."):
+                for row in listed_files:
+                    if not isinstance(row, dict):
+                        continue
+                    rel_path = _safe_workspace_relative_path(str(row.get("path") or ""))
+                    if rel_path is None:
+                        continue
+                    parent = str(rel_path.parent).strip()
+                    if parent and parent != ".":
+                        unique_parent_dirs.add(parent)
+                    encoded_path = quote(str(rel_path).replace("\\", "/"), safe="")
+                    download_payload = _agents_api_get_json(
+                        base_url,
+                        f"/shares/{encoded_share_id}/files/download?path={encoded_path}",
+                        headers=headers,
+                    )
+                    signed_url = str(download_payload.get("url") or "").strip()
+                    if not signed_url:
+                        continue
+                    content = _download_binary(signed_url)
+                    target_path = restored_root / rel_path
+                    target_path.parent.mkdir(parents=True, exist_ok=True)
+                    target_path.write_bytes(content)
+                    restored_files += 1
+            share_folders_count = len(unique_parent_dirs)
+
+        console.print("[green]Imported shared session locally.[/green]")
+        console.print(f"  [dim]Share ID:[/dim] {resolved_share_id}")
+        console.print(f"  [dim]Session ID:[/dim] {session_id}")
+        console.print(f"  [dim]Session file:[/dim] {Trajectory.session_path(session_id)}")
+        console.print(f"  [dim]Messages imported:[/dim] {len(messages)}")
+        if include_files and restored_root is not None:
+            console.print(f"  [dim]Shared files:[/dim] {share_files_count}")
+            console.print(f"  [dim]Shared folders:[/dim] {share_folders_count}")
+            console.print(f"  [dim]Files restored:[/dim] {restored_files}")
+            console.print(f"  [dim]Restore location:[/dim] {restored_root}")
+        else:
+            console.print("  [dim]File import:[/dim] skipped (--no-files)")
+        console.print(f"  [cyan]Resume this session:[/cyan] fastfold --resume {session_id}")
+    except RuntimeError as exc:
+        message = str(exc)
+        if " 404 " in f" {message} " and "/shares/" in message:
+            console.print(
+                "[red]Shared session not found.[/red]\n"
+                "  Check the share ID or URL, and ensure the link still exists."
+            )
+            raise typer.Exit(code=2)
+        if " 401 " in f" {message} " or " 403 " in f" {message} ":
+            console.print(
+                "[red]Access denied for this shared session.[/red]\n"
+                "  This share may be restricted by email. Set FASTFOLD_API_KEY "
+                "from an allowed account and retry."
+            )
+            raise typer.Exit(code=2)
+        console.print(f"[red]Could not fork shared session.[/red]\n  {message}")
+        raise typer.Exit(code=2)
+    except ValueError as exc:
+        console.print(f"[red]Invalid input:[/red] {exc}")
+        raise typer.Exit(code=2)
 
 
 @app.command("setup")
@@ -4325,8 +4578,21 @@ def run_interactive(
 
 def entry():
     """Package entry point."""
+    # Dev ergonomics: when invoked from the repo root (or a subdir), prefer the
+    # live source file so `uv run fastfold ...` reflects local edits immediately.
+    current_cli_path = Path(__file__).resolve()
+    candidate_roots = [Path.cwd(), *Path.cwd().parents]
+    for root in candidate_roots:
+        local_cli = root / "src" / "cli.py"
+        if not local_cli.exists():
+            continue
+        resolved_local = local_cli.resolve()
+        if resolved_local == current_cli_path:
+            break
+        os.execv(sys.executable, [sys.executable, str(resolved_local), *sys.argv[1:]])
+
     argv = list(sys.argv[1:])
-    passthrough = {
+    subcommands = {
         "config",
         "data",
         "tool",
@@ -4343,7 +4609,8 @@ def entry():
         "report",
         "case-study",
         "bench",
-        "run",
+        "agent",
+        "run",  # legacy explicit runner command
         "--help",
         "-h",
         "--install-completion",
@@ -4359,7 +4626,12 @@ def entry():
     #   fastfold "question"            -> single-query mode
     #   fastfold --smiles ... "q"      -> single-query with context
     # while preserving explicit subcommands like `fastfold config ...`.
-    if not argv or argv[0] not in passthrough:
+    # Backward-compat: allow old `fastfold run <subcommand> ...` invocations by
+    # unwrapping the legacy `run` prefix when the remainder is a real subcommand.
+    if len(argv) >= 2 and argv[0] == "run" and argv[1] in subcommands:
+        argv = argv[1:]
+
+    if not argv or argv[0] not in subcommands:
         argv = ["run", *argv]
 
     app(args=argv, prog_name="fastfold")

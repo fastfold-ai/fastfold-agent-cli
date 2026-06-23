@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.65] - 2026-06-23
+
+### Added
+
+- New `fastfold agent fork <share_id>` command to import a shared cloud thread
+  into local CLI session history, including transcript reconstruction and optional
+  shared-file restore.
+- Phase-based progress loaders for fork import (metadata fetch, trajectory build,
+  file manifest, and downloads) to make long imports easier to track.
+
+### Changed
+
+- `FASTFOLD_AGENTS_API_URL` now defaults to production
+  (`https://agents-api.fastfold.ai/v1`) when not configured.
+- CLI entrypoint routing now treats `fastfold agent ...` as a first-class
+  subcommand while preserving backward compatibility for `fastfold run <subcommand>`.
+
+### Fixed
+
+- Fork command failures now print friendly actionable messages for missing shares
+  and access-denied cases instead of raw tracebacks.
+- Fork completion output now reports imported message count, shared file/folder
+  totals, restored file count, restore path, and a clear `--resume` hint.
+- Local development runs (`uv run fastfold ...`) now prefer live source execution
+  from `src/cli.py` when invoked inside the repo.
+
 ## [0.0.64] - 2026-06-22
 
 ### Added
