@@ -1,7 +1,8 @@
 """Tests for the native skills management system (ct.agent.skills + tooling)."""
 
-from pathlib import Path
+import json
 import subprocess
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -521,14 +522,23 @@ def test_upgrade_skills_syncs_catalog_and_manifest(monkeypatch, tmp_path):
         return {"ok": True, "installed": [source.split("/")[-1]], "summary": "ok", "via": "git"}
 
     monkeypatch.setattr(skills_mod, "install_skill", fake_install)
+    # Manifest-tracked (non-catalog) sources now flow through the grouped sync,
+    # which clones each repo once. Record those separately.
+    synced = []
+
+    def fake_sync(tracked, dest, **kwargs):
+        synced.extend(src for _name, src in tracked)
+        return [src.split("/")[-1] for _n, src in tracked], []
+
+    monkeypatch.setattr(skills_mod, "_sync_tracked_sources", fake_sync)
     states = [{}, {"a": object(), "b": object()}]
     monkeypatch.setattr(skills_mod, "iter_skills", lambda *a, **k: states.pop(0) if states else {})
 
     res = skills_mod.upgrade_skills()
     # Catalog synced once; the manifest 'fold' (same owner/repo as catalog) is skipped.
     assert calls.count("fastfold-ai/skills") == 1
-    # Non-catalog manifest source is re-installed.
-    assert "K-Dense-AI/scientific-agent-skills" in calls
+    # Non-catalog manifest source is re-installed (via the grouped sync).
+    assert "K-Dense-AI/scientific-agent-skills" in synced
     assert "added" in res and "updated" in res and "failed" in res
 
 
@@ -559,14 +569,324 @@ def test_upgrade_skills_no_catalog_only_manifest(monkeypatch, tmp_path):
         "_read_manifest",
         lambda dest: {"version": 1, "skills": {"kdense": {"source": "K-Dense-AI/scientific-agent-skills"}}},
     )
-    calls = []
-    monkeypatch.setattr(
-        skills_mod, "install_skill",
-        lambda source, dest=None, prefer_npx=False: calls.append(source) or {"ok": True, "installed": [], "summary": "ok"},
-    )
+    synced = []
+
+    def fake_sync(tracked, dest, **kwargs):
+        synced.extend(src for _name, src in tracked)
+        return [], []
+
+    monkeypatch.setattr(skills_mod, "_sync_tracked_sources", fake_sync)
     monkeypatch.setattr(skills_mod, "iter_skills", lambda *a, **k: {})
     skills_mod.upgrade_skills(include_catalog=False)
-    assert calls == ["K-Dense-AI/scientific-agent-skills"]  # no catalog sync
+    # No catalog sync; the manifest source goes through the grouped sync.
+    assert synced == ["K-Dense-AI/scientific-agent-skills"]
+
+
+def test_sync_tracked_sources_clones_each_repo_once(monkeypatch, tmp_path):
+    """Many skills from the same repo+ref should trigger exactly one clone."""
+    monkeypatch.setattr(skills_mod, "_git_available", lambda: True)
+    monkeypatch.setattr(skills_mod, "fetch_latest_release", lambda *a, **k: None)
+
+    clone_calls = []
+
+    def fake_clone(url, ref, tmp_root):
+        clone_calls.append((url, ref))
+        return tmp_root / "repo", "deadbeef", "git"
+
+    monkeypatch.setattr(skills_mod, "_clone_repo_once", fake_clone)
+
+    installed_subpaths = []
+
+    def fake_tree(repo_root, subpath, dest, source, commit, release_tag, via):
+        installed_subpaths.append(subpath)
+        return {"ok": True, "installed": [subpath.split("/")[-1]], "summary": "ok", "via": via}
+
+    monkeypatch.setattr(skills_mod, "_install_from_repo_tree", fake_tree)
+
+    # 3 skills from one repo + 1 from another => 2 clones total.
+    tracked = [
+        ("a", "ClawBio/ClawBio@skills/a"),
+        ("b", "ClawBio/ClawBio@skills/b"),
+        ("c", "ClawBio/ClawBio@skills/c"),
+        ("d", "OtherOrg/repo@skills/d"),
+    ]
+    installed, failures = skills_mod._sync_tracked_sources(tracked, tmp_path, max_workers=4)
+
+    assert len(clone_calls) == 2  # one clone per unique repo, not per skill
+    assert sorted(installed) == ["a", "b", "c", "d"]
+    assert failures == []
+
+
+def test_sync_tracked_sources_reports_clone_failure(monkeypatch, tmp_path):
+    monkeypatch.setattr(skills_mod, "_git_available", lambda: True)
+    monkeypatch.setattr(skills_mod, "fetch_latest_release", lambda *a, **k: None)
+    monkeypatch.setattr(skills_mod, "_clone_repo_once", lambda url, ref, tmp_root: (None, None, "git"))
+
+    tracked = [("a", "ClawBio/ClawBio@skills/a"), ("b", "ClawBio/ClawBio@skills/b")]
+    installed, failures = skills_mod._sync_tracked_sources(tracked, tmp_path, max_workers=1)
+
+    assert installed == []
+    assert {src for src, _reason in failures} == {
+        "ClawBio/ClawBio@skills/a",
+        "ClawBio/ClawBio@skills/b",
+    }
+
+
+def test_noninteractive_git_env_disables_prompts(monkeypatch):
+    monkeypatch.delenv("GIT_TERMINAL_PROMPT", raising=False)
+    monkeypatch.delenv("GIT_ASKPASS", raising=False)
+    monkeypatch.delenv("GCM_INTERACTIVE", raising=False)
+    monkeypatch.delenv("GIT_SSH_COMMAND", raising=False)
+
+    env = skills_mod._noninteractive_git_env()
+
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["GIT_ASKPASS"] == "echo"
+    assert env["GCM_INTERACTIVE"] == "never"
+    assert "BatchMode=yes" in env["GIT_SSH_COMMAND"]
+
+
+def test_clone_repo_once_prefers_git(monkeypatch, tmp_path):
+    monkeypatch.setattr(skills_mod, "_git_available", lambda: True)
+    monkeypatch.setattr(skills_mod, "_git_clone", lambda url, ref, dest: "abc123")
+
+    root, commit, via = skills_mod._clone_repo_once(
+        "https://github.com/owner/repo.git", "main", tmp_path
+    )
+
+    assert root == tmp_path / "repo"
+    assert commit == "abc123"
+    assert via == "git"
+
+
+@pytest.mark.parametrize("git_error", [
+    subprocess.CalledProcessError(1, ["git", "clone"]),
+    RuntimeError("git unavailable"),
+])
+def test_clone_repo_once_falls_back_to_archive(monkeypatch, tmp_path, git_error):
+    monkeypatch.setattr(skills_mod, "_git_available", lambda: True)
+    monkeypatch.setattr(
+        skills_mod, "_git_clone", lambda *args, **kwargs: (_ for _ in ()).throw(git_error)
+    )
+    archive = tmp_path / "repo-main"
+    monkeypatch.setattr(
+        skills_mod,
+        "_download_github_archive",
+        lambda owner, repo, ref, parent: archive,
+    )
+
+    root, commit, via = skills_mod._clone_repo_once(
+        "https://github.com/owner/repo.git", None, tmp_path
+    )
+
+    assert (root, commit, via) == (archive, None, "archive")
+
+
+def test_clone_repo_once_reports_total_failure(monkeypatch, tmp_path):
+    monkeypatch.setattr(skills_mod, "_git_available", lambda: False)
+    monkeypatch.setattr(
+        skills_mod,
+        "_download_github_archive",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("archive failed")),
+    )
+
+    assert skills_mod._clone_repo_once(
+        "https://github.com/owner/repo.git", None, tmp_path
+    ) == (None, None, "git")
+
+
+def test_run_grouped_clones_handles_item_and_notify_errors(monkeypatch):
+    repo = Path("/tmp/fake-repo")
+    monkeypatch.setattr(
+        skills_mod, "_clone_repo_once", lambda *args: (repo, "abc123", "git")
+    )
+    monkeypatch.setattr(
+        skills_mod, "fetch_latest_release", lambda owner_repo: {"tag": "v1.2.3"}
+    )
+    seen = []
+
+    def install_item(repo_root, commit, release, via, item):
+        seen.append((repo_root, commit, release, via, item))
+        if item[0] == "boom":
+            raise RuntimeError("copy failed")
+        return [item[0]], []
+
+    installed, failures = skills_mod._run_grouped_clones(
+        {("https://github.com/owner/repo.git", None): [("ok",), ("boom",)]},
+        {("https://github.com/owner/repo.git", None): "owner/repo"},
+        install_item,
+        max_workers=1,
+        notify=lambda message: (_ for _ in ()).throw(RuntimeError(message)),
+    )
+
+    assert installed == ["ok"]
+    assert failures == [("boom", "copy failed")]
+    assert seen[0][2] == "v1.2.3"
+
+
+def test_run_grouped_clones_empty():
+    assert skills_mod._run_grouped_clones({}, {}, lambda *args: None) == ([], [])
+
+
+def test_sync_tracked_sources_installs_other_sources(monkeypatch, tmp_path):
+    monkeypatch.setattr(skills_mod, "detect_source_type", lambda source: "local")
+    calls = []
+
+    def install(source, dest=None):
+        calls.append((source, dest))
+        if source == "bad":
+            return {"ok": False, "summary": "not found"}
+        return {"ok": True, "installed": ["local-skill"]}
+
+    monkeypatch.setattr(skills_mod, "install_skill", install)
+    messages = []
+    installed, failures = skills_mod._sync_tracked_sources(
+        [("good", "local"), ("bad", "bad")],
+        tmp_path,
+        notify=messages.append,
+    )
+
+    assert installed == ["local-skill"]
+    assert failures == [("bad", "not found")]
+    assert calls == [("local", tmp_path), ("bad", tmp_path)]
+    assert messages == ["Updating local...", "Updating bad..."]
+
+
+def test_update_npx_skills_via_git_from_lock(monkeypatch, tmp_path):
+    root = tmp_path / "npx-root"
+    skills_dir = root / ".claude" / "skills"
+    monkeypatch.setattr(skills_mod, "NPX_INSTALL_ROOT", root)
+    monkeypatch.setattr(skills_mod, "NPX_SKILLS_DIR", skills_dir)
+    monkeypatch.setattr(skills_mod, "_git_available", lambda: True)
+    root.mkdir()
+    (root / "skills-lock.json").write_text(
+        json.dumps({
+            "skills": {
+                "alpha-installed": {
+                    "source": "owner/repo",
+                    "sourceType": "github",
+                    "skillPath": "skills/alpha/SKILL.md",
+                },
+                "beta-installed": {
+                    "source": "owner/repo",
+                    "sourceType": "github",
+                    "skillPath": "skills/beta/SKILL.md",
+                },
+                "ignored": {"source": "local/path", "sourceType": "local"},
+                "malformed": "not-a-dict",
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    def clone(url, ref, temporary_root):
+        repo = temporary_root / "repo"
+        _write_skill(repo / "skills", "alpha", "Alpha")
+        _write_skill(repo / "skills", "beta", "Beta")
+        return repo, "abc123", "git"
+
+    monkeypatch.setattr(skills_mod, "_clone_repo_once", clone)
+    result = skills_mod.update_npx_skills_via_git(max_workers=1)
+
+    assert result["ok"] is True
+    assert result["synced"] == 2
+    assert result["failed"] == []
+    assert (skills_dir / "alpha-installed" / "SKILL.md").exists()
+    assert (skills_dir / "beta-installed" / "SKILL.md").exists()
+    # A refresh replaces the existing target directories.
+    refreshed = skills_mod.update_npx_skills_via_git(max_workers=1)
+    assert refreshed["synced"] == 2
+
+
+def test_update_npx_skills_via_git_reports_bad_lock_and_missing_skill(monkeypatch, tmp_path):
+    root = tmp_path / "npx-root"
+    monkeypatch.setattr(skills_mod, "NPX_INSTALL_ROOT", root)
+    monkeypatch.setattr(skills_mod, "NPX_SKILLS_DIR", root / ".claude" / "skills")
+    monkeypatch.setattr(skills_mod, "_git_available", lambda: True)
+
+    assert skills_mod.update_npx_skills_via_git()["ok"] is False
+    root.mkdir()
+    lock = root / "skills-lock.json"
+    lock.write_text("{bad json", encoding="utf-8")
+    assert "unreadable lock" in skills_mod.update_npx_skills_via_git()["summary"]
+
+    lock.write_text(
+        json.dumps({
+            "skills": {
+                "local-only": {"source": "local/path", "sourceType": "local"}
+            }
+        }),
+        encoding="utf-8",
+    )
+    assert "no github sources" in skills_mod.update_npx_skills_via_git()["summary"]
+
+    lock.write_text(
+        json.dumps({
+            "skills": {
+                "missing": {
+                    "source": "owner/repo",
+                    "sourceType": "github",
+                    "skillPath": "skills/missing/SKILL.md",
+                }
+            }
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        skills_mod,
+        "_clone_repo_once",
+        lambda url, ref, temporary_root: (temporary_root / "repo", None, "archive"),
+    )
+    result = skills_mod.update_npx_skills_via_git(max_workers=1)
+    assert result["ok"] is True
+    assert result["synced"] == 0
+    assert result["failed"][0][0].endswith("@skills/missing")
+
+
+def test_discover_skills_clones_catalog_and_filters(monkeypatch, tmp_path):
+    monkeypatch.setattr(skills_mod, "_git_available", lambda: True)
+
+    def clone(url, ref, destination):
+        _write_skill(destination / "skills", "fold", "Protein folding", "protein,structure")
+        _write_skill(destination / "skills", "report", "Publish reports", "reporting")
+        return "abc123"
+
+    monkeypatch.setattr(skills_mod, "_git_clone", clone)
+
+    results = skills_mod.discover_skills("protein", catalog="owner/catalog")
+
+    assert [result["name"] for result in results] == ["fold"]
+    assert results[0]["install_source"] == "owner/catalog@skills/fold"
+    assert skills_mod._resolve_name_to_source("fold", catalog="owner/catalog").endswith(
+        "@skills/fold"
+    )
+
+
+def test_discover_skills_handles_unavailable_git_and_clone_failure(monkeypatch):
+    monkeypatch.setattr(skills_mod, "_git_available", lambda: False)
+    assert skills_mod.discover_skills() == []
+
+    monkeypatch.setattr(skills_mod, "_git_available", lambda: True)
+    monkeypatch.setattr(
+        skills_mod,
+        "_git_clone",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("clone failed")),
+    )
+    assert skills_mod.discover_skills() == []
+
+
+def test_resolve_name_to_source_uses_loose_match(monkeypatch):
+    calls = []
+
+    def discover(query, catalog):
+        calls.append((query, catalog))
+        return [{"name": "folding", "install_source": "owner/repo@skills/folding"}]
+
+    monkeypatch.setattr(skills_mod, "discover_skills", discover)
+    assert skills_mod._resolve_name_to_source("fold", catalog="owner/repo") == (
+        "owner/repo@skills/folding"
+    )
+    assert len(calls) == 2
 
 
 def test_upgrade_skills_runs_npx_update(monkeypatch, tmp_path):
@@ -583,6 +903,81 @@ def test_upgrade_skills_runs_npx_update(monkeypatch, tmp_path):
     res = skills_mod.upgrade_skills(project_root=tmp_path)
     assert updated["ran"] is True
     assert res["npx_synced"] == 1  # one skill in the npx dir
+
+
+def test_upgrade_skills_collects_catalog_git_and_npx_failures(monkeypatch, tmp_path):
+    global_dir = tmp_path / "global"
+    npx_dir = tmp_path / "npx" / ".claude" / "skills"
+    npx_dir.mkdir(parents=True)
+    monkeypatch.setattr(skills_mod, "GLOBAL_SKILLS_DIR", global_dir)
+    monkeypatch.setattr(skills_mod, "NPX_SKILLS_DIR", npx_dir)
+    monkeypatch.setattr(
+        skills_mod,
+        "install_skill",
+        lambda *args, **kwargs: {"ok": False, "summary": "catalog unavailable"},
+    )
+    monkeypatch.setattr(
+        skills_mod,
+        "_read_manifest",
+        lambda dest: {
+            "version": 1,
+            "skills": {
+                "missing-source": {},
+                "community": {"source": "owner/repo@skills/community"},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        skills_mod,
+        "_sync_tracked_sources",
+        lambda *args, **kwargs: ([], [("owner/repo", "sync failed")]),
+    )
+    monkeypatch.setattr(
+        skills_mod,
+        "update_npx_skills_via_git",
+        lambda **kwargs: {
+            "ok": True,
+            "synced": 2,
+            "failed": [("npx-source", "copy failed")],
+        },
+    )
+    monkeypatch.setattr(skills_mod, "iter_skills", lambda *args, **kwargs: {})
+
+    result = skills_mod.upgrade_skills(project_root=tmp_path)
+
+    assert result["npx_synced"] == 2
+    assert ("fastfold-ai/skills", "catalog unavailable") in result["failed"]
+    assert ("owner/repo", "sync failed") in result["failed"]
+    assert ("npx-source", "copy failed") in result["failed"]
+
+
+def test_upgrade_skills_records_npx_fallback_failure(monkeypatch, tmp_path):
+    npx_dir = tmp_path / ".claude" / "skills"
+    npx_dir.mkdir(parents=True)
+    monkeypatch.setattr(skills_mod, "GLOBAL_SKILLS_DIR", tmp_path / "global")
+    monkeypatch.setattr(skills_mod, "NPX_SKILLS_DIR", npx_dir)
+    monkeypatch.setattr(skills_mod, "_read_manifest", lambda dest: {"skills": {}})
+    monkeypatch.setattr(skills_mod, "iter_skills", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        skills_mod,
+        "install_skill",
+        lambda *args, **kwargs: {"ok": True, "installed": []},
+    )
+    monkeypatch.setattr(
+        skills_mod,
+        "update_npx_skills_via_git",
+        lambda **kwargs: {"ok": False},
+    )
+    monkeypatch.setattr(skills_mod, "_npx_available", lambda: True)
+    monkeypatch.setattr(
+        skills_mod,
+        "_npx_update",
+        lambda: {"ok": False, "summary": "npx failed"},
+    )
+
+    result = skills_mod.upgrade_skills(project_root=tmp_path)
+
+    assert ("npx skills update", "npx failed") in result["failed"]
 
 
 def test_cli_skill_upgrade(monkeypatch):

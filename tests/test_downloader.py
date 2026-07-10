@@ -6,8 +6,25 @@ from pathlib import Path
 
 from data.downloader import (
     DATASETS, DOWNLOAD_TIMEOUT, download_dataset, download_all,
-    dataset_status, _download_file,
+    dataset_status, _download_file, _format_size, _dataset_disk_size,
 )
+
+
+class TestSizeFormatting:
+    def test_format_size_units(self):
+        assert _format_size(512) == "512B"
+        assert _format_size(2048) == "2.0KB"
+        assert _format_size(5 * 1024 * 1024) == "5.0MB"
+        assert _format_size(3 * 1024 ** 3) == "3.0GB"
+
+    def test_dataset_disk_size_sums_expected_files(self, tmp_path):
+        (tmp_path / "a.csv").write_bytes(b"x" * 100)
+        (tmp_path / "b.csv").write_bytes(b"y" * 50)
+        (tmp_path / "ignore.csv").write_bytes(b"z" * 999)
+        assert _dataset_disk_size(tmp_path, {"a.csv", "b.csv"}) == 150
+
+    def test_dataset_disk_size_missing_path(self, tmp_path):
+        assert _dataset_disk_size(tmp_path / "nope", {"a.csv"}) == 0
 
 
 class TestDatasetCatalog:

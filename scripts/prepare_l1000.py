@@ -28,8 +28,11 @@ GEO_URL = (
     "GSE92742_Broad_LINCS_Level5_COMPZ.MODZ_n473647x12328.gctx.gz"
 )
 
-# 978 landmark genes (subset IDs)
-LANDMARK_SPACE = "landmark"
+# Gene metadata (small) used to identify the 978 landmark genes (pr_is_lm == 1).
+GENE_INFO_URL = (
+    "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE92nnn/GSE92742/suppl/"
+    "GSE92742_Broad_LINCS_gene_info.txt.gz"
+)
 
 
 def download_gctx(output_dir: Path) -> Path:
@@ -42,7 +45,7 @@ def download_gctx(output_dir: Path) -> Path:
         return gctx_path
 
     if not gz_path.exists():
-        print(f"Downloading from GEO (~2.3GB)...")
+        print(f"Downloading from GEO (~20GB; decompresses to ~22GB)...")
         print(f"URL: {GEO_URL}")
         with httpx.stream("GET", GEO_URL, timeout=3600, follow_redirects=True) as resp:
             if resp.status_code != 200:
@@ -73,8 +76,30 @@ def download_gctx(output_dir: Path) -> Path:
     return gctx_path
 
 
+def _landmark_gene_ids(output_dir: Path) -> list[str]:
+    """Return the 978 landmark gene ids (pr_is_lm == 1) from GEO gene_info."""
+    gi_path = output_dir / "GSE92742_gene_info.txt.gz"
+    if not gi_path.exists():
+        print("Fetching gene_info to identify landmark genes...")
+        with httpx.stream("GET", GENE_INFO_URL, timeout=120, follow_redirects=True) as resp:
+            resp.raise_for_status()
+            with open(gi_path, "wb") as f:
+                for chunk in resp.iter_bytes(chunk_size=65536):
+                    f.write(chunk)
+    landmark: list[str] = []
+    with gzip.open(gi_path, "rt") as f:
+        header = f.readline().rstrip("\n").split("\t")
+        gid = header.index("pr_gene_id")
+        is_lm = header.index("pr_is_lm")
+        for line in f:
+            parts = line.rstrip("\n").split("\t")
+            if parts[is_lm] == "1":
+                landmark.append(parts[gid])
+    return landmark
+
+
 def extract_landmarks(gctx_path: Path, output_dir: Path) -> Path:
-    """Extract landmark genes from GCTx into Parquet."""
+    """Extract the 978 landmark genes from the GCTx into Parquet."""
     out_path = output_dir / "l1000_landmark_only.parquet"
 
     if out_path.exists():
@@ -87,8 +112,10 @@ def extract_landmarks(gctx_path: Path, output_dir: Path) -> Path:
         print("cmapPy required: pip install cmapPy")
         sys.exit(1)
 
-    print("Parsing GCTx and extracting landmark genes...")
-    gctoo = parse(str(gctx_path), rid=LANDMARK_SPACE)
+    landmark_ids = _landmark_gene_ids(output_dir)
+    print(f"Parsing GCTx and extracting {len(landmark_ids)} landmark genes...")
+    # Subset by row id (gene) so we only pull landmark rows out of the HDF5.
+    gctoo = parse(str(gctx_path), rid=landmark_ids)
     df = gctoo.data_df
 
     print(f"Extracted: {df.shape[0]} genes x {df.shape[1]} signatures")

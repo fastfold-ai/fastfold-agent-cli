@@ -23,11 +23,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +39,13 @@ from typing import Optional
 from agent.config import CONFIG_DIR
 
 logger = logging.getLogger("skills")
+
+# Serializes manifest read-modify-write so parallel installs don't corrupt it.
+_MANIFEST_LOCK = threading.Lock()
+
+# Bounded parallelism for network-bound skill syncs (clones/archives). Override
+# with FASTFOLD_SKILLS_SYNC_WORKERS.
+_DEFAULT_SYNC_WORKERS = 8
 
 # ─── Locations ────────────────────────────────────────────────────────────
 GLOBAL_SKILLS_DIR = CONFIG_DIR / "skills"
@@ -656,17 +666,43 @@ def _npx_available() -> bool:
     return shutil.which("npx") is not None
 
 
+def _noninteractive_git_env() -> dict:
+    """Env that prevents git from blocking on interactive auth/SSH prompts.
+
+    Without this, a transient 403 / auth challenge on an otherwise public clone
+    makes ``git`` hang forever waiting for a username/password on stdin, which
+    the subprocess timeout can't always interrupt cleanly. Failing fast lets us
+    fall back to the GitHub archive download instead of stalling the upgrade.
+    """
+    env = dict(os.environ)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    env["GIT_ASKPASS"] = "echo"
+    env["GCM_INTERACTIVE"] = "never"
+    env.setdefault("GIT_SSH_COMMAND", "ssh -oBatchMode=yes -oStrictHostKeyChecking=no")
+    return env
+
+
 def _git_clone(url: str, ref: Optional[str], dest: Path) -> Optional[str]:
     """Shallow clone ``url`` into ``dest``. Returns the commit SHA or None."""
     cmd = ["git", "clone", "--depth", "1"]
     if ref:
         cmd += ["--branch", ref]
     cmd += [url, str(dest)]
-    subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=_CLONE_TIMEOUT_S)
+    env = _noninteractive_git_env()
+    subprocess.run(
+        cmd,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=_CLONE_TIMEOUT_S,
+        stdin=subprocess.DEVNULL,
+        env=env,
+    )
     try:
         out = subprocess.run(
             ["git", "-C", str(dest), "rev-parse", "HEAD"],
             check=True, capture_output=True, text=True, timeout=30,
+            stdin=subprocess.DEVNULL, env=env,
         )
         return out.stdout.strip() or None
     except Exception:  # noqa: BLE001
@@ -723,7 +759,6 @@ def _record_install(
     commit: Optional[str],
     release: Optional[str] = None,
 ) -> None:
-    manifest = _read_manifest(dest)
     entry = {
         "source": source,
         "commit": commit,
@@ -731,8 +766,12 @@ def _record_install(
     }
     if release:
         entry["release"] = release
-    manifest["skills"][name] = entry
-    _write_manifest(dest, manifest)
+    # Hold the lock across the read-modify-write so concurrent installs can't
+    # clobber each other's manifest entries.
+    with _MANIFEST_LOCK:
+        manifest = _read_manifest(dest)
+        manifest["skills"][name] = entry
+        _write_manifest(dest, manifest)
 
 
 def _npx_target(source: str) -> tuple[str, Optional[str], bool]:
@@ -1188,6 +1227,290 @@ def _project_lock_sources(project_root: Path) -> list[str]:
     return sources
 
 
+def _clone_repo_once(url: str, ref: Optional[str], tmp_root: Path) -> tuple[Optional[Path], Optional[str], str]:
+    """Clone ``url`` once (git, then archive fallback) into ``tmp_root``.
+
+    Returns ``(repo_root, commit, via)``. ``repo_root`` is None when both
+    strategies fail.
+    """
+    if _git_available():
+        try:
+            clone_root = tmp_root / "repo"
+            commit = _git_clone(url, ref, clone_root)
+            return clone_root, commit, "git"
+        except subprocess.CalledProcessError as exc:
+            logger.debug("group git clone failed for %s: %s", url, exc)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("group git install failed for %s: %s", url, exc)
+
+    owner_repo = _owner_repo_from_clone_url(url)
+    if owner_repo:
+        owner, repo = owner_repo.split("/", 1)
+        try:
+            repo_root = _download_github_archive(owner, repo, ref, tmp_root)
+            return repo_root, None, "archive"
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("group archive install failed for %s: %s", url, exc)
+
+    return None, None, "git"
+
+
+def _run_grouped_clones(
+    groups: dict,
+    group_owner_repo: dict,
+    install_item: callable,
+    *,
+    max_workers: Optional[int] = None,
+    notify: Optional[callable] = None,
+    label: str = "Updating skills",
+    fetch_release: bool = True,
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """Clone each ``(url, ref)`` group once and install its items in parallel.
+
+    ``groups`` maps ``(url, ref)`` to a list of opaque ``item`` tuples whose
+    first element is the source identifier (used for failure reporting).
+    ``install_item(repo_root, commit, release_tag, via, item)`` does the per-item
+    copy and returns ``(installed_names, failures)``.
+
+    Emits ``"<label> <done>/<total>..."`` progress as each repo finishes so the
+    user sees an n/m counter.
+    """
+
+    def _notify(msg: str) -> None:
+        if notify is not None:
+            try:
+                notify(msg)
+            except Exception:  # noqa: BLE001
+                pass
+
+    total = sum(len(items) for items in groups.values())
+    done = 0
+    installed: list[str] = []
+    failures: list[tuple[str, str]] = []
+    if not groups:
+        return installed, failures
+
+    def _process_group(key, items) -> tuple[list[str], list[tuple[str, str]]]:
+        url, ref = key
+        owner_repo = group_owner_repo.get(key)
+        release_tag = None
+        if fetch_release and owner_repo:
+            release_info = fetch_latest_release(owner_repo)
+            release_tag = release_info.get("tag") if release_info else None
+        grp_installed: list[str] = []
+        grp_failures: list[tuple[str, str]] = []
+        with tempfile.TemporaryDirectory(prefix="fastfold-skill-grp-") as tmp:
+            repo_root, commit, via = _clone_repo_once(url, ref, Path(tmp))
+            if repo_root is None:
+                for item in items:
+                    grp_failures.append((item[0], "clone/archive failed"))
+                return grp_installed, grp_failures
+            for item in items:
+                try:
+                    ins, fails = install_item(repo_root, commit, release_tag, via, item)
+                    grp_installed += ins
+                    grp_failures += fails
+                except Exception as exc:  # noqa: BLE001
+                    grp_failures.append((item[0], str(exc)))
+        return grp_installed, grp_failures
+
+    workers = max_workers or int(
+        os.environ.get("FASTFOLD_SKILLS_SYNC_WORKERS", _DEFAULT_SYNC_WORKERS) or _DEFAULT_SYNC_WORKERS
+    )
+    workers = max(1, min(workers, len(groups)))
+
+    if workers == 1:
+        for key, items in groups.items():
+            gi, gf = _process_group(key, items)
+            installed += gi
+            failures += gf
+            done += len(items)
+            _notify(f"{label} {done}/{total}...")
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_process_group, key, items): items for key, items in groups.items()}
+            for future in as_completed(futures):
+                items = futures[future]
+                gi, gf = future.result()
+                installed += gi
+                failures += gf
+                done += len(items)
+                _notify(f"{label} {done}/{total}...")
+
+    return installed, failures
+
+
+def _sync_tracked_sources(
+    tracked: list[tuple[str, str]],
+    dest: Path,
+    *,
+    max_workers: Optional[int] = None,
+    notify: Optional[callable] = None,
+    label: str = "Updating skills",
+) -> tuple[list[str], list[tuple[str, str]]]:
+    """Install many tracked skill sources efficiently.
+
+    Sources that resolve to the same GitHub repo + ref are cloned **once** and
+    every requested subpath is installed from that single clone (instead of one
+    clone per skill). Distinct repos are processed in parallel since the work is
+    network-bound.
+
+    Returns ``(installed_names, failures)`` where ``failures`` is a list of
+    ``(source, reason)``.
+    """
+
+    def _notify(msg: str) -> None:
+        if notify is not None:
+            try:
+                notify(msg)
+            except Exception:  # noqa: BLE001
+                pass
+
+    # Group GitHub sources by (clone_url, ref); keep non-GitHub sources separate.
+    groups: dict[tuple[str, Optional[str]], list[tuple[str, Optional[str]]]] = {}
+    group_owner_repo: dict[tuple[str, Optional[str]], Optional[str]] = {}
+    other_sources: list[str] = []
+    for name, source in tracked:
+        src_type = detect_source_type(source)
+        if src_type in {"github", "shorthand"}:
+            try:
+                url, ref, subpath = _parse_github(source)
+            except Exception:  # noqa: BLE001
+                other_sources.append(source)
+                continue
+            key = (url, ref)
+            groups.setdefault(key, []).append((source, subpath))
+            group_owner_repo.setdefault(key, _owner_repo_from_source(source))
+        else:
+            other_sources.append(source)
+
+    def _install_item(repo_root, commit, release_tag, via, item):
+        source, subpath = item
+        result = _install_from_repo_tree(
+            repo_root, subpath, dest, source, commit, release_tag, via
+        )
+        if result.get("ok"):
+            return result.get("installed", []), []
+        return [], [(source, result.get("summary", "failed"))]
+
+    installed, failures = _run_grouped_clones(
+        groups,
+        group_owner_repo,
+        _install_item,
+        max_workers=max_workers,
+        notify=notify,
+        label=label,
+    )
+
+    # Non-GitHub sources: install individually (rare; local paths / bare names).
+    for source in other_sources:
+        _notify(f"Updating {source}...")
+        result = install_skill(source, dest=dest)
+        if result.get("ok"):
+            installed += result.get("installed", [])
+        else:
+            failures.append((source, result.get("summary", "failed")))
+
+    return installed, failures
+
+
+def _copy_skill_to(skill_dir: Path, dest: Path, target_name: str) -> None:
+    """Copy a single resolved skill directory into ``dest/target_name``."""
+    target = dest / target_name
+    if target.exists():
+        shutil.rmtree(target)
+    shutil.copytree(
+        skill_dir, target, ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc")
+    )
+
+
+def update_npx_skills_via_git(
+    *,
+    max_workers: Optional[int] = None,
+    notify: Optional[callable] = None,
+) -> dict:
+    """Refresh npx-installed skills with grouped git clones (one clone per repo).
+
+    ``npx skills update`` reprocesses every skill individually and is the dominant
+    cost of an upgrade when many skills share a few repos. This reads the npx
+    ``skills-lock.json``, groups skills by their source repo, clones each repo
+    once (in parallel), and copies each skill into ``NPX_SKILLS_DIR`` under its
+    **existing** (lock) directory name — repo paths often differ from the
+    installed name (e.g. ``skills/foo_bar`` vs ``foo-bar``).
+
+    Returns ``{ok, synced, failed, summary}``. ``ok`` is False (with no writes)
+    when git is unavailable or the lock has no usable GitHub sources, so the
+    caller can fall back to ``npx skills update``.
+    """
+    lock_path = NPX_INSTALL_ROOT / "skills-lock.json"
+    if not lock_path.exists() or not _git_available():
+        return {"ok": False, "synced": 0, "failed": [], "summary": "no lock or git"}
+    try:
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "synced": 0, "failed": [], "summary": f"unreadable lock: {exc}"}
+
+    entries = lock.get("skills") or {}
+    groups: dict[tuple[str, Optional[str]], list[tuple[str, Optional[str], str]]] = {}
+    group_owner_repo: dict[tuple[str, Optional[str]], Optional[str]] = {}
+    skipped: list[str] = []
+    for name, meta in sorted(entries.items()):
+        if not isinstance(meta, dict):
+            continue
+        source = str(meta.get("source") or "").strip()
+        source_type = str(meta.get("sourceType") or "github").strip()
+        skill_path = str(meta.get("skillPath") or "").strip()
+        if not source or source_type != "github":
+            skipped.append(name)
+            continue
+        # Directory holding SKILL.md within the repo.
+        if skill_path.endswith("/SKILL.md"):
+            subpath = skill_path[: -len("/SKILL.md")]
+        elif skill_path:
+            subpath = str(Path(skill_path).parent)
+        else:
+            subpath = None
+        shorthand = f"{source}@{subpath}" if subpath else source
+        try:
+            url, ref, _sub = _parse_github(shorthand)
+        except Exception:  # noqa: BLE001
+            skipped.append(name)
+            continue
+        key = (url, ref)
+        groups.setdefault(key, []).append((shorthand, subpath, name))
+        group_owner_repo.setdefault(key, _owner_repo_from_source(shorthand))
+
+    if not groups:
+        return {"ok": False, "synced": 0, "failed": [], "summary": "no github sources in lock"}
+
+    NPX_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+
+    def _install_item(repo_root, commit, release_tag, via, item):
+        source, subpath, target_name = item
+        skill_dirs = _resolve_skill_dirs(repo_root, subpath)
+        if not skill_dirs:
+            return [], [(source, f"no SKILL.md at {subpath}")]
+        _copy_skill_to(skill_dirs[0], NPX_SKILLS_DIR, target_name)
+        return [target_name], []
+
+    installed, failures = _run_grouped_clones(
+        groups,
+        group_owner_repo,
+        _install_item,
+        max_workers=max_workers,
+        notify=notify,
+        label="Updating community skills",
+        # npx skills are pinned in the lock; skip the per-repo release lookup.
+        fetch_release=False,
+    )
+    return {
+        "ok": True,
+        "synced": len(installed),
+        "failed": failures,
+        "summary": f"Updated {len(installed)} npx skill(s) via git ({len(groups)} repo clone(s)).",
+    }
+
+
 def upgrade_skills(
     *,
     include_catalog: bool = True,
@@ -1239,33 +1562,43 @@ def upgrade_skills(
             failed.append((catalog_owner_repo, result.get("summary", "failed")))
 
     # 2) Update other manifest-tracked skills from their recorded sources.
+    #    Sources that share a repo+ref are cloned once and synced in parallel,
+    #    so N skills from one repo cost one clone instead of N.
     manifest = _read_manifest(dest)
-    tracked = [
-        (name, (meta or {}).get("source"))
-        for name, meta in sorted(manifest.get("skills", {}).items())
-    ]
-    for name, source in tracked:
+    tracked: list[tuple[str, str]] = []
+    for name, meta in sorted(manifest.get("skills", {}).items()):
+        source = (meta or {}).get("source")
         if not source:
             continue
         # Skip skills already refreshed by the catalog sync above.
         if include_catalog and source.split("@", 1)[0] == catalog_owner_repo:
             continue
-        _notify(f"Updating {name} ({source})...")
-        result = install_skill(source, dest=dest)
-        if result.get("ok"):
-            installed_total += result.get("installed", []) or [name]
-        else:
-            failed.append((source, result.get("summary", "failed")))
+        tracked.append((name, source))
 
-    # 3) Update npx-installed skills (fastfold-owned dir) via `npx skills update`.
+    if tracked:
+        grouped_installed, grouped_failed = _sync_tracked_sources(
+            tracked, dest, notify=_notify, label="Updating skills"
+        )
+        installed_total += grouped_installed
+        failed += grouped_failed
+
+    # 3) Update npx-installed skills. Prefer grouped git clones (one clone per
+    #    repo, in parallel) over `npx skills update`, which reprocesses every
+    #    skill individually and dominates the runtime for large libraries.
     npx_synced = 0
-    if include_npx and _npx_available() and NPX_SKILLS_DIR.exists():
-        _notify("Updating npx-installed skills...")
-        result = _npx_update()
-        if result.get("ok"):
-            npx_synced = len(_scan_dir(NPX_SKILLS_DIR, "npx"))
-        else:
-            failed.append(("npx skills update", result.get("summary", "failed")))
+    if include_npx and NPX_SKILLS_DIR.exists():
+        git_result = update_npx_skills_via_git(notify=_notify)
+        if git_result.get("ok"):
+            npx_synced = git_result.get("synced", 0)
+            failed += git_result.get("failed", [])
+        elif _npx_available():
+            # Fallback: git unavailable or lock unusable — use the npx CLI.
+            _notify("Updating npx-installed skills...")
+            result = _npx_update()
+            if result.get("ok"):
+                npx_synced = len(_scan_dir(NPX_SKILLS_DIR, "npx"))
+            else:
+                failed.append(("npx skills update", result.get("summary", "failed")))
 
     _notify("Finalizing...")
 

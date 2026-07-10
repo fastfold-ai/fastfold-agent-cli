@@ -33,7 +33,7 @@ DATASETS = {
         },
         "source": "https://plus.figshare.com/articles/dataset/DepMap_24Q4_Public/27993248",
         "auto_download": True,
-        "size_hint": "~580MB",
+        "size_hint": "~550MB",
     },
     "prism": {
         "description": "PRISM cell viability screening data",
@@ -52,8 +52,8 @@ DATASETS = {
         },
         "source": "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE92742",
         "auto_download": False,
-        "note": "Run: python scripts/prepare_l1000.py to download from GEO and extract landmark subset.",
-        "size_hint": "~200MB",
+        "note": "Run: python scripts/prepare_l1000.py to download from GEO and extract the landmark subset. The raw GEO Level-5 archive is ~20GB; the extracted landmark parquet is ~2.6GB.",
+        "size_hint": "~2.6GB",
     },
     "msigdb": {
         "description": "MSigDB gene set collections (Hallmark, KEGG, Reactome, GO)",
@@ -65,6 +65,7 @@ DATASETS = {
         },
         "source": "https://www.gsea-msigdb.org/gsea/msigdb/",
         "auto_download": True,
+        "size_hint": "~10MB",
     },
     "string": {
         "description": "STRING protein-protein interaction network (human)",
@@ -73,6 +74,7 @@ DATASETS = {
         },
         "source": "https://string-db.org/",
         "auto_download": True,
+        "size_hint": "~80MB",
     },
     "alphafold": {
         "description": "AlphaFold predicted protein structures (downloaded on demand per-protein)",
@@ -82,6 +84,30 @@ DATASETS = {
         "note": "Structures are fetched on-demand by structure.alphafold_fetch tool.",
     },
 }
+
+
+def _format_size(num_bytes: int) -> str:
+    """Render a byte count as a human-readable KB/MB/GB string."""
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            return f"{int(size)}{unit}" if unit == "B" else f"{size:.1f}{unit}"
+        size /= 1024
+    return f"{size:.1f}TB"
+
+
+def _dataset_disk_size(path: Path, expected: set[str]) -> int:
+    """Sum the on-disk bytes of a dataset's expected files that exist in ``path``."""
+    if not path.exists():
+        return 0
+    total = 0
+    for f in path.iterdir():
+        if f.is_file() and (not expected or f.name in expected):
+            try:
+                total += f.stat().st_size
+            except OSError:
+                continue
+    return total
 
 
 def _download_file(url: str, dest: Path, desc: str = None) -> bool:
@@ -222,6 +248,7 @@ def dataset_status() -> Table:
     table.add_column("Dataset", style="cyan")
     table.add_column("Status")
     table.add_column("Files", style="dim")
+    table.add_column("Size", style="dim")
     table.add_column("Auto-DL")
 
     for name, ds in DATASETS.items():
@@ -248,7 +275,15 @@ def dataset_status() -> Table:
             status = "[red]missing[/red]"
             files_str = f"0/{len(expected)}"
 
+        # Prefer actual on-disk size when any files are present; otherwise fall
+        # back to the published estimate, else "-".
+        disk_bytes = _dataset_disk_size(path, expected)
+        if disk_bytes > 0:
+            size_str = _format_size(disk_bytes)
+        else:
+            size_str = ds.get("size_hint") or "-"
+
         auto = "[green]yes[/green]" if ds.get("auto_download") else "[dim]manual[/dim]"
-        table.add_row(name, status, files_str, auto)
+        table.add_row(name, status, files_str, size_str, auto)
 
     return table

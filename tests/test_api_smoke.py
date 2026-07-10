@@ -50,6 +50,13 @@ def _skip_if_non_strict_error(payload: dict):
         pytest.skip(f"Live data smoke skipped in non-strict mode: {payload.get('error')}")
 
 
+def _skip_if_provider_limited(payload: dict):
+    """Skip provider-side quota exhaustion, which is not an API schema regression."""
+    error = str(payload.get("error", "")).lower()
+    if "429" in error or "rate limit exceeded" in error or "insufficient budget" in error:
+        pytest.skip(f"Live data provider quota exhausted: {payload.get('error')}")
+
+
 def _assert_live_result(payload: dict, *, allow_ctgov_block: bool = False):
     """Assert a live tool response is healthy, with optional CT.gov datacenter blocks."""
     _assert_no_signature_error(payload)
@@ -77,6 +84,7 @@ def test_pubmed_search_smoke():
 def test_openalex_search_smoke():
     result = openalex_search("TP53 cancer", max_results=1)
     _assert_no_signature_error(result)
+    _skip_if_provider_limited(result)
     _skip_if_non_strict_error(result)
     assert "error" not in result, result.get("error")
     assert isinstance(result.get("articles"), list)
