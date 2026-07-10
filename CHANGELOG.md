@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.70] - 2026-07-10
+
+### Changed
+
+- Skill upgrades now group skills by repository, clone each repository once, and
+  process independent repositories concurrently with bounded parallelism.
+- Git-backed skill installs now disable interactive authentication prompts so
+  failures fall back promptly to GitHub archive downloads instead of hanging.
+- Dataset status now reports actual on-disk sizes when available and corrected
+  estimates for DepMap, L1000, MSigDB, and STRING.
+- L1000 preparation now identifies the 978 landmark genes from GEO metadata
+  before extracting the Level-5 matrix.
+
+### Fixed
+
+- Live data-source smoke checks now distinguish OpenAlex provider quota
+  exhaustion from API schema regressions.
+- Expanded regression coverage for skill synchronization, MCP execution
+  handlers, and system-prompt assembly to keep the CI coverage gate reliable.
+
 ## [0.0.69] - 2026-06-23
 
 ### Changed
