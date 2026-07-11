@@ -12,7 +12,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
@@ -23,6 +23,7 @@ from agent_server.models import (
     AgentSession,
     Capabilities,
     CreateProjectRequest,
+    CreatePtyRequest,
     CreateSessionRequest,
     DeleteProjectResponse,
     DeleteSessionResponse,
@@ -38,6 +39,8 @@ from agent_server.models import (
     CreateMcpServerRequest,
     MoveWorkspaceFileRequest,
     ProjectList,
+    PtySessionInfo,
+    PtySessionList,
     RuntimeSettings,
     SendMessageRequest,
     SessionList,
@@ -48,6 +51,7 @@ from agent_server.models import (
     SkillMutationResponse,
     UpdateIntegrationRequest,
     UpdateProjectRequest,
+    UpdatePtyRequest,
     UpdateRuntimeSettingsRequest,
     UpdateMcpServerRequest,
     ValidateIntegrationResponse,
@@ -59,6 +63,7 @@ from agent_server.models import (
     WorkspaceMutationResponse,
     WriteWorkspaceFileRequest,
 )
+from agent_server.pty_manager import PtyManager
 from agent_server.service import AgentService, SessionBusyError
 from agent_server.skills_service import SkillsService
 from agent_server.integrations_service import IntegrationsService
@@ -103,11 +108,13 @@ def create_app(
     skills_service = SkillsService()
     integrations_service = IntegrationsService()
     settings_service = SettingsService()
+    pty_manager = PtyManager()
     backend_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(store.path.resolve())))
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
         yield
+        await pty_manager.shutdown()
         await service.shutdown()
 
     app = FastAPI(
@@ -150,7 +157,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=allowed_origins or DEFAULT_LOCAL_ORIGINS,
         allow_credentials=False,
-        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["authorization", "content-type", "last-event-id"],
     )
 
@@ -186,6 +193,7 @@ def create_app(
                 skills=True,
                 integrations=True,
                 mcp=True,
+                terminal=True,
             ),
         )
 
@@ -657,6 +665,103 @@ def create_app(
             return WorkspaceMutationResponse(path=path)
         except Exception as exc:
             raise _workspace_http_error(exc) from exc
+
+    @app.get("/v1/sessions/{session_id}/pty", response_model=PtySessionList)
+    async def list_pty_sessions(session_id: str) -> PtySessionList:
+        if await asyncio.to_thread(store.get_session, session_id) is None:
+            raise HTTPException(status_code=404, detail="Session not found.")
+        return PtySessionList(
+            data=[
+                PtySessionInfo(**info.to_dict())
+                for info in pty_manager.list(session_id)
+            ]
+        )
+
+    @app.post(
+        "/v1/sessions/{session_id}/pty",
+        response_model=PtySessionInfo,
+        status_code=201,
+    )
+    async def create_pty_session(
+        session_id: str,
+        payload: CreatePtyRequest | None = None,
+    ) -> PtySessionInfo:
+        session = service.ensure_workspace(session_id)
+        if not session.workspace_path:
+            raise HTTPException(status_code=409, detail="Session has no workspace.")
+        body = payload or CreatePtyRequest()
+        info = await pty_manager.create(
+            session_id=session_id,
+            cwd=session.workspace_path,
+            title=body.title,
+            cols=body.cols,
+            rows=body.rows,
+        )
+        return PtySessionInfo(**info.to_dict())
+
+    @app.put(
+        "/v1/sessions/{session_id}/pty/{pty_id}",
+        response_model=PtySessionInfo,
+    )
+    async def update_pty_session(
+        session_id: str,
+        pty_id: str,
+        payload: UpdatePtyRequest,
+    ) -> PtySessionInfo:
+        info = pty_manager.get(session_id, pty_id)
+        if info is None:
+            raise HTTPException(status_code=404, detail="Terminal not found.")
+        if payload.title is not None:
+            updated = await pty_manager.update_title(session_id, pty_id, payload.title)
+            if updated is None:
+                raise HTTPException(status_code=404, detail="Terminal not found.")
+            info = updated
+        if payload.cols is not None and payload.rows is not None:
+            updated = await pty_manager.resize(
+                session_id,
+                pty_id,
+                cols=payload.cols,
+                rows=payload.rows,
+            )
+            if updated is None:
+                raise HTTPException(status_code=404, detail="Terminal not found.")
+            info = updated
+        return PtySessionInfo(**info.to_dict())
+
+    @app.delete("/v1/sessions/{session_id}/pty/{pty_id}", status_code=204)
+    async def delete_pty_session(session_id: str, pty_id: str) -> None:
+        deleted = await pty_manager.remove(session_id, pty_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Terminal not found.")
+
+    @app.websocket("/v1/sessions/{session_id}/pty/{pty_id}/connect")
+    async def connect_pty_session(
+        websocket: WebSocket,
+        session_id: str,
+        pty_id: str,
+    ) -> None:
+        if api_key:
+            authorization = websocket.headers.get("authorization", "")
+            scheme, _, candidate = authorization.partition(" ")
+            query_token = websocket.query_params.get("token", "")
+            valid = (
+                scheme.lower() == "bearer"
+                and bool(candidate)
+                and secrets.compare_digest(candidate, api_key)
+            ) or (
+                bool(query_token) and secrets.compare_digest(query_token, api_key)
+            )
+            if not valid:
+                await websocket.close(code=4401)
+                return
+        if await asyncio.to_thread(store.get_session, session_id) is None:
+            await websocket.close(code=4404)
+            return
+        if pty_manager.get(session_id, pty_id) is None:
+            await websocket.close(code=4404)
+            return
+        await websocket.accept()
+        await pty_manager.attach(session_id, pty_id, websocket)
 
     @app.get("/v1/sessions/{session_id}/events")
     async def stream_events(
