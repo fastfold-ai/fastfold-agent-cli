@@ -59,9 +59,11 @@ class TestAgentLoop:
         exc = ClarificationNeeded(clar)
         assert exc.clarification.question == "Which gene?"
 
-    def test_run_raises_clarification_when_needed(self):
+    def test_run_raises_clarification_when_needed(self, tmp_path):
+        from agent_server.store import AgentStore
+
         session = self._session()
-        loop = AgentLoop(session, headless=True)
+        loop = AgentLoop(session, headless=True, store=AgentStore(tmp_path / "agent.db"))
 
         plan = Plan(query="q", steps=[])
         result = ExecutionResult(
@@ -81,15 +83,24 @@ class TestAgentLoop:
                 loop.run("Analyze target")
         assert excinfo.value.clarification.question == "Which indication?"
 
-    def test_run_records_trajectory(self):
+    def test_run_records_trajectory(self, tmp_path):
+        from agent_server.store import AgentStore
+
         session = self._session()
-        loop = AgentLoop(session, headless=True)
+        store = AgentStore(tmp_path / "agent.db")
+        loop = AgentLoop(session, headless=True, store=store)
         plan = Plan(query="Analyze TP53", steps=[])
         result = ExecutionResult(plan=plan, summary="TP53 summary.")
 
-        with patch.object(loop._runner, "run", return_value=result):
+        with patch.object(loop._runner, "run", return_value=result), patch.object(
+            loop.trajectory, "save"
+        ), patch.object(
+            loop, "_generate_title", return_value="Analyze TP53"
+        ):
             out = loop.run("Analyze TP53")
 
         assert out.summary == "TP53 summary."
         assert len(loop.trajectory.turns) == 1
         assert loop.trajectory.title == "Analyze TP53"
+        messages = store.list_messages(loop.trajectory.session_id)
+        assert [message.role for message in messages] == ["user", "assistant"]

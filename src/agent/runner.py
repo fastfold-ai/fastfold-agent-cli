@@ -714,6 +714,7 @@ class AgentRunner:
             from deepagents.backends import FilesystemBackend
             from agent.deepagents_runtime import (
                 build_chat_model,
+                create_external_mcp_tools,
                 create_ct_langchain_tools,
                 process_events,
                 skill_source_dirs,
@@ -768,6 +769,16 @@ class AgentRunner:
                 provider=provider,
                 tool_mode=tool_mode,
             )
+            try:
+                external_tools = await create_external_mcp_tools(ctx.get("mcp_servers"))
+                existing_names = {getattr(tool, "name", "") for tool in tools}
+                tools.extend(
+                    tool
+                    for tool in external_tools
+                    if getattr(tool, "name", "") not in existing_names
+                )
+            except Exception as mcp_error:  # noqa: BLE001
+                logger.warning("Unable to load external MCP tools: %s", mcp_error)
 
             # ----- System prompt (skills handled natively by deepagents) -----
             data_context = None
@@ -821,7 +832,8 @@ class AgentRunner:
 
             # ----- Build agent -----
             skills_sources = skill_source_dirs()
-            backend = FilesystemBackend(root_dir="/", virtual_mode=False)
+            workspace_root = str(ctx.get("workspace_path") or "/").strip() or "/"
+            backend = FilesystemBackend(root_dir=workspace_root, virtual_mode=False)
             agent = create_deep_agent(
                 model=model,
                 tools=tools,

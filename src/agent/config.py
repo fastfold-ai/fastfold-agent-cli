@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 load_dotenv()
 load_dotenv(Path(__file__).resolve().parents[3] / ".env")  # repo root
 
-from rich.table import Table
+from rich.table import Table  # noqa: E402
 
 CONFIG_DIR = Path.home() / ".fastfold-cli"
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -147,6 +147,15 @@ DEFAULTS = {
     "api.clue_key": None,
     "api.fastfold_cloud_key": None,
     "api.boltz_api_key": None,
+    "api.nvidia_api_key": None,
+    "api.tavily_api_key": None,
+    "api.langsmith_api_key": None,
+    "api.langsmith_project": None,
+    "compute.modal_token_id": None,
+    "compute.modal_token_secret": None,
+    "notification.slack_bot_token": None,
+    "notification.webhook_url": None,
+    "notification.webhook_secret": None,
     "fastfold.subscription_tier": None,
 
     "output.format": "markdown",
@@ -369,6 +378,81 @@ API_KEYS = {
         "url": "https://api.boltz.bio/console",
         "free": False,
     },
+    "api.nvidia_api_key": {
+        "name": "NVIDIA",
+        "provider_key": "nvidia",
+        "env_var": "NVIDIA_API_KEY",
+        "description": "NVIDIA model inference and NIM endpoints",
+        "url": "https://build.nvidia.com/settings/api-key",
+        "free": False,
+    },
+    "api.tavily_api_key": {
+        "name": "Tavily",
+        "provider_key": "tavily",
+        "env_var": "TAVILY_API_KEY",
+        "description": "Web search for research workflows",
+        "url": "https://app.tavily.com/home",
+        "free": True,
+    },
+    "api.langsmith_api_key": {
+        "name": "LangSmith",
+        "provider_key": "langsmith",
+        "env_var": "LANGSMITH_API_KEY",
+        "description": "LangChain tracing and observability",
+        "url": "https://smith.langchain.com/settings",
+        "free": True,
+    },
+    "api.langsmith_project": {
+        "name": "LangSmith Project",
+        "provider_key": "langsmith",
+        "env_var": "LANGSMITH_PROJECT",
+        "description": "LangSmith tracing project",
+        "url": "https://smith.langchain.com/settings",
+        "free": True,
+        "secret": False,
+    },
+    "compute.modal_token_id": {
+        "name": "Modal Token ID",
+        "provider_key": "modal",
+        "env_var": "MODAL_TOKEN_ID",
+        "description": "Modal runtime credential ID",
+        "url": "https://modal.com/settings/tokens",
+        "free": True,
+        "secret": False,
+    },
+    "compute.modal_token_secret": {
+        "name": "Modal Token Secret",
+        "provider_key": "modal",
+        "env_var": "MODAL_TOKEN_SECRET",
+        "description": "Modal runtime credential secret",
+        "url": "https://modal.com/settings/tokens",
+        "free": True,
+    },
+    "notification.slack_bot_token": {
+        "name": "Slack",
+        "provider_key": "slack",
+        "env_var": "SLACK_BOT_TOKEN",
+        "description": "Slack reports and agent notifications",
+        "url": "https://api.slack.com/apps",
+        "free": True,
+    },
+    "notification.webhook_url": {
+        "name": "Custom Webhook URL",
+        "provider_key": "custom-webhook",
+        "env_var": "FASTFOLD_WEBHOOK_URL",
+        "description": "Completion event webhook destination",
+        "url": "",
+        "free": True,
+        "secret": False,
+    },
+    "notification.webhook_secret": {
+        "name": "Custom Webhook Secret",
+        "provider_key": "custom-webhook",
+        "env_var": "FASTFOLD_WEBHOOK_SECRET",
+        "description": "Completion webhook signing secret",
+        "url": "",
+        "free": True,
+    },
     "notification.sendgrid_api_key": {
         "name": "SendGrid",
         "env_var": "SENDGRID_API_KEY",
@@ -419,22 +503,22 @@ def _validate_config(config_dict: dict) -> list[str]:
             continue
 
         expected_type = type(default)
-        if expected_type == bool:
+        if expected_type is bool:
             if not isinstance(value, bool):
                 warnings.append(
                     f"Type error: '{key}' should be bool, got {type(value).__name__} ({value!r})"
                 )
-        elif expected_type == int:
+        elif expected_type is int:
             if not isinstance(value, (int, float)):
                 warnings.append(
                     f"Type error: '{key}' should be int, got {type(value).__name__} ({value!r})"
                 )
-        elif expected_type == float:
+        elif expected_type is float:
             if not isinstance(value, (int, float)):
                 warnings.append(
                     f"Type error: '{key}' should be float, got {type(value).__name__} ({value!r})"
                 )
-        elif expected_type == str:
+        elif expected_type is str:
             if not isinstance(value, str):
                 warnings.append(
                     f"Type error: '{key}' should be str, got {type(value).__name__} ({value!r})"
@@ -1114,6 +1198,10 @@ class Config:
 
         # Check environment variables
         env_mappings = {
+            str(info["env_var"]): config_key
+            for config_key, info in API_KEYS.items()
+        }
+        env_mappings.update({
             "ANTHROPIC_API_KEY": "llm.anthropic_api_key",
             "OPENAI_API_KEY": "llm.openai_api_key",
             "OPENAI_COMPATIBLE_API_KEY": "llm.openai_compatible_api_key",
@@ -1130,7 +1218,7 @@ class Config:
             "RUNPOD_API_KEY": "compute.runpod_api_key",
             "CT_DATA_ENDPOINT": "api.data_endpoint",
             "CLUE_API_KEY": "api.clue_key",
-        }
+        })
         for env_var, config_key in env_mappings.items():
             val = os.environ.get(env_var)
             if val and config_key not in data:
@@ -1246,11 +1334,11 @@ class Config:
         # Type coercion
         if key in DEFAULTS and DEFAULTS[key] is not None:
             expected_type = type(DEFAULTS[key])
-            if expected_type == bool:
+            if expected_type is bool:
                 value = value.lower() in ("true", "1", "yes") if isinstance(value, str) else bool(value)
-            elif expected_type == float:
+            elif expected_type is float:
                 value = float(value)
-            elif expected_type == int:
+            elif expected_type is int:
                 value = int(value)
 
         if key in {

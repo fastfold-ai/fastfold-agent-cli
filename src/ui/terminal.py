@@ -73,6 +73,7 @@ SLASH_COMMANDS = {
     "/agents": "Run a query with N parallel research agents",
     "/new": "Start a new empty session",
     "/sessions": "List saved sessions (or delete: /sessions delete <id>)",
+    "/sync": "Import legacy CLI sessions into the shared UI database",
     "/resume": "Resume a previous session by id/index",
     "/case-study": "Run/list curated case studies (/case-study list)",
     "/plan": "Toggle plan mode — preview & approve before executing",
@@ -1695,6 +1696,7 @@ class InteractiveTerminal:
                 or cmd.startswith("/plan")
                 or cmd.startswith("/new")
                 or cmd.startswith("/sessions")
+                or cmd.startswith("/sync")
                 or cmd.startswith("/resume")
                 or cmd.startswith("/agents")
                 or cmd.startswith("/case-study")
@@ -1845,6 +1847,11 @@ class InteractiveTerminal:
                     self._delete_session(target)
                 else:
                     self._list_sessions()
+                continue
+            if cmd.startswith("/sync") or cmd == "sync":
+                parts = query.split()
+                force = any(part in {"--force", "-f", "force"} for part in parts[1:])
+                self._sync_sessions(force=force)
                 continue
             if cmd.startswith("/resume"):
                 parts = query.split(maxsplit=1)
@@ -4581,7 +4588,29 @@ class InteractiveTerminal:
         self.console.print()
         self.console.print(table)
         self.console.print(
-            "\n  [dim]/resume <id-or-prefix> to continue · /resume <number> from table · /sessions delete <id|number|last> to remove[/dim]"
+            "\n  [dim]/resume <id-or-prefix> to continue · /resume <number> from table · /sessions delete <id|number|last> to remove · /sync to share with UI[/dim]"
+        )
+
+    def _sync_sessions(self, *, force: bool = False) -> None:
+        """Import legacy JSONL CLI sessions into the shared SQLite store for the UI."""
+        from agent_server.session_sync import sync_jsonl_sessions
+
+        self.console.print(
+            "  [cyan]Syncing legacy CLI sessions into the shared UI database…[/cyan]"
+            + (" [dim](force)[/dim]" if force else "")
+        )
+        result = sync_jsonl_sessions(force=force)
+        self.console.print(
+            "  [green]Sync complete.[/green] "
+            f"scanned={result.scanned} imported={result.imported} "
+            f"updated={result.updated} skipped={result.skipped} failed={result.failed}"
+        )
+        if result.failed and result.details:
+            for line in result.details:
+                if "failed" in line:
+                    self.console.print(f"  [yellow]{line}[/yellow]")
+        self.console.print(
+            "  [dim]Start the UI with `fastfold serve` + local-web to continue these chats there.[/dim]"
         )
 
     def _resolve_session_identifier(self, identifier: str, sessions: list[dict]) -> str | None:

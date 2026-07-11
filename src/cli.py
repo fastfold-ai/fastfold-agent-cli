@@ -732,6 +732,88 @@ def keys_cmd():
     console.print(cfg.keys_table())
 
 
+@app.command("serve")
+def serve_cmd(
+    host: str = typer.Option("127.0.0.1", "--host", help="HTTP bind address"),
+    port: int = typer.Option(8787, "--port", min=1, max=65535, help="HTTP bind port"),
+    public: bool = typer.Option(
+        False,
+        "--public",
+        help="Allow a non-loopback listener; requires API key, origins, and hosts",
+    ),
+    api_key: Optional[str] = typer.Option(
+        None,
+        "--api-key",
+        envvar="FASTFOLD_SERVER_API_KEY",
+        help="Backend bearer token (or FASTFOLD_SERVER_API_KEY)",
+        hide_input=True,
+    ),
+    allowed_origin: list[str] = typer.Option(
+        None,
+        "--allowed-origin",
+        help="Allowed browser origin; repeat for multiple origins",
+    ),
+    allowed_host: list[str] = typer.Option(
+        None,
+        "--allowed-host",
+        help="Allowed Host header; repeat for multiple hosts",
+    ),
+    uds: Optional[Path] = typer.Option(
+        None,
+        "--uds",
+        help="Serve over a user-scoped Unix domain socket instead of TCP",
+    ),
+):
+    """Start the local or explicitly exposed FastFold agent server."""
+    from agent_server.main import run_server
+
+    try:
+        run_server(
+            host=host,
+            port=port,
+            public=public,
+            api_key=api_key,
+            allowed_origins=allowed_origin,
+            allowed_hosts=allowed_host,
+            uds=uds,
+        )
+    except ValueError as exc:
+        console.print(f"[red]Server configuration error:[/red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+
+@app.command("sync")
+def sync_cmd(
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Re-import sessions even if they already exist in the shared database",
+    ),
+):
+    """Import legacy CLI JSONL sessions into the shared SQLite store for the UI."""
+    from agent_server.session_sync import sync_jsonl_sessions
+
+    console.print(
+        "  [cyan]Syncing legacy CLI sessions into the shared UI database…[/cyan]"
+        + (" [dim](force)[/dim]" if force else "")
+    )
+    result = sync_jsonl_sessions(force=force)
+    console.print(
+        "  [green]Sync complete.[/green] "
+        f"scanned={result.scanned} imported={result.imported} "
+        f"updated={result.updated} skipped={result.skipped} failed={result.failed}"
+    )
+    if result.failed and result.details:
+        for line in result.details:
+            if "failed" in line:
+                console.print(f"  [yellow]{line}[/yellow]")
+    if result.imported or result.updated:
+        console.print(
+            "  [dim]Run `fastfold serve` and open the local UI to continue these chats.[/dim]"
+        )
+
+
 @app.command("upgrade")
 def upgrade_cmd(
     install_skills: bool = typer.Option(
@@ -902,6 +984,25 @@ def agent_fork_cmd(
                     target_path.write_bytes(content)
                     restored_files += 1
             share_folders_count = len(unique_parent_dirs)
+
+            # Mirror restored files into the canonical per-session workspace so
+            # the local Agents UI file tree can list them after sync/resume.
+            try:
+                import shutil
+
+                from agent.config import CONFIG_DIR
+
+                workspace_root = (CONFIG_DIR / "workspaces" / session_id).resolve()
+                workspace_root.mkdir(parents=True, exist_ok=True)
+                for child in restored_root.iterdir():
+                    destination = workspace_root / child.name
+                    if child.is_dir():
+                        shutil.copytree(child, destination, dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(child, destination)
+                console.print(f"  [dim]Session workspace:[/dim] {workspace_root}")
+            except Exception:
+                pass
 
         # Best-effort analytics so public and local CLI forks are reflected in
         # shared-page fork counts (same metric surface as cloud forks).
@@ -4639,6 +4740,8 @@ def entry():
         "trace",
         "knowledge",
         "keys",
+        "serve",
+        "sync",
         "doctor",
         "setup",
         "release-check",

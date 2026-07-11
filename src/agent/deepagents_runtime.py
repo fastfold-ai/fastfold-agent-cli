@@ -111,6 +111,43 @@ def skill_source_dirs() -> list[str]:
     return sources
 
 
+async def create_external_mcp_tools(servers: list[dict] | None) -> list[Any]:
+    """Load tools from enabled stdio/SSE/streamable-HTTP MCP servers."""
+    if not servers:
+        return []
+    from langchain_mcp_adapters.client import MultiServerMCPClient
+
+    connections: dict[str, dict[str, Any]] = {}
+    for server in servers:
+        if not server.get("enabled", True):
+            continue
+        name = str(server.get("name") or server.get("id") or "").strip()
+        transport = str(server.get("transport") or "").strip()
+        if not name or transport not in {"stdio", "sse", "streamable_http"}:
+            continue
+        if transport == "stdio":
+            command = str(server.get("command") or "").strip()
+            if not command:
+                continue
+            connections[name] = {
+                "transport": "stdio",
+                "command": command,
+                "args": [str(arg) for arg in server.get("args") or []],
+            }
+        else:
+            url = str(server.get("url") or "").strip()
+            if not url:
+                continue
+            connections[name] = {
+                "transport": transport,
+                "url": url,
+            }
+    if not connections:
+        return []
+    client = MultiServerMCPClient(connections)
+    return list(await client.get_tools())
+
+
 # ---------------------------------------------------------------------------
 # Tool adapter: registry tools -> LangChain StructuredTool
 # ---------------------------------------------------------------------------
@@ -612,7 +649,11 @@ async def process_events(
                     _close_group()
                 _stop_spinner()
                 streamed_len += len(text)
-                _emit_progress("stream", streamed_chars=int(streamed_len))
+                _emit_progress(
+                    "stream",
+                    delta=text,
+                    streamed_chars=int(streamed_len),
+                )
             continue
 
         if etype == "on_chat_model_end":
@@ -646,6 +687,12 @@ async def process_events(
             _stop_spinner()
             inflight[run_id] = {"name": display, "input": tool_input, "start_time": now}
             tool_calls.append({"name": display, "input": tool_input})
+            _emit_progress(
+                "tool_start",
+                name=display,
+                arguments=tool_input,
+                tool_call_id=run_id,
+            )
             if trace_events is not None:
                 trace_events.append(
                     {
@@ -697,6 +744,14 @@ async def process_events(
                 display = tracked["name"]
                 tool_input = tracked["input"]
             _stop_spinner()
+            _emit_progress(
+                "tool_end",
+                name=display,
+                output=result_text,
+                is_error=is_error,
+                duration_s=duration,
+                tool_call_id=run_id,
+            )
 
             for entry in reversed(tool_calls):
                 if entry.get("name") == display and "result_text" not in entry:

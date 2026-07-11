@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 from rich.console import Console
 
-from agent.config import Config
+from agent.config import API_KEYS, Config
 
 
 class Session:
@@ -33,8 +33,8 @@ class Session:
         tool execution deterministic across fresh sessions.
         """
         env_from_config = {
-            "FASTFOLD_API_KEY": str(self.config.get("api.fastfold_cloud_key") or "").strip(),
-            "BOLTZ_API_KEY": str(self.config.get("api.boltz_api_key") or "").strip(),
+            str(info["env_var"]): str(self.config.get(config_key) or "").strip()
+            for config_key, info in API_KEYS.items()
         }
         for env_name, value in env_from_config.items():
             if value and not str(os.environ.get(env_name) or "").strip():
