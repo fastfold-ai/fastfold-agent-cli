@@ -801,6 +801,7 @@ class AgentRunner:
                 runtime="deepagents",
                 tool_mode=tool_mode,
                 exclude_categories=exclude_cats,
+                project_context=ctx.get("project_context"),
             )
 
             # ----- User prompt -----

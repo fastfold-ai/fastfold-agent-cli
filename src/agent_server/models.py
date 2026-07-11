@@ -42,11 +42,47 @@ SessionStatus = Literal["idle", "running", "interrupted", "error"]
 OrganizeLabel = Literal["pinned", "archive"]
 
 
+class AgentProject(ApiModel):
+    id: str
+    name: str
+    description: str | None = None
+    agent_context: str | None = None
+    pinned: bool = False
+    session_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class CreateProjectRequest(ApiModel):
+    name: str = Field(min_length=1)
+    description: str | None = None
+    agent_context: str | None = None
+    pinned: bool = False
+
+
+class UpdateProjectRequest(ApiModel):
+    name: str | None = None
+    description: str | None = None
+    agent_context: str | None = None
+    pinned: bool | None = None
+    clear_description: bool = False
+    clear_agent_context: bool = False
+
+
+class ProjectList(ApiModel):
+    data: list[AgentProject]
+
+
+class DeleteProjectResponse(ApiModel):
+    deleted: bool = True
+
+
 class AgentSession(ApiModel):
     id: str
     title: str
     status: SessionStatus = "idle"
     organize_label: OrganizeLabel | None = None
+    project_id: str | None = None
     workspace_path: str | None = None
     last_message_at: datetime | None = None
     created_at: datetime
@@ -56,12 +92,15 @@ class AgentSession(ApiModel):
 class CreateSessionRequest(ApiModel):
     title: str | None = None
     workspace_path: str | None = None
+    project_id: str | None = None
 
 
 class UpdateSessionRequest(ApiModel):
     title: str | None = None
     organize_label: OrganizeLabel | None = None
     clear_organize_label: bool = False
+    project_id: str | None = None
+    clear_project_id: bool = False
 
 
 class AutoTitleSessionRequest(ApiModel):

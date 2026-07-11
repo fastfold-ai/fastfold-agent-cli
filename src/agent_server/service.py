@@ -140,14 +140,24 @@ class AgentService:
             raise KeyError(session_id)
         return updated
 
-    def create_session(self, *, title: str | None, workspace_path: str | None) -> AgentSession:
+    def create_session(
+        self,
+        *,
+        title: str | None,
+        workspace_path: str | None,
+        project_id: str | None = None,
+    ) -> AgentSession:
         normalized_workspace: str | None = None
         if workspace_path:
             workspace = Path(workspace_path).expanduser().resolve()
             if not workspace.is_dir():
                 raise ValueError(f"Workspace directory does not exist: {workspace}")
             normalized_workspace = str(workspace)
-        session = self.store.create_session(title=title, workspace_path=normalized_workspace)
+        session = self.store.create_session(
+            title=title,
+            workspace_path=normalized_workspace,
+            project_id=project_id,
+        )
         if normalized_workspace is None:
             workspace = default_workspace_path(session.id)
             workspace.mkdir(parents=True, exist_ok=True)
@@ -168,12 +178,16 @@ class AgentService:
         title: str | None,
         organize_label: str | None,
         update_organize_label: bool,
+        project_id: str | None = None,
+        update_project_id: bool = False,
     ) -> AgentSession:
         session = self.store.update_session(
             session_id,
             title=title,
             organize_label=organize_label,
             update_organize_label=update_organize_label,
+            project_id=project_id,
+            update_project_id=update_project_id,
         )
         if session is None:
             raise KeyError(session_id)
@@ -323,6 +337,12 @@ class AgentService:
                 server.model_dump(mode="json")
                 for server in self.store.list_mcp_servers(enabled_only=True)
             ]
+            project_context = None
+            current = self.store.get_session(session_id)
+            if current and current.project_id:
+                project = self.store.get_project(current.project_id)
+                if project and project.agent_context:
+                    project_context = project.agent_context
             summary = await asyncio.to_thread(
                 self._run_existing_agent,
                 content,
@@ -330,6 +350,7 @@ class AgentService:
                 emit_runtime_event,
                 history,
                 mcp_servers,
+                project_context,
             )
             assistant_message = self.store.add_message(
                 session_id=session_id,
@@ -406,6 +427,7 @@ class AgentService:
         progress_callback,
         history,
         mcp_servers,
+        project_context: str | None = None,
     ) -> str:
         """Temporary adapter until AgentRunner is split into AgentRuntime."""
         from agent.config import Config
@@ -430,9 +452,11 @@ class AgentService:
                 trajectory.add_turn(pending_user, message.content)
                 pending_user = None
         runner = AgentRunner(session, trajectory=trajectory, headless=True)
-        context = {"workspace_path": workspace_path} if workspace_path else {}
+        context: dict = {"workspace_path": workspace_path} if workspace_path else {}
         if mcp_servers:
             context["mcp_servers"] = mcp_servers
+        if project_context:
+            context["project_context"] = project_context
         result = runner.run(content, context, progress_callback=progress_callback)
         return result.summary or "Done."
 

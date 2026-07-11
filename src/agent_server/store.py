@@ -13,6 +13,7 @@ from typing import Any
 from agent.config import CONFIG_DIR
 from agent_server.models import (
     AgentMessage,
+    AgentProject,
     AgentSession,
     EventEnvelope,
     McpServer,
@@ -97,6 +98,16 @@ class AgentStore:
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS projects (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    agent_context TEXT,
+                    pinned INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 """
             )
             columns = {
@@ -107,20 +118,43 @@ class AgentStore:
                 connection.execute("ALTER TABLE sessions ADD COLUMN organize_label TEXT")
             if "last_message_at" not in columns:
                 connection.execute("ALTER TABLE sessions ADD COLUMN last_message_at TEXT")
+            if "project_id" not in columns:
+                connection.execute("ALTER TABLE sessions ADD COLUMN project_id TEXT")
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS sessions_project_updated
+                    ON sessions(project_id, updated_at DESC)
+                """
+            )
 
     @staticmethod
     def _session(row: sqlite3.Row) -> AgentSession:
+        keys = set(row.keys())
         return AgentSession(
             id=row["id"],
             title=row["title"],
             status=row["status"],
             organize_label=row["organize_label"],
+            project_id=row["project_id"] if "project_id" in keys else None,
             workspace_path=row["workspace_path"],
             last_message_at=(
                 datetime.fromisoformat(row["last_message_at"])
                 if row["last_message_at"]
                 else None
             ),
+            created_at=datetime.fromisoformat(row["created_at"]),
+            updated_at=datetime.fromisoformat(row["updated_at"]),
+        )
+
+    @staticmethod
+    def _project(row: sqlite3.Row, *, session_count: int = 0) -> AgentProject:
+        return AgentProject(
+            id=row["id"],
+            name=row["name"],
+            description=row["description"],
+            agent_context=row["agent_context"],
+            pinned=bool(row["pinned"]),
+            session_count=session_count,
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
@@ -135,11 +169,18 @@ class AgentStore:
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 
-    def create_session(self, *, title: str | None, workspace_path: str | None) -> AgentSession:
+    def create_session(
+        self,
+        *,
+        title: str | None,
+        workspace_path: str | None,
+        project_id: str | None = None,
+    ) -> AgentSession:
         return self.ensure_session(
             str(uuid.uuid4()),
             title=title,
             workspace_path=workspace_path,
+            project_id=project_id,
         )
 
     def ensure_session(
@@ -148,6 +189,7 @@ class AgentStore:
         *,
         title: str | None = None,
         workspace_path: str | None = None,
+        project_id: str | None = None,
         created_at: datetime | None = None,
         updated_at: datetime | None = None,
     ) -> AgentSession:
@@ -160,6 +202,9 @@ class AgentStore:
                 return self.update_session(normalized_id, title=title.strip()) or existing
             return existing
 
+        if project_id is not None and self.get_project(project_id) is None:
+            raise ValueError(f"Project not found: {project_id}")
+
         now = utc_now()
         created = created_at or now
         updated = updated_at or created
@@ -168,6 +213,7 @@ class AgentStore:
             title=(title or "New research session").strip() or "New research session",
             status="idle",
             organize_label=None,
+            project_id=project_id,
             workspace_path=workspace_path,
             last_message_at=None,
             created_at=created,
@@ -177,16 +223,17 @@ class AgentStore:
             connection.execute(
                 """
                 INSERT INTO sessions(
-                    id, title, status, organize_label, workspace_path,
+                    id, title, status, organize_label, project_id, workspace_path,
                     last_message_at, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     session.id,
                     session.title,
                     session.status,
                     session.organize_label,
+                    session.project_id,
                     session.workspace_path,
                     None,
                     session.created_at.isoformat(),
@@ -195,11 +242,21 @@ class AgentStore:
             )
         return session
 
-    def list_sessions(self) -> list[AgentSession]:
+    def list_sessions(self, *, project_id: str | None = None) -> list[AgentSession]:
         with self._connect() as connection:
-            rows = connection.execute(
-                "SELECT * FROM sessions ORDER BY updated_at DESC, id DESC"
-            ).fetchall()
+            if project_id:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM sessions
+                    WHERE project_id = ?
+                    ORDER BY updated_at DESC, id DESC
+                    """,
+                    (project_id,),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM sessions ORDER BY updated_at DESC, id DESC"
+                ).fetchall()
         return [self._session(row) for row in rows]
 
     def get_session(self, session_id: str) -> AgentSession | None:
@@ -235,6 +292,8 @@ class AgentStore:
         title: str | None = None,
         organize_label: str | None = None,
         update_organize_label: bool = False,
+        project_id: str | None = None,
+        update_project_id: bool = False,
     ) -> AgentSession | None:
         current = self.get_session(session_id)
         if current is None:
@@ -245,17 +304,154 @@ class AgentStore:
             if not next_title:
                 raise ValueError("Session title cannot be empty.")
         next_label = organize_label if update_organize_label else current.organize_label
+        next_project_id = current.project_id
+        if update_project_id:
+            if project_id is not None and self.get_project(project_id) is None:
+                raise ValueError(f"Project not found: {project_id}")
+            next_project_id = project_id
         now = utc_now()
         with self._write_lock, self._connect() as connection:
             connection.execute(
                 """
                 UPDATE sessions
-                SET title = ?, organize_label = ?, updated_at = ?
+                SET title = ?, organize_label = ?, project_id = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (next_title, next_label, now.isoformat(), session_id),
+                (next_title, next_label, next_project_id, now.isoformat(), session_id),
             )
         return self.get_session(session_id)
+
+    def create_project(
+        self,
+        *,
+        name: str,
+        description: str | None = None,
+        agent_context: str | None = None,
+        pinned: bool = False,
+    ) -> AgentProject:
+        normalized = name.strip()
+        if not normalized:
+            raise ValueError("Project name cannot be empty.")
+        now = utc_now()
+        project_id = str(uuid.uuid4())
+        with self._write_lock, self._connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO projects(
+                    id, name, description, agent_context, pinned, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    project_id,
+                    normalized,
+                    (description or "").strip() or None,
+                    (agent_context or "").strip() or None,
+                    1 if pinned else 0,
+                    now.isoformat(),
+                    now.isoformat(),
+                ),
+            )
+        project = self.get_project(project_id)
+        if project is None:
+            raise RuntimeError("Failed to create project.")
+        return project
+
+    def list_projects(self) -> list[AgentProject]:
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    projects.*,
+                    (
+                        SELECT COUNT(*)
+                        FROM sessions
+                        WHERE sessions.project_id = projects.id
+                    ) AS session_count
+                FROM projects
+                ORDER BY projects.pinned DESC, projects.updated_at DESC, projects.id DESC
+                """
+            ).fetchall()
+        return [
+            self._project(row, session_count=int(row["session_count"] or 0))
+            for row in rows
+        ]
+
+    def get_project(self, project_id: str) -> AgentProject | None:
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    projects.*,
+                    (
+                        SELECT COUNT(*)
+                        FROM sessions
+                        WHERE sessions.project_id = projects.id
+                    ) AS session_count
+                FROM projects
+                WHERE projects.id = ?
+                """,
+                (project_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._project(row, session_count=int(row["session_count"] or 0))
+
+    def update_project(
+        self,
+        project_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        update_description: bool = False,
+        agent_context: str | None = None,
+        update_agent_context: bool = False,
+        pinned: bool | None = None,
+    ) -> AgentProject | None:
+        current = self.get_project(project_id)
+        if current is None:
+            return None
+        next_name = current.name
+        if name is not None:
+            next_name = name.strip()
+            if not next_name:
+                raise ValueError("Project name cannot be empty.")
+        next_description = current.description
+        if update_description:
+            next_description = (description or "").strip() or None
+        next_context = current.agent_context
+        if update_agent_context:
+            next_context = (agent_context or "").strip() or None
+        next_pinned = current.pinned if pinned is None else bool(pinned)
+        now = utc_now()
+        with self._write_lock, self._connect() as connection:
+            connection.execute(
+                """
+                UPDATE projects
+                SET name = ?, description = ?, agent_context = ?, pinned = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    next_name,
+                    next_description,
+                    next_context,
+                    1 if next_pinned else 0,
+                    now.isoformat(),
+                    project_id,
+                ),
+            )
+        return self.get_project(project_id)
+
+    def delete_project(self, project_id: str) -> bool:
+        with self._write_lock, self._connect() as connection:
+            connection.execute(
+                "UPDATE sessions SET project_id = NULL WHERE project_id = ?",
+                (project_id,),
+            )
+            cursor = connection.execute(
+                "DELETE FROM projects WHERE id = ?", (project_id,)
+            )
+        return cursor.rowcount > 0
 
     def set_workspace_path(self, session_id: str, workspace_path: str) -> AgentSession | None:
         with self._write_lock, self._connect() as connection:

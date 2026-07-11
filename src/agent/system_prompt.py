@@ -125,6 +125,7 @@ def build_system_prompt(
     runtime: str = "sdk",
     tool_mode: str = "native",
     exclude_categories: set[str] | None = None,
+    project_context: str | None = None,
 ) -> str:
     """Build the unified system prompt for the agent runner.
 
@@ -152,6 +153,10 @@ def build_system_prompt(
 
     # 1. Identity
     parts.append(_IDENTITY)
+
+    if project_context and str(project_context).strip():
+        parts.append("\n## Project Context\n")
+        parts.append(str(project_context).strip())
 
     ptc = str(tool_mode).strip().lower() == "ptc"
 

@@ -19,9 +19,12 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from _version import __version__
 from agent_server.models import (
+    AgentProject,
     AgentSession,
     Capabilities,
+    CreateProjectRequest,
     CreateSessionRequest,
+    DeleteProjectResponse,
     DeleteSessionResponse,
     HealthResponse,
     IntegrationList,
@@ -34,6 +37,7 @@ from agent_server.models import (
     McpServerList,
     CreateMcpServerRequest,
     MoveWorkspaceFileRequest,
+    ProjectList,
     RuntimeSettings,
     SendMessageRequest,
     SessionList,
@@ -43,6 +47,7 @@ from agent_server.models import (
     SkillList,
     SkillMutationResponse,
     UpdateIntegrationRequest,
+    UpdateProjectRequest,
     UpdateRuntimeSettingsRequest,
     UpdateMcpServerRequest,
     ValidateIntegrationResponse,
@@ -319,9 +324,68 @@ def create_app(
     async def upgrade_skills() -> SkillMutationResponse:
         return await asyncio.to_thread(skills_service.upgrade)
 
+    @app.get("/v1/projects", response_model=ProjectList)
+    async def list_projects() -> ProjectList:
+        return ProjectList(data=await asyncio.to_thread(store.list_projects))
+
+    @app.post("/v1/projects", response_model=AgentProject, status_code=201)
+    async def create_project(payload: CreateProjectRequest) -> AgentProject:
+        try:
+            return await asyncio.to_thread(
+                store.create_project,
+                name=payload.name,
+                description=payload.description,
+                agent_context=payload.agent_context,
+                pinned=payload.pinned,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/v1/projects/{project_id}", response_model=AgentProject)
+    async def get_project(project_id: str) -> AgentProject:
+        project = await asyncio.to_thread(store.get_project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        return project
+
+    @app.patch("/v1/projects/{project_id}", response_model=AgentProject)
+    async def update_project(
+        project_id: str,
+        payload: UpdateProjectRequest,
+    ) -> AgentProject:
+        try:
+            project = await asyncio.to_thread(
+                store.update_project,
+                project_id,
+                name=payload.name,
+                description=payload.description,
+                update_description=payload.description is not None
+                or payload.clear_description,
+                agent_context=payload.agent_context,
+                update_agent_context=payload.agent_context is not None
+                or payload.clear_agent_context,
+                pinned=payload.pinned,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if project is None:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        return project
+
+    @app.delete("/v1/projects/{project_id}", response_model=DeleteProjectResponse)
+    async def delete_project(project_id: str) -> DeleteProjectResponse:
+        deleted = await asyncio.to_thread(store.delete_project, project_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Project not found.")
+        return DeleteProjectResponse(deleted=True)
+
     @app.get("/v1/sessions", response_model=SessionList)
-    async def list_sessions() -> SessionList:
-        return SessionList(data=await asyncio.to_thread(store.list_sessions))
+    async def list_sessions(
+        project_id: str | None = Query(default=None, alias="projectId"),
+    ) -> SessionList:
+        return SessionList(
+            data=await asyncio.to_thread(store.list_sessions, project_id=project_id)
+        )
 
     @app.get("/v1/sessions/search", response_model=SessionList)
     async def search_sessions(
@@ -339,6 +403,7 @@ def create_app(
                 service.create_session,
                 title=payload.title,
                 workspace_path=payload.workspace_path,
+                project_id=payload.project_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -356,6 +421,7 @@ def create_app(
         payload: UpdateSessionRequest,
     ) -> AgentSession:
         update_label = payload.organize_label is not None or payload.clear_organize_label
+        update_project = payload.project_id is not None or payload.clear_project_id
         try:
             return await asyncio.to_thread(
                 service.update_session,
@@ -363,6 +429,8 @@ def create_app(
                 title=payload.title,
                 organize_label=payload.organize_label,
                 update_organize_label=update_label,
+                project_id=None if payload.clear_project_id else payload.project_id,
+                update_project_id=update_project,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="Session not found.") from exc
