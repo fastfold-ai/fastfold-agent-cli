@@ -200,6 +200,52 @@ def test_iter_skills_global_overrides_bundled(tmp_path, monkeypatch):
     assert merged["only_bundled"].source == "bundled"
 
 
+def test_iter_skills_collapses_underscore_hyphen_duplicates(tmp_path, monkeypatch):
+    global_dir = tmp_path / "global"
+    npx_dir = tmp_path / "npx"
+    # Same frontmatter name, different directory naming across tiers.
+    underscored = global_dir / "alphagenome_single_variant_analysis"
+    underscored.mkdir(parents=True)
+    (underscored / "SKILL.md").write_text(
+        "---\nname: alphagenome-single-variant-analysis\n"
+        "description: global copy\n---\n\n# Alpha\n",
+        encoding="utf-8",
+    )
+    (global_dir / skills_mod.MANIFEST_FILENAME).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "skills": {
+                    "alphagenome_single_variant_analysis": {
+                        "source": "https://github.com/google-deepmind/science-skills",
+                        "release": "v1.0.5",
+                        "installed_at": "2026-07-11T00:00:00+00:00",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    hyphenated = npx_dir / "alphagenome-single-variant-analysis"
+    hyphenated.mkdir(parents=True)
+    (hyphenated / "SKILL.md").write_text(
+        "---\nname: alphagenome-single-variant-analysis\n"
+        "description: npx copy\n---\n\n# Alpha\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(skills_mod, "BUNDLED_SKILLS_DIR", tmp_path / "bundled")
+    monkeypatch.setattr(skills_mod, "GLOBAL_SKILLS_DIR", global_dir)
+    monkeypatch.setattr(skills_mod, "NPX_SKILLS_DIR", npx_dir)
+
+    merged = skills_mod.iter_skills(project_root=tmp_path / "noproject")
+    names = [info.name for info in merged.values()]
+    assert names.count("alphagenome-single-variant-analysis") == 1
+    winner = next(info for info in merged.values() if info.name == "alphagenome-single-variant-analysis")
+    assert winner.version == "v1.0.5"
+    assert "global copy" in winner.description
+
+
 # ─── Install (local) + remove ──────────────────────────────────────────────
 def test_install_local_and_remove(tmp_path, monkeypatch):
     src = tmp_path / "src"

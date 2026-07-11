@@ -334,7 +334,9 @@ def iter_skills(
 ) -> dict[str, SkillInfo]:
     """Return merged skills keyed by directory name.
 
-    Priority (high → low): global > project (lock-gated) > bundled.
+    Priority (high → low): global > npx > project (lock-gated) > bundled.
+    Entries that only differ by ``_`` vs ``-`` naming (or share the same
+    SKILL.md frontmatter name) are collapsed so the UI/API list is unique.
     """
     if project_root is None:
         project_root = Path.cwd()
@@ -344,12 +346,78 @@ def iter_skills(
     merged.update(_scan_project(project_root))
     merged.update(_scan_dir(NPX_SKILLS_DIR, "npx"))
     merged.update(_scan_dir(GLOBAL_SKILLS_DIR, "global"))
-    disabled = _disabled_skill_names()
-    for name, info in merged.items():
-        info.enabled = name not in disabled
+    merged = _collapse_skills_by_name(merged)
+    disabled = {
+        _normalize_skill_lookup(name) for name in _disabled_skill_names() if name
+    }
+    for key, info in merged.items():
+        identity = _normalize_skill_lookup(info.name) or _normalize_skill_lookup(key)
+        info.enabled = identity not in disabled
     if enabled_only:
         return {name: info for name, info in merged.items() if info.enabled}
     return merged
+
+
+def _skill_source_tier_rank(info: SkillInfo) -> int:
+    """Higher wins when collapsing duplicate skill identities."""
+    path = getattr(info, "path", None)
+    source = str(getattr(info, "source", "") or "")
+    try:
+        if path is not None:
+            resolved = Path(path).resolve()
+            if GLOBAL_SKILLS_DIR.resolve() in resolved.parents:
+                return 4
+            if NPX_SKILLS_DIR.resolve() in resolved.parents:
+                return 3
+    except Exception:  # noqa: BLE001
+        pass
+    if source == "global":
+        return 4
+    if source == "npx":
+        return 3
+    if source == "project" or source.startswith("project"):
+        return 1
+    if source == "bundled":
+        return 0
+    return 2
+
+
+def _prefer_duplicate_skill(current: SkillInfo, candidate: SkillInfo) -> SkillInfo:
+    current_rank = _skill_source_tier_rank(current)
+    candidate_rank = _skill_source_tier_rank(candidate)
+    if candidate_rank != current_rank:
+        return candidate if candidate_rank > current_rank else current
+    if bool(candidate.version) != bool(current.version):
+        return candidate if candidate.version else current
+    if bool(candidate.updated_at) != bool(current.updated_at):
+        return candidate if candidate.updated_at else current
+    return current
+
+
+def _collapse_skills_by_name(skills: dict[str, SkillInfo]) -> dict[str, SkillInfo]:
+    """Collapse directory-key collisions that share one frontmatter skill name."""
+    chosen: dict[str, tuple[str, SkillInfo]] = {}
+    for key, info in skills.items():
+        identity = _normalize_skill_lookup(info.name) or _normalize_skill_lookup(key)
+        if not identity:
+            continue
+        existing = chosen.get(identity)
+        if existing is None:
+            chosen[identity] = (key, info)
+            continue
+        existing_key, existing_info = existing
+        winner = _prefer_duplicate_skill(existing_info, info)
+        if winner is info:
+            # Keep a directory key that matches the public skill name when possible.
+            preferred_key = key
+            if _normalize_skill_lookup(existing_key) == identity and _normalize_skill_lookup(
+                key
+            ) != identity:
+                preferred_key = existing_key
+            chosen[identity] = (preferred_key, winner)
+        else:
+            chosen[identity] = (existing_key, existing_info)
+    return {key: info for key, info in chosen.values()}
 
 
 def list_skills(
