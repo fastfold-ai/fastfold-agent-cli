@@ -644,3 +644,27 @@ class DoctorReport(ApiModel):
 
 class DoctorDiagnosticsRequest(ApiModel):
     ui_diagnostics: dict[str, Any] | None = None
+
+
+class StorageLocation(ApiModel):
+    path: str
+    label: str = "default location"
+    bytes: int = 0
+
+
+class StorageCategory(ApiModel):
+    id: str
+    label: str
+    color: str
+    bytes: int = 0
+    path: str | None = None
+    children: list["StorageCategory"] = Field(default_factory=list)
+
+
+class StorageReport(ApiModel):
+    location: StorageLocation
+    categories: list[StorageCategory] = Field(default_factory=list)
+    total_bytes: int = 0
+    available_bytes: int = 0
+    checked_at: str
+

@@ -70,6 +70,7 @@ from agent_server.models import (
     SendMessageRequest,
     SessionList,
     StartRunResponse,
+    StorageReport,
     InstallSkillRequest,
     SkillDetail,
     SkillList,
@@ -269,6 +270,12 @@ def create_app(
     ) -> Response:
         ui = payload.ui_diagnostics if payload else None
         return await _build_diagnostics_response(ui)
+
+    @app.get("/v1/storage", response_model=StorageReport)
+    async def get_storage() -> StorageReport:
+        from agent_server.storage_service import StorageService
+
+        return await asyncio.to_thread(StorageService().get_report)
 
     @app.get("/v1/mcp-servers", response_model=McpServerList)
     async def list_mcp_servers() -> McpServerList:

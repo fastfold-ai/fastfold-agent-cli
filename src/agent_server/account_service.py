@@ -6,6 +6,7 @@ import json
 import os
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from agent.config import Config
@@ -77,8 +78,12 @@ def _plan_rank(plan_code: str) -> int:
 
 
 def _resolve_user(api_key: str, base_url: str) -> tuple[str | None, str | None, str | None]:
-    """Return (user_id, email, username) from cloud identity endpoints."""
-    for path in ("/v1/users/me", "/v1/example/dual-auth"):
+    """Return (user_id, email, username) from cloud identity endpoints.
+
+    Prefer dual-auth: ``/v1/users/me`` is not routed on api.fastfold.ai (404) and
+    only wastes a round-trip before the working fallback.
+    """
+    for path in ("/v1/example/dual-auth", "/v1/users/me"):
         payload = _request_json(f"{base_url}{path}", api_key)
         if not payload:
             continue
@@ -157,8 +162,12 @@ class AccountService:
             )
 
         base_url = _cloud_base_url()
-        user_id, email, username = _resolve_user(api_key, base_url)
-        plan_code, workspace_id, team_id = _resolve_plan_and_workspace(api_key, base_url)
+        # User + billing are independent — fetch in parallel (~max of both, not sum).
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            user_future = pool.submit(_resolve_user, api_key, base_url)
+            plan_future = pool.submit(_resolve_plan_and_workspace, api_key, base_url)
+            user_id, email, username = user_future.result()
+            plan_code, workspace_id, team_id = plan_future.result()
         plan_label = _format_plan_label(plan_code or "")
         if plan_label and not plan_label.lower().endswith("plan"):
             plan_label = f"{plan_label} plan"

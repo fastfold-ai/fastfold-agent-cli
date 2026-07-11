@@ -990,6 +990,25 @@ def _check_model_providers(cfg: Config) -> list[DoctorCheck]:
                 follow_redirects=True,
             )
             code = resp.status_code
+            body_text = ""
+            try:
+                body_text = (resp.text or "").strip()
+            except Exception:
+                body_text = ""
+            body_lower = body_text.lower()
+            # xAI (and some OpenAI-compatible APIs) return HTTP 400 for bad keys
+            # instead of 401/403. Keep those as warnings (not hard failures).
+            auth_hint_400 = code == 400 and any(
+                marker in body_lower
+                for marker in (
+                    "incorrect api key",
+                    "invalid api key",
+                    "invalid_api_key",
+                    "unauthorized",
+                    "authentication",
+                    "api key provided",
+                )
+            )
             if code == 200:
                 count = 0
                 try:
@@ -1022,15 +1041,45 @@ def _check_model_providers(cfg: Config) -> list[DoctorCheck]:
                         status="error",
                         detail=f"Authentication failed (HTTP {code}) — check the API key",
                         category="llm",
-                        fix="Update the key in Dashboard → Models → API Keys",
+                        fix="Update the key in Dashboard → Integrations / Models",
                     )
                 )
-            else:
+            elif auth_hint_400:
                 checks.append(
                     DoctorCheck(
                         name=f"Model endpoint · {label}",
                         status="warn",
-                        detail=f"Unexpected response (HTTP {code})",
+                        detail="HTTP 400: Incorrect API key — update the key to restore this provider",
+                        category="llm",
+                        fix="Update the key in Dashboard → Integrations / Models",
+                    )
+                )
+            else:
+                detail = f"Unexpected response (HTTP {code})"
+                # Prefer a short provider error message when available.
+                try:
+                    payload = resp.json()
+                    if isinstance(payload, dict):
+                        msg = str(
+                            payload.get("error")
+                            or payload.get("message")
+                            or ""
+                        ).strip()
+                        if isinstance(payload.get("error"), dict):
+                            msg = str(
+                                payload["error"].get("message")
+                                or payload["error"].get("error")
+                                or msg
+                            ).strip()
+                        if msg:
+                            detail = f"HTTP {code}: {msg[:160]}"
+                except Exception:
+                    pass
+                checks.append(
+                    DoctorCheck(
+                        name=f"Model endpoint · {label}",
+                        status="warn",
+                        detail=detail,
                         category="llm",
                     )
                 )
