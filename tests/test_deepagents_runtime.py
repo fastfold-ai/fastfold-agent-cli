@@ -62,6 +62,7 @@ def _stub_config(provider="anthropic", model=None, *, api_key=None, base_url=Non
         get=lambda key, default=None: data.get(key, default),
         llm_api_key=lambda _provider: api_key,
         llm_openai_base_url=lambda: base_url,
+        llm_provider_base_url=lambda _provider: None,
     )
 
 
@@ -106,6 +107,25 @@ class TestBuildChatModel:
         dr.build_chat_model(_stub_config("openai", model="gpt-5-mini"))
         assert captured["model_id"] == "openai:gpt-5-mini"
         assert "temperature" not in captured["kwargs"]
+        assert captured["kwargs"]["use_responses_api"] is False
+
+    def test_openai_codex_uses_responses_api_on_cloud(self, monkeypatch):
+        captured = self._patch_init(monkeypatch)
+        dr.build_chat_model(_stub_config("openai", model="gpt-5.3-codex", api_key="k"))
+        assert captured["model_id"] == "openai:gpt-5.3-codex"
+        assert captured["kwargs"]["use_responses_api"] is True
+
+    def test_openai_codex_keeps_chat_completions_on_local(self, monkeypatch):
+        captured = self._patch_init(monkeypatch)
+        dr.build_chat_model(
+            _stub_config(
+                "openai",
+                model="gpt-5.3-codex",
+                api_key="k",
+                base_url="http://localhost:11434/v1",
+            )
+        )
+        assert captured["kwargs"]["use_responses_api"] is False
 
     def test_unsupported_provider_raises(self, monkeypatch):
         self._patch_init(monkeypatch)

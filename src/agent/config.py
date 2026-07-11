@@ -27,11 +27,14 @@ from rich.table import Table  # noqa: E402
 CONFIG_DIR = Path.home() / ".fastfold-cli"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 CONFIG_BACKUP_FILE = CONFIG_DIR / "config.json.bak"
-VALID_LLM_PROVIDERS = frozenset({"anthropic", "openai", "xai", "google", "nvidia"})
+VALID_LLM_PROVIDERS = frozenset(
+    {"anthropic", "openai", "xai", "google", "nvidia", "opencode"}
+)
 
 # First-party providers that speak the OpenAI-compatible protocol. Each routes
 # through the OpenAI SDK / LangChain "openai:" path with a fixed base URL and its
-# own API key.
+# own API key. Set discover_models=true to fetch the live catalog from /v1/models
+# when an API key is configured (used by OpenCode Go).
 OPENAI_COMPATIBLE_PROVIDERS: dict[str, dict[str, str]] = {
     "xai": {
         "base_url": "https://api.x.ai/v1",
@@ -56,6 +59,15 @@ OPENAI_COMPATIBLE_PROVIDERS: dict[str, dict[str, str]] = {
         "label": "NVIDIA",
         "signup_url": "https://build.nvidia.com/settings/api-keys",
         "default_model": "nvidia/nemotron-3-ultra-550b-a55b",
+    },
+    "opencode": {
+        "base_url": "https://opencode.ai/zen/v1",
+        "config_key": "llm.opencode_api_key",
+        "env_var": "OPENCODE_API_KEY",
+        "label": "OpenCode Zen",
+        "signup_url": "https://opencode.ai/zen",
+        "default_model": "kimi-k2.7-code",
+        "discover_models": "true",
     },
 }
 logger = logging.getLogger("config")
@@ -158,6 +170,7 @@ DEFAULTS = {
     "llm.openai_api_key": None,
     "llm.xai_api_key": None,
     "llm.google_api_key": None,
+    "llm.opencode_api_key": None,
     "llm.openai_compatible_api_key": None,
     "llm.openai_base_url": None,
     "llm.openai_compatible_backend": None,
@@ -395,6 +408,14 @@ API_KEYS = {
         "description": "Google Gemini (AI Studio) model access",
         "url": "https://aistudio.google.com/apikey",
         "free": True,
+    },
+    "llm.opencode_api_key": {
+        "name": "OpenCode Zen",
+        "provider_key": "opencode",
+        "env_var": "OPENCODE_API_KEY",
+        "description": "OpenCode Zen gateway for curated coding models (pay-as-you-go)",
+        "url": "https://opencode.ai/zen",
+        "free": False,
     },
     "llm.openai_compatible_api_key": {
         "name": "OpenAI-compatible",
@@ -1428,6 +1449,7 @@ class Config:
             "OPENAI_API_KEY": "llm.openai_api_key",
             "XAI_API_KEY": "llm.xai_api_key",
             "GEMINI_API_KEY": "llm.google_api_key",
+            "OPENCODE_API_KEY": "llm.opencode_api_key",
             "OPENAI_COMPATIBLE_API_KEY": "llm.openai_compatible_api_key",
             "OPENAI_BASE_URL": "llm.openai_base_url",
             "CT_DATA_DIR": "data.base",

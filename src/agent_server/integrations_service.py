@@ -47,6 +47,11 @@ PROVIDER_METADATA = {
         "category": "AI Models",
         "description": "NVIDIA API key overrides for model inference.",
     },
+    "opencode": {
+        "name": "OpenCode Zen",
+        "category": "AI Models",
+        "description": "OpenCode Zen pay-as-you-go gateway for curated coding models.",
+    },
     "tavily": {
         "name": "Tavily",
         "category": "Search",

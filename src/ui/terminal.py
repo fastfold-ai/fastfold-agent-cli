@@ -1385,6 +1385,15 @@ class InteractiveTerminal:
                     return "openai", "OpenAI-compatible custom endpoint", openai_base_url
                 return "openai", f"OpenAI-compatible custom endpoint ({label})", openai_base_url
             return "anthropic", "Anthropic", None
+        from agent.config import OPENAI_COMPATIBLE_PROVIDERS
+
+        if raw_provider in OPENAI_COMPATIBLE_PROVIDERS:
+            meta = OPENAI_COMPATIBLE_PROVIDERS[raw_provider]
+            return (
+                raw_provider,
+                str(meta.get("label") or raw_provider),
+                str(meta.get("base_url") or "") or None,
+            )
         return raw_provider or "anthropic", (raw_provider or "anthropic"), None
 
     @staticmethod
@@ -2296,6 +2305,54 @@ class InteractiveTerminal:
                     }
                 )
 
+        # Discover live catalogs for first-party proxy providers (OpenCode Go)
+        # when an API key is configured — same behavior as the Models dashboard.
+        if isinstance(cfg, Config):
+            from agent.config import OPENAI_COMPATIBLE_PROVIDERS
+            from agent.model_catalog import format_discovered_model_label
+            from agent.model_discovery import probe_compatible_profile
+
+            existing_ids = {
+                str(item.get("model_id") or "") for item in models_with_provider
+            }
+            for prov, meta in OPENAI_COMPATIBLE_PROVIDERS.items():
+                if str(meta.get("discover_models") or "").strip().lower() not in {
+                    "1",
+                    "true",
+                    "yes",
+                }:
+                    continue
+                api_key = cfg.llm_api_key(prov)
+                if not api_key:
+                    continue
+                base_url = str(meta.get("base_url") or "").strip()
+                if not base_url:
+                    continue
+                label = str(meta.get("label") or prov)
+                probe = probe_compatible_profile(
+                    base_url=base_url,
+                    backend="other",
+                    api_key=api_key,
+                )
+                discovered_models = list(probe.get("models") or [])
+                if not discovered_models:
+                    fallback = str(meta.get("default_model") or "").strip()
+                    if fallback:
+                        discovered_models = [fallback]
+                for model_id in discovered_models:
+                    if model_id in hidden_models or model_id in existing_ids:
+                        continue
+                    existing_ids.add(model_id)
+                    models_with_provider.append(
+                        {
+                            "provider": prov,
+                            "model_id": model_id,
+                            "display": format_discovered_model_label(model_id),
+                            "desc": f"{label} (discovered)",
+                            "profile_id": None,
+                        }
+                    )
+
         if isinstance(cfg, Config):
             compatible_profiles = cfg.openai_profiles(include_cloud=False)
             for profile_id, profile in sorted(
@@ -2339,7 +2396,7 @@ class InteractiveTerminal:
                 for discovered_model in discovered_models:
                     models_with_provider.append(
                         {
-                            "provider": "openai",
+                            "provider": "local",
                             "model_id": discovered_model,
                             "display": f"{profile_label}: {discovered_model}",
                             "desc": f"{backend} profile model",
@@ -2436,8 +2493,10 @@ class InteractiveTerminal:
         model_id = str(selected.get("model_id") or "")
         display = str(selected.get("display") or model_id)
         selected_profile_id = str(selected.get("profile_id") or "").strip() or None
+        # Catalog labels local profile models as "local"; runtime still uses openai.
+        runtime_provider = "openai" if selected_provider == "local" else selected_provider
 
-        same_model = model_id == current and str(provider).strip().lower() == selected_provider
+        same_model = model_id == current and str(provider).strip().lower() == runtime_provider
         same_profile = True
         if selected_profile_id and isinstance(cfg, Config):
             same_profile = selected_profile_id == (active_profile_id or "")
@@ -2445,8 +2504,8 @@ class InteractiveTerminal:
             self.console.print(f"  [dim]Already using {display}.[/dim]")
             return
 
-        self.session.set_model(model_id, provider=selected_provider)
-        if selected_provider == "openai":
+        self.session.set_model(model_id, provider=runtime_provider)
+        if runtime_provider == "openai":
             # Built-in OpenAI models should use the cloud profile by default.
             if isinstance(cfg, Config):
                 if selected_profile_id:

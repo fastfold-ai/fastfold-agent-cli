@@ -78,30 +78,55 @@ def build_chat_model(config, *, streaming: bool = True):
         base_url = config.llm_openai_base_url()
         if base_url:
             kwargs["base_url"] = base_url
-        # Use chat completions (not the Responses API) for broad OpenAI-compatible
-        # endpoint support (Ollama, LM Studio, vLLM, llama.cpp, ...).
-        kwargs["use_responses_api"] = False
+        # Default to chat completions for OpenAI-compatible local endpoints
+        # (Ollama, LM Studio, vLLM, ...). Codex models on OpenAI cloud only
+        # support the Responses API — enable it for those on managed hosts.
+        from agent.config import Config
+        from agent.model_catalog import openai_model_requires_responses_api
+
+        is_openai_cloud = (not base_url) or Config._is_openai_managed_base_url(base_url)
+        kwargs["use_responses_api"] = bool(
+            is_openai_cloud and openai_model_requires_responses_api(model)
+        )
         return init_chat_model(f"openai:{model}", **kwargs)
 
-    # First-party OpenAI-compatible providers (xAI, Google Gemini, NVIDIA) route
-    # through the OpenAI chat-completions client with a fixed base URL + key.
+    # First-party OpenAI-compatible providers (xAI, Google Gemini, NVIDIA,
+    # OpenCode Zen) route through a fixed base URL + key. OpenCode Zen routes
+    # GPT → Responses API, Claude/Qwen → Anthropic Messages, others → chat.
     from agent.config import OPENAI_COMPATIBLE_PROVIDERS
+    from agent.model_catalog import (
+        opencode_anthropic_base_url,
+        opencode_model_uses_anthropic,
+        opencode_model_uses_responses_api,
+    )
 
     base_url = config.llm_provider_base_url(provider)
     if base_url:
         meta = OPENAI_COMPATIBLE_PROVIDERS.get(provider, {})
         model = model or str(meta.get("default_model") or "")
-        kwargs = {"temperature": temperature}
         api_key = config.llm_api_key(provider)
+        if provider == "opencode" and opencode_model_uses_anthropic(model):
+            kwargs = {"temperature": temperature}
+            if api_key:
+                kwargs["api_key"] = api_key
+            kwargs["base_url"] = opencode_anthropic_base_url(base_url)
+            return init_chat_model(f"anthropic:{model}", **kwargs)
+        kwargs = {}
+        if not (
+            provider == "opencode" and str(model).strip().lower().startswith("gpt-")
+        ):
+            kwargs["temperature"] = temperature
         if api_key:
             kwargs["api_key"] = api_key
         kwargs["base_url"] = base_url
-        kwargs["use_responses_api"] = False
+        kwargs["use_responses_api"] = bool(
+            provider == "opencode" and opencode_model_uses_responses_api(model)
+        )
         return init_chat_model(f"openai:{model}", **kwargs)
 
     raise ValueError(
         f"deepagents runtime does not support llm.provider '{provider}'. "
-        "Use 'anthropic', 'openai', 'xai', 'google', or 'nvidia'."
+        "Use 'anthropic', 'openai', 'xai', 'google', 'nvidia', or 'opencode'."
     )
 
 

@@ -59,6 +59,7 @@ def test_agent_server_health_and_session_contract(tmp_path: Path):
             "modal",
             "langsmith",
             "nvidia",
+            "opencode",
             "tavily",
         }.issubset(
             integration_keys

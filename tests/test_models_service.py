@@ -222,6 +222,66 @@ def test_custom_cloud_models(isolated_config: Config):
     assert all(item.id != "gpt-custom-lab" for item in listed_after.data)
 
 
+def test_opencode_discovers_models_when_key_set(
+    isolated_config: Config, monkeypatch: pytest.MonkeyPatch
+):
+    from agent.config import Config as ConfigCls
+
+    cfg = ConfigCls.load()
+    cfg.set("llm.opencode_api_key", "oc-test-key")
+    cfg.save()
+
+    monkeypatch.setattr(
+        "agent_server.models_service.probe_compatible_profile",
+        lambda **_kwargs: {
+            "health": "ok",
+            "models": ["kimi-k2.7-code", "glm-5.2", "deepseek-v4-flash"],
+            "models_source": "v1_models",
+            "error": None,
+        },
+    )
+
+    service = ModelsService()
+    listed = service.list_models(discover=True)
+    opencode_ids = {
+        item.id for item in listed.data if item.provider == "opencode"
+    }
+    assert "kimi-k2.7-code" in opencode_ids
+    assert "glm-5.2" in opencode_ids
+    kimi = next(item for item in listed.data if item.id == "kimi-k2.7-code")
+    assert kimi.enabled is True
+    assert kimi.source == "cloud"
+    assert kimi.label == "Kimi K2.7 Code"
+
+    # No models when discover=False (static catalog has no opencode entries).
+    static = service.list_models(discover=False)
+    assert all(item.provider != "opencode" for item in static.data)
+
+
+def test_format_discovered_model_label():
+    from agent.model_catalog import (
+        format_discovered_model_label,
+        opencode_model_uses_anthropic,
+    )
+
+    assert format_discovered_model_label("kimi-k2.7-code") == "Kimi K2.7 Code"
+    assert format_discovered_model_label("deepseek-v4-flash") == "Deepseek V4 Flash"
+    assert opencode_model_uses_anthropic("claude-sonnet-5") is True
+    assert opencode_model_uses_anthropic("qwen3.7-plus") is True
+    assert opencode_model_uses_anthropic("minimax-m3") is False
+    assert opencode_model_uses_anthropic("kimi-k2.7-code") is False
+
+
+def test_openai_model_requires_responses_api():
+    from agent.model_catalog import openai_model_requires_responses_api
+
+    assert openai_model_requires_responses_api("gpt-5.3-codex") is True
+    assert openai_model_requires_responses_api("gpt-5.2-codex") is True
+    assert openai_model_requires_responses_api("gpt-5.1-codex-mini") is True
+    assert openai_model_requires_responses_api("gpt-5.5") is False
+    assert openai_model_requires_responses_api("gpt-4o") is False
+
+
 def test_custom_models_http_routes(isolated_config: Config, tmp_path: Path):
     app = create_app(store_path=tmp_path / "agent-custom.db", allowed_hosts=["testserver"])
     client = TestClient(app)

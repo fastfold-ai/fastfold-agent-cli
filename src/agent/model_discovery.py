@@ -8,6 +8,16 @@ import urllib.request
 from typing import Any
 from urllib.parse import urlparse
 
+# Cloudflare (and similar edges) block bare Python-urllib clients with Error 1010.
+# A browser-like User-Agent is required for OpenCode Zen/Go /v1/models.
+_DEFAULT_HEADERS = {
+    "Accept": "application/json",
+    "User-Agent": (
+        "Mozilla/5.0 (compatible; FastFoldAgent/1.0; "
+        "+https://github.com/fastfold-ai/fastfold-agent-cli)"
+    ),
+}
+
 
 def ollama_tags_url_from_base(base_url: str) -> str:
     parsed = urlparse(str(base_url or "").strip())
@@ -27,8 +37,8 @@ def openai_models_url_from_base(base_url: str) -> str:
     return parsed._replace(path=models_path, query="", fragment="").geturl()
 
 
-def _request_json(url: str, api_key: str | None, *, timeout: float = 4.0) -> tuple[Any | None, str | None]:
-    headers = {"Accept": "application/json"}
+def _request_json(url: str, api_key: str | None, *, timeout: float = 10.0) -> tuple[Any | None, str | None]:
+    headers = dict(_DEFAULT_HEADERS)
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     req = urllib.request.Request(url=url, headers=headers, method="GET")

@@ -30,7 +30,7 @@ AVAILABLE_MODELS: dict[str, list[tuple[str, str, str]]] = {
         ("gpt-5.6-sol", "GPT-5.6 Sol", "High-speed frontier model for coding"),
         ("gpt-5.6-terra", "GPT-5.6 Terra", "Balanced GPT-5.6 for general professional work"),
         ("gpt-5.5", "GPT-5.5", "Frontier model for coding and professional work"),
-        ("gpt-5.3-codex", "Codex 5.3", "Specialized OpenAI model for coding and agents"),
+        ("gpt-5.3-codex", "Codex 5.3", "Specialized OpenAI coding model (Responses API)"),
         # Legacy (disabled by default)
         ("gpt-5.5-pro", "GPT-5.5 Pro", "Smarter, more precise GPT-5.5 variant"),
         ("gpt-5.4", "GPT-5.4", "Previous-generation model for coding and professional work"),
@@ -84,6 +84,60 @@ CUSTOM_OPENAI_COMPATIBLE_ENTRY = (
     "OpenAI-compatible profiles",
     "Use, add, or edit Ollama/Unsloth/oMLX/custom OpenAI-compatible profiles",
 )
+
+# OpenCode Zen models that speak the Anthropic Messages API
+# (https://opencode.ai/zen/v1/messages). GPT models use Responses API;
+# open models (Kimi, GLM, DeepSeek, MiniMax, …) use chat completions.
+_OPENCODE_ANTHROPIC_PREFIXES = ("claude-", "qwen")
+
+
+def format_discovered_model_label(model_id: str) -> str:
+    """Turn a raw model id like ``kimi-k2.7-code`` into ``Kimi K2.7 Code``."""
+    raw = str(model_id or "").strip()
+    if not raw:
+        return raw
+    parts = raw.replace("_", "-").split("-")
+    out: list[str] = []
+    for part in parts:
+        if not part:
+            continue
+        # Keep version-like tokens readable (k2.7 -> K2.7, v4 -> V4).
+        out.append(part[:1].upper() + part[1:])
+    return " ".join(out) or raw
+
+
+def opencode_model_uses_anthropic(model_id: str) -> bool:
+    """Return True when an OpenCode Zen model must use the Anthropic Messages API."""
+    normalized = str(model_id or "").strip().lower()
+    return any(normalized.startswith(prefix) for prefix in _OPENCODE_ANTHROPIC_PREFIXES)
+
+
+def opencode_model_uses_responses_api(model_id: str) -> bool:
+    """Return True when an OpenCode Zen model must use OpenAI ``/v1/responses``."""
+    normalized = str(model_id or "").strip().lower()
+    return normalized.startswith("gpt-")
+
+
+def opencode_anthropic_base_url(openai_base_url: str) -> str:
+    """Convert OpenAI-compatible Zen base URL to Anthropic SDK base URL.
+
+    OpenAI SDK expects ``.../zen/v1`` (appends ``/chat/completions`` or ``/responses``).
+    Anthropic SDK expects ``.../zen`` (appends ``/v1/messages``).
+    """
+    base = str(openai_base_url or "").strip().rstrip("/")
+    if base.endswith("/v1"):
+        return base[:-3]
+    return base
+
+
+def openai_model_requires_responses_api(model_id: str) -> bool:
+    """Return True when an OpenAI cloud model only works on ``/v1/responses``.
+
+    Codex models (``gpt-*-codex``) reject ``/v1/chat/completions`` with a 404 and
+    must be routed through the Responses API.
+    """
+    value = str(model_id or "").strip().lower()
+    return value.startswith("gpt-") and "codex" in value
 
 
 def cloud_catalog_models() -> list[CatalogModel]:

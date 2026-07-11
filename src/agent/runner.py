@@ -681,11 +681,11 @@ class AgentRunner:
             self.session.config.get("llm.provider", "anthropic") or "anthropic"
         ).strip().lower()
 
-        if provider not in ("anthropic", "openai", "xai", "google", "nvidia"):
+        if provider not in ("anthropic", "openai", "xai", "google", "nvidia", "opencode"):
             return self._make_error_result(
                 query,
                 f"Unsupported llm.provider '{provider}'. Use 'anthropic', 'openai', "
-                "'xai', 'google', or 'nvidia' (OpenAI-compatible endpoints via "
+                "'xai', 'google', 'nvidia', or 'opencode' (OpenAI-compatible endpoints via "
                 "llm.openai_base_url).",
                 0.0,
             )

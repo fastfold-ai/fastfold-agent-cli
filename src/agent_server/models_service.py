@@ -4,8 +4,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from agent.config import OPENAI_PROFILE_BACKENDS, OPENAI_PROFILE_DEFAULTS, Config, _UNSET
-from agent.model_catalog import cloud_catalog_models
+from agent.config import (
+    OPENAI_COMPATIBLE_PROVIDERS,
+    OPENAI_PROFILE_BACKENDS,
+    OPENAI_PROFILE_DEFAULTS,
+    Config,
+    _UNSET,
+)
+from agent.model_catalog import cloud_catalog_models, format_discovered_model_label
 from agent.model_discovery import probe_compatible_profile
 from agent_server.models import (
     AgentModel,
@@ -38,9 +44,12 @@ class ModelsService:
         cfg = Config.load()
         hidden = set(cfg.hidden_models())
         items: list[AgentModel] = []
+        # Track static/custom ids so discovered entries don't duplicate them.
+        known_ids: set[str] = set()
 
         for entry in cloud_catalog_models():
             model_id = entry["id"]
+            known_ids.add(model_id)
             enabled = model_id not in hidden
             if enabled_only and not enabled:
                 continue
@@ -59,6 +68,7 @@ class ModelsService:
 
         for entry in cfg.custom_models():
             model_id = entry["id"]
+            known_ids.add(model_id)
             enabled = model_id not in hidden
             if enabled_only and not enabled:
                 continue
@@ -74,6 +84,55 @@ class ModelsService:
                     health=None,
                 )
             )
+
+        # First-party proxy providers (e.g. OpenCode Go) that advertise
+        # discover_models=true: fetch live catalog from /v1/models when a key
+        # is configured. Discovered models are enabled by default.
+        if discover:
+            for provider, meta in OPENAI_COMPATIBLE_PROVIDERS.items():
+                if str(meta.get("discover_models") or "").strip().lower() not in {
+                    "1",
+                    "true",
+                    "yes",
+                }:
+                    continue
+                api_key = cfg.llm_api_key(provider)
+                if not api_key:
+                    continue
+                base_url = str(meta.get("base_url") or "").strip()
+                if not base_url:
+                    continue
+                label = str(meta.get("label") or provider)
+                probe = probe_compatible_profile(
+                    base_url=base_url,
+                    backend="other",
+                    api_key=api_key,
+                )
+                discovered = list(probe.get("models") or [])
+                health = str(probe.get("health") or "") or None
+                if not discovered:
+                    fallback = str(meta.get("default_model") or "").strip()
+                    if fallback:
+                        discovered = [fallback]
+                for model_id in discovered:
+                    if model_id in known_ids:
+                        continue
+                    known_ids.add(model_id)
+                    enabled = model_id not in hidden
+                    if enabled_only and not enabled:
+                        continue
+                    items.append(
+                        AgentModel(
+                            id=model_id,
+                            label=format_discovered_model_label(model_id),
+                            description=f"{label} (discovered)",
+                            provider=provider,
+                            source="cloud",
+                            profile_id=None,
+                            enabled=enabled,
+                            health=health,
+                        )
+                    )
 
         for profile_id, profile in cfg.openai_profiles(include_cloud=False).items():
             label = str(profile.get("label") or profile_id)
@@ -103,7 +162,7 @@ class ModelsService:
                         id=model_id,
                         label=model_id,
                         description=f"{label} ({backend})",
-                        provider="openai",
+                        provider="local",
                         source="profile",
                         profile_id=profile_id,
                         enabled=enabled,
@@ -156,11 +215,32 @@ class ModelsService:
                 enabled=enabled,
                 health=None,
             )
+        # Discovered cloud proxy models (e.g. OpenCode Go) are not in the static
+        # catalog — attribute them to the discoverable provider that has a key.
+        for provider, meta in OPENAI_COMPATIBLE_PROVIDERS.items():
+            if str(meta.get("discover_models") or "").strip().lower() not in {
+                "1",
+                "true",
+                "yes",
+            }:
+                continue
+            if not cfg.llm_api_key(provider):
+                continue
+            return AgentModel(
+                id=target,
+                label=format_discovered_model_label(target),
+                description=f"{meta.get('label') or provider} (discovered)",
+                provider=provider,
+                source="cloud",
+                profile_id=None,
+                enabled=enabled,
+                health=None,
+            )
         return AgentModel(
             id=target,
             label=target,
             description=None,
-            provider="openai",
+            provider="local",
             source="profile",
             profile_id=None,
             enabled=enabled,

@@ -978,7 +978,14 @@ def _check_model_providers(cfg: Config) -> list[DoctorCheck]:
         try:
             resp = httpx.get(
                 url,
-                headers={"Accept": "application/json", **headers},
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": (
+                        "Mozilla/5.0 (compatible; FastFoldAgent/1.0; "
+                        "+https://github.com/fastfold-ai/fastfold-agent-cli)"
+                    ),
+                    **headers,
+                },
                 timeout=6,
                 follow_redirects=True,
             )

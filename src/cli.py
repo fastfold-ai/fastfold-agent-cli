@@ -87,6 +87,7 @@ SETUP_PROVIDER_ORDER = (
     "xai",
     "google",
     "nvidia",
+    "opencode",
     "openai_compatible",
 )
 UV_INSTALL_FLAVORS = frozenset({"all", "win_build"})
@@ -1291,7 +1292,7 @@ def setup_cmd(
         cli_key_for_provider = api_key
         if prov == "openai":
             cli_key_for_provider = openai_api_key
-        elif prov in ("xai", "google", "nvidia"):
+        elif prov in ("xai", "google", "nvidia", "opencode"):
             cli_key_for_provider = None
         elif prov == "openai_compatible":
             cli_key_for_provider = profile_key or openai_api_key
@@ -1405,21 +1406,26 @@ def setup_cmd(
                 cfg.set("llm.model", desired_model)
         elif prov == "anthropic":
             cfg.set("llm.anthropic_api_key", key)
-        elif prov in ("xai", "google", "nvidia"):
+        elif prov in ("xai", "google", "nvidia", "opencode"):
             from agent.config import OPENAI_COMPATIBLE_PROVIDERS
 
             cfg.set(OPENAI_COMPATIBLE_PROVIDERS[prov]["config_key"], key)
     active_setup_provider = default_provider if default_provider in selected_providers else selected_providers[0]
     cfg.set("llm.provider", _setup_provider_runtime_id(active_setup_provider))
     # Ensure a sensible default model when activating a first-party
-    # OpenAI-compatible provider (xAI / Google Gemini / NVIDIA).
+    # OpenAI-compatible provider (xAI / Google Gemini / NVIDIA / OpenCode Go).
     from agent.config import OPENAI_COMPATIBLE_PROVIDERS as _OCP
 
     if active_setup_provider in _OCP:
         meta = _OCP[active_setup_provider]
         current_model = str(cfg.get("llm.model") or "").strip().lower()
         default_model = str(meta.get("default_model") or "")
-        prefixes = {"xai": "grok", "google": "gemini", "nvidia": "nvidia/"}
+        prefixes = {
+            "xai": "grok",
+            "google": "gemini",
+            "nvidia": "nvidia/",
+            "opencode": "",
+        }
         prefix = prefixes.get(active_setup_provider, "")
         if default_model and (not prefix or not current_model.startswith(prefix)):
             cfg.set("llm.model", default_model)
@@ -1444,6 +1450,14 @@ def setup_cmd(
             if p == "openai"
             else "OpenAI-compatible"
             if p == "openai_compatible"
+            else "xAI"
+            if p == "xai"
+            else "Google Gemini"
+            if p == "google"
+            else "NVIDIA"
+            if p == "nvidia"
+            else "OpenCode Zen"
+            if p == "opencode"
             else "Anthropic"
         )
         for p in selected_providers
@@ -2307,6 +2321,10 @@ def _parse_provider_list(raw: str) -> list[str]:
         "gemini": "google",
         "nvidia": "nvidia",
         "nemotron": "nvidia",
+        "opencode": "opencode",
+        "opencode-go": "opencode",
+        "opencode_go": "opencode",
+        "go": "opencode",
         "openai_compatible": "openai_compatible",
         "openai-compatible": "openai_compatible",
         "compatible": "openai_compatible",
@@ -2334,6 +2352,7 @@ def _prompt_setup_providers(default_provider: str) -> list[str]:
         "xai": "xAI (Grok)",
         "google": "Google Gemini",
         "nvidia": "NVIDIA",
+        "opencode": "OpenCode Zen",
         "openai_compatible": "OpenAI-compatible custom endpoint",
     }
     _ = default_provider
@@ -2387,7 +2406,9 @@ def _prompt_setup_providers(default_provider: str) -> list[str]:
             # Fall back to text input when terminal capabilities are limited.
             pass
 
-    # Fallback selector for non-interactive or limited environments.
+    # Plain-text fallback for `fastfold setup` when the interactive checklist
+    # (questionary) cannot run — e.g. piped stdin, CI, or limited terminals.
+    # Users type provider names or short codes: "anthropic,xai" or "a,x".
     alias_map = {
         "a": "anthropic",
         "anthropic": "anthropic",
@@ -2402,6 +2423,10 @@ def _prompt_setup_providers(default_provider: str) -> list[str]:
         "n": "nvidia",
         "nvidia": "nvidia",
         "nemotron": "nvidia",
+        "oc": "opencode",
+        "opencode": "opencode",
+        "opencode-go": "opencode",
+        "go": "opencode",
         "k": "openai_compatible",
         "compatible": "openai_compatible",
         "openai-compatible": "openai_compatible",
@@ -2414,7 +2439,7 @@ def _prompt_setup_providers(default_provider: str) -> list[str]:
         console.print("  [cyan]Select provider(s) to configure[/cyan]")
         console.print(
             "  [dim]Options:[/dim] anthropic (a), openai (o), xai (x), google (g), "
-            "nvidia (n), openai_compatible (k), all"
+            "nvidia (n), opencode (oc), openai_compatible (k), all"
         )
         try:
             raw = input("  Providers: ").strip().lower()
@@ -2477,7 +2502,7 @@ def _resolve_provider_key(
         default_compat_key = "ollama" if (is_compat and backend == "ollama") else None
         if is_compat and not default_compat_key:
             prompt_fn = lambda: _prompt_openai_compatible_api_key(backend=backend)
-    elif provider in ("xai", "google", "nvidia"):
+    elif provider in ("xai", "google", "nvidia", "opencode"):
         from agent.config import OPENAI_COMPATIBLE_PROVIDERS
 
         meta = OPENAI_COMPATIBLE_PROVIDERS[provider]

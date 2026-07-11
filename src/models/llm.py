@@ -120,6 +120,7 @@ class LLMClient:
         "xai": "grok-4.5",
         "google": "gemini-3.5-flash",
         "nvidia": "nvidia/nemotron-3-ultra-550b-a55b",
+        "opencode": "kimi-k2.7-code",
     }
 
     # First-party OpenAI-compatible providers: fixed base URL + env fallback.
@@ -130,6 +131,7 @@ class LLMClient:
             "GEMINI_API_KEY",
         ),
         "nvidia": ("https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY"),
+        "opencode": ("https://opencode.ai/zen/v1", "OPENCODE_API_KEY"),
     }
 
     def __init__(self, provider: str = "anthropic", model: str = None,
