@@ -151,6 +151,7 @@ DEFAULTS = {
     "api.tavily_api_key": None,
     "api.langsmith_api_key": None,
     "api.langsmith_project": None,
+    "api.vercel_oidc_token": None,
     "compute.modal_token_id": None,
     "compute.modal_token_secret": None,
     "notification.slack_bot_token": None,
@@ -410,6 +411,14 @@ API_KEYS = {
         "url": "https://smith.langchain.com/settings",
         "free": True,
         "secret": False,
+    },
+    "api.vercel_oidc_token": {
+        "name": "Vercel OIDC Token",
+        "provider_key": "skills-sh",
+        "env_var": "VERCEL_OIDC_TOKEN",
+        "description": "skills.sh auth token provided by Vercel OIDC Federation",
+        "url": "https://vercel.com/dashboard",
+        "free": True,
     },
     "compute.modal_token_id": {
         "name": "Modal Token ID",

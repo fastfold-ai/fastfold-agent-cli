@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
+import tempfile
 import threading
+from pathlib import Path
 
-from agent.config import API_KEYS, Config
+from agent.config import API_KEYS, CONFIG_DIR, Config
 from agent_server.models import (
     IntegrationField,
     IntegrationProvider,
+    IntegrationSetupResponse,
+    IntegrationSetupStep,
     ValidateIntegrationResponse,
 )
 
@@ -56,7 +62,13 @@ PROVIDER_METADATA = {
         "category": "Automation",
         "description": "Completion event webhook URL and signing secret.",
     },
+    "skills-sh": {
+        "name": "Vercel",
+        "category": "Skills",
+        "description": "Vercel OIDC token for skills.sh catalog search.",
+    },
 }
+VERCEL_INTEGRATION_DIR = (CONFIG_DIR / "vercel-integration").expanduser()
 
 
 def category_for(config_key: str) -> str:
@@ -190,4 +202,222 @@ class IntegrationsService:
                 if provider.configured
                 else f"{provider.name} is not configured."
             ),
+        )
+
+    @staticmethod
+    def _extract_env_value(text: str, env_name: str) -> str:
+        for line in text.splitlines():
+            raw = line.strip()
+            if not raw or raw.startswith("#") or "=" not in raw:
+                continue
+            key, value = raw.split("=", 1)
+            if key.strip() != env_name:
+                continue
+            return value.strip().strip('"').strip("'")
+        return ""
+
+    @staticmethod
+    def _fetch_vercel_oidc_token_via_cli(cwd: Path) -> tuple[str, str]:
+        vercel_path = shutil.which("vercel")
+        if not vercel_path:
+            return "", "Vercel CLI is not installed."
+        with tempfile.TemporaryDirectory(prefix="fastfold-vercel-token-") as tmp:
+            env_file = Path(tmp) / ".env.local"
+            result = subprocess.run(
+                [
+                    vercel_path,
+                    "env",
+                    "pull",
+                    str(env_file),
+                    "--yes",
+                    "--environment=development",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=45,
+                cwd=str(cwd),
+            )
+            if result.returncode != 0:
+                stderr = str(result.stderr or "").strip()
+                stdout = str(result.stdout or "").strip()
+                detail = stderr or stdout or "vercel env pull failed."
+                return "", detail
+            try:
+                content = env_file.read_text(encoding="utf-8")
+            except OSError:
+                return "", "Unable to read pulled .env file."
+            token = IntegrationsService._extract_env_value(content, "VERCEL_OIDC_TOKEN")
+            if not token:
+                return "", "VERCEL_OIDC_TOKEN was not found in pulled env."
+            return token, ""
+
+    @staticmethod
+    def _vercel_workspace_dir() -> Path:
+        path = VERCEL_INTEGRATION_DIR.resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    def autofill(self, key: str) -> IntegrationProvider:
+        entries = self._providers.get(key)
+        if entries is None:
+            raise KeyError(key)
+        if key != "skills-sh":
+            raise ValueError("Auto-import is currently available only for Skills.sh.")
+        workspace_dir = self._vercel_workspace_dir()
+
+        token = str(os.environ.get("VERCEL_OIDC_TOKEN") or "").strip()
+        if not token:
+            token, _ = self._fetch_vercel_oidc_token_via_cli(workspace_dir)
+            token = token.strip()
+        if not token:
+            raise ValueError(
+                "Unable to auto-import Vercel OIDC token. Run:\n"
+                f'cd "{workspace_dir}"\n'
+                "vercel login\n"
+                "vercel link\n"
+                "vercel env pull .env.local --environment=development\n"
+                "(or set VERCEL_OIDC_TOKEN), then retry."
+            )
+
+        with self._lock:
+            config = Config.load()
+            config.set("api.vercel_oidc_token", token)
+            config.save()
+        return self._provider(key, entries)
+
+    def setup(self, key: str, _working_directory: str | None = None) -> IntegrationSetupResponse:
+        entries = self._providers.get(key)
+        if entries is None:
+            raise KeyError(key)
+        if key != "skills-sh":
+            raise ValueError("Setup wizard is currently available only for Vercel.")
+        project_dir = self._vercel_workspace_dir()
+        steps: list[IntegrationSetupStep] = []
+        steps.append(
+            IntegrationSetupStep(
+                id="workspace",
+                label="Prepare integration workspace",
+                ok=True,
+                detail=f"Using {project_dir} for Vercel linking and env pull.",
+            )
+        )
+
+        env_token = str(os.environ.get("VERCEL_OIDC_TOKEN") or "").strip()
+        if env_token:
+            steps.append(
+                IntegrationSetupStep(
+                    id="env-token",
+                    label="Check environment token",
+                    ok=True,
+                    detail="VERCEL_OIDC_TOKEN found in current server environment.",
+                )
+            )
+            with self._lock:
+                config = Config.load()
+                config.set("api.vercel_oidc_token", env_token)
+                config.save()
+            steps.append(
+                IntegrationSetupStep(
+                    id="save-token",
+                    label="Save token to /keys",
+                    ok=True,
+                    detail="Imported token into local FastFold config.",
+                )
+            )
+            return IntegrationSetupResponse(
+                ok=True,
+                integration_key=key,
+                summary="Vercel token imported from environment.",
+                steps=steps,
+            )
+
+        vercel_path = shutil.which("vercel")
+        cli_ok = bool(vercel_path)
+        steps.append(
+            IntegrationSetupStep(
+                id="cli",
+                label="Check Vercel CLI",
+                ok=cli_ok,
+                detail=(
+                    "Vercel CLI detected."
+                    if cli_ok
+                    else "Install Vercel CLI (`npm i -g vercel`)."
+                ),
+            )
+        )
+        if not cli_ok:
+            return IntegrationSetupResponse(
+                ok=False,
+                integration_key=key,
+                summary="Vercel CLI is not installed.",
+                steps=steps,
+            )
+
+        linked = (project_dir / ".vercel" / "project.json").is_file()
+        steps.append(
+            IntegrationSetupStep(
+                id="linked-project",
+                label="Check linked project",
+                ok=linked,
+                detail=(
+                    f"Linked Vercel project detected in {project_dir}."
+                    if linked
+                    else (
+                        f"No linked Vercel project in {project_dir}. Run:\n"
+                        f'cd "{project_dir}"\n'
+                        "vercel login\n"
+                        "vercel link"
+                    )
+                ),
+            )
+        )
+        if not linked:
+            return IntegrationSetupResponse(
+                ok=False,
+                integration_key=key,
+                summary="Project is not linked to Vercel.",
+                steps=steps,
+            )
+
+        token, pull_error = self._fetch_vercel_oidc_token_via_cli(project_dir)
+        pull_ok = bool(token)
+        steps.append(
+            IntegrationSetupStep(
+                id="env-pull",
+                label="Pull Vercel environment",
+                ok=pull_ok,
+                detail=(
+                    "Pulled Vercel environment and found VERCEL_OIDC_TOKEN."
+                    if pull_ok
+                    else pull_error
+                    or "Unable to pull environment or locate token."
+                ),
+            )
+        )
+        if not pull_ok:
+            return IntegrationSetupResponse(
+                ok=False,
+                integration_key=key,
+                summary="Could not fetch Vercel OIDC token.",
+                steps=steps,
+            )
+
+        with self._lock:
+            config = Config.load()
+            config.set("api.vercel_oidc_token", token)
+            config.save()
+        steps.append(
+            IntegrationSetupStep(
+                id="save-token",
+                label="Save token to /keys",
+                ok=True,
+                detail="Imported token into local FastFold config.",
+            )
+        )
+        return IntegrationSetupResponse(
+            ok=True,
+            integration_key=key,
+            summary="Vercel token imported successfully.",
+            steps=steps,
         )

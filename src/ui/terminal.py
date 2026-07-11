@@ -4974,8 +4974,13 @@ class InteractiveTerminal:
             )
             return
 
-        table = Table(title=f"Loaded Skills ({len(skills)})", show_lines=False)
+        enabled_count = len([info for info in skills if getattr(info, "enabled", True)])
+        table = Table(
+            title=f"Loaded Skills ({len(skills)} total, {enabled_count} enabled)",
+            show_lines=False,
+        )
         table.add_column("Skill", style="bold cyan", no_wrap=True)
+        table.add_column("Enabled", style="dim", no_wrap=True)
         table.add_column("Source", style="dim")
         table.add_column("Author", style="dim")
         table.add_column("Updated", style="dim")
@@ -4985,6 +4990,7 @@ class InteractiveTerminal:
         for info in skills:
             table.add_row(
                 info.name,
+                "yes" if getattr(info, "enabled", True) else "no",
                 info.source,
                 display_author(info),
                 display_updated(info),

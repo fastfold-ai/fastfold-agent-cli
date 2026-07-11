@@ -51,6 +51,7 @@ _DEFAULT_SYNC_WORKERS = 8
 GLOBAL_SKILLS_DIR = CONFIG_DIR / "skills"
 BUNDLED_SKILLS_DIR = Path(__file__).parent.parent / "skills"
 MANIFEST_FILENAME = ".installed.json"
+SKILL_STATE_FILENAME = "skills-state.json"
 
 # Fastfold-controlled directory for `npx skills add` installs. We pin the Skills
 # CLI's working directory to NPX_INSTALL_ROOT and target the `claude-code` agent in
@@ -115,6 +116,8 @@ class SkillInfo:
     author: str = ""  # org/owner derived from the install source
     updated_at: str = ""  # ISO timestamp the skill was installed/updated
     version: Optional[str] = None  # release tag (e.g. "v1.2.0") when known
+    icon: str = ""  # optional icon path/URL from SKILL.md frontmatter
+    enabled: bool = True
 
     @property
     def directory(self) -> Optional[Path]:
@@ -131,6 +134,7 @@ def parse_skill_md(skill_md: Path) -> SkillInfo:
     name = skill_md.parent.name
     description = ""
     tags: list[str] = []
+    icon = ""
 
     try:
         # Frontmatter lives at the top; avoid loading large SKILL.md bodies just
@@ -160,8 +164,16 @@ def parse_skill_md(skill_md: Path) -> SkillInfo:
         elif line.startswith("tags:"):
             raw = line.split(":", 1)[1].strip().strip("[]")
             tags = [t.strip().strip('"').strip("'") for t in raw.split(",") if t.strip()]
+        elif line.startswith("icon:"):
+            icon = line.split(":", 1)[1].strip().strip('"').strip("'")
 
-    return SkillInfo(name=name, description=description, tags=tags, path=skill_md)
+    return SkillInfo(
+        name=name,
+        description=description,
+        tags=tags,
+        path=skill_md,
+        icon=icon,
+    )
 
 
 # ─── Display helpers ───────────────────────────────────────────────────────
@@ -183,6 +195,55 @@ def _derive_author(source: str) -> str:
     if "/" in s:
         return s.split("/", 1)[0]
     return ""
+
+
+def _source_from_lock_meta(meta: dict) -> str:
+    source = str(meta.get("source") or "").strip()
+    if not source:
+        return ""
+    if "@" in source:
+        return source
+    source_type = str(meta.get("sourceType") or "").strip().lower()
+    skill_path = str(meta.get("skillPath") or "").strip().replace("\\", "/")
+    if source_type != "github" or not skill_path:
+        return source
+    if skill_path.lower().endswith("/skill.md"):
+        parent = skill_path[: -len("/SKILL.md")]
+    elif skill_path.lower() == "skill.md":
+        parent = ""
+    else:
+        parent = str(Path(skill_path).parent).replace("\\", "/")
+    parent = parent.strip("/")
+    return f"{source}@{parent}" if parent else source
+
+
+def _read_skills_lock(path: Path) -> dict[str, dict]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Could not read %s: %s", path, exc)
+        return {}
+    skills = data.get("skills")
+    if not isinstance(skills, dict):
+        return {}
+    result: dict[str, dict] = {}
+    for key, value in skills.items():
+        if isinstance(key, str) and isinstance(value, dict):
+            result[key] = value
+    return result
+
+
+def _npx_lock_sources() -> dict[str, str]:
+    """Map skill keys/names to install source from global skills-lock.json."""
+    lock_skills = _read_skills_lock(CONFIG_DIR / "skills-lock.json")
+    out: dict[str, str] = {}
+    for key, meta in lock_skills.items():
+        source = _source_from_lock_meta(meta)
+        if source:
+            out[key] = source
+    return out
 
 
 def display_author(info: SkillInfo) -> str:
@@ -218,6 +279,7 @@ def _scan_dir(base: Path, source: str) -> dict[str, SkillInfo]:
         return out
     manifest = _read_manifest(base)
     skills_meta = manifest.get("skills", {}) if isinstance(manifest, dict) else {}
+    npx_sources = _npx_lock_sources() if source == "npx" else {}
     for child in sorted(base.iterdir()):
         skill_md = child / "SKILL.md"
         if child.is_dir() and skill_md.exists():
@@ -225,10 +287,20 @@ def _scan_dir(base: Path, source: str) -> dict[str, SkillInfo]:
             info.source = source
             meta = skills_meta.get(child.name) or {}
             if isinstance(meta, dict):
-                info.author = _derive_author(str(meta.get("source") or ""))
+                install_source = str(meta.get("source") or "").strip()
+                if install_source:
+                    # Prefer the real source spec (owner/repo@path or URL) so
+                    # UI links and install commands can trace origin correctly.
+                    info.source = install_source
+                info.author = _derive_author(install_source)
                 info.updated_at = str(meta.get("installed_at") or "")
                 release = meta.get("release")
                 info.version = str(release) if release else None
+            if source == "npx" and info.source == "npx":
+                lock_source = npx_sources.get(child.name) or npx_sources.get(info.name)
+                if lock_source:
+                    info.source = lock_source
+                    info.author = _derive_author(lock_source)
             # Key by directory name (canonical identifier everywhere else).
             out[child.name] = info
     return out
@@ -241,24 +313,25 @@ def _scan_project(project_root: Path) -> dict[str, SkillInfo]:
     claude_dir = project_root / ".claude" / "skills"
     if not (lock_file.exists() and claude_dir.exists()):
         return out
-    try:
-        lock = json.loads(lock_file.read_text(encoding="utf-8"))
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("Could not read %s: %s", lock_file, exc)
-        return out
-    for name, meta in lock.get("skills", {}).items():
+    lock_skills = _read_skills_lock(lock_file)
+    for name, meta in lock_skills.items():
         skill_md = claude_dir / name / "SKILL.md"
         if skill_md.exists():
             info = parse_skill_md(skill_md)
-            label = "project"
-            if isinstance(meta, dict) and meta.get("source"):
-                label = f"project ({meta['source']})"
-            info.source = label
+            info.source = "project"
+            install_source = _source_from_lock_meta(meta)
+            if install_source:
+                info.source = install_source
+                info.author = _derive_author(install_source)
             out[name] = info
     return out
 
 
-def iter_skills(project_root: Optional[Path] = None) -> dict[str, SkillInfo]:
+def iter_skills(
+    project_root: Optional[Path] = None,
+    *,
+    enabled_only: bool = False,
+) -> dict[str, SkillInfo]:
     """Return merged skills keyed by directory name.
 
     Priority (high → low): global > project (lock-gated) > bundled.
@@ -271,15 +344,57 @@ def iter_skills(project_root: Optional[Path] = None) -> dict[str, SkillInfo]:
     merged.update(_scan_project(project_root))
     merged.update(_scan_dir(NPX_SKILLS_DIR, "npx"))
     merged.update(_scan_dir(GLOBAL_SKILLS_DIR, "global"))
+    disabled = _disabled_skill_names()
+    for name, info in merged.items():
+        info.enabled = name not in disabled
+    if enabled_only:
+        return {name: info for name, info in merged.items() if info.enabled}
     return merged
 
 
-def list_skills(project_root: Optional[Path] = None) -> list[SkillInfo]:
-    return [s for _, s in sorted(iter_skills(project_root).items())]
+def list_skills(
+    project_root: Optional[Path] = None,
+    *,
+    enabled_only: bool = False,
+) -> list[SkillInfo]:
+    return [
+        s for _, s in sorted(iter_skills(project_root, enabled_only=enabled_only).items())
+    ]
+
+
+def _normalize_skill_lookup(value: str) -> str:
+    return str(value or "").strip().lower().replace("_", "-")
+
+
+def _resolve_skill_key(name: str, skills: dict[str, SkillInfo]) -> Optional[str]:
+    # Exact directory key first.
+    if name in skills:
+        return name
+
+    lowered = str(name or "").strip().lower()
+    for key in skills:
+        if key.lower() == lowered:
+            return key
+
+    # Match SKILL.md frontmatter name (e.g. "find-skills").
+    for key, info in skills.items():
+        if str(getattr(info, "name", "")).strip().lower() == lowered:
+            return key
+
+    # Last resort: normalize "_" and "-" differences.
+    normalized = _normalize_skill_lookup(name)
+    for key, info in skills.items():
+        if _normalize_skill_lookup(key) == normalized:
+            return key
+        if _normalize_skill_lookup(getattr(info, "name", "")) == normalized:
+            return key
+    return None
 
 
 def skill_info(name: str, project_root: Optional[Path] = None) -> Optional[SkillInfo]:
-    return iter_skills(project_root).get(name)
+    skills = iter_skills(project_root)
+    key = _resolve_skill_key(name, skills)
+    return skills.get(key) if key is not None else None
 
 
 def installed_skill_names(project_root: Optional[Path] = None) -> list[str]:
@@ -542,7 +657,7 @@ def build_skills_prompt(
     2) Include full SKILL.md content only for request-relevant skills, capped by
        both skill count and character budget.
     """
-    skills = iter_skills(project_root)
+    skills = iter_skills(project_root, enabled_only=True)
     if not skills:
         return ""
 
@@ -750,6 +865,91 @@ def _write_manifest(dest: Path, manifest: dict) -> None:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     tmp.replace(path)
+
+
+def _skill_state_path() -> Path:
+    return CONFIG_DIR / SKILL_STATE_FILENAME
+
+
+def _read_skill_state() -> dict:
+    path = _skill_state_path()
+    if not path.exists():
+        return {"version": 1, "disabled": []}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {"version": 1, "disabled": []}
+    if not isinstance(data, dict):
+        return {"version": 1, "disabled": []}
+    disabled = data.get("disabled")
+    if not isinstance(disabled, list):
+        disabled = []
+    return {
+        "version": int(data.get("version") or 1),
+        "disabled": [str(name) for name in disabled if str(name).strip()],
+    }
+
+
+def _write_skill_state(state: dict) -> None:
+    path = _skill_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _disabled_skill_names() -> set[str]:
+    state = _read_skill_state()
+    return {name for name in state.get("disabled", []) if isinstance(name, str)}
+
+
+def _set_disabled_skill_names(names: set[str]) -> None:
+    _write_skill_state(
+        {
+            "version": 1,
+            "disabled": sorted(name for name in names if name.strip()),
+        }
+    )
+
+
+def set_skill_enabled(
+    name: str,
+    enabled: bool,
+    *,
+    project_root: Optional[Path] = None,
+) -> dict:
+    skills = iter_skills(project_root)
+    key = _resolve_skill_key(name, skills)
+    if key is None:
+        return {"ok": False, "summary": f"Skill '{name}' is not installed."}
+    disabled = _disabled_skill_names()
+    aliases = {key}
+    normalized = _normalize_skill_lookup(key)
+    for candidate_key, info in skills.items():
+        if _normalize_skill_lookup(candidate_key) == normalized:
+            aliases.add(candidate_key)
+        if _normalize_skill_lookup(getattr(info, "name", "")) == normalized:
+            aliases.add(candidate_key)
+    if enabled:
+        disabled -= aliases
+    else:
+        disabled |= aliases
+    _set_disabled_skill_names(disabled)
+    display_name = str(getattr(skills.get(key), "name", "") or key)
+    return {
+        "ok": True,
+        "summary": f"{'Enabled' if enabled else 'Disabled'} skill '{display_name}'.",
+    }
+
+
+def _clear_skill_enabled_state(names: set[str]) -> None:
+    if not names:
+        return
+    disabled = _disabled_skill_names()
+    if not (disabled & names):
+        return
+    disabled -= names
+    _set_disabled_skill_names(disabled)
 
 
 def _record_install(
@@ -1687,13 +1887,19 @@ def remove_all_skills(*, project_root: Optional[Path] = None) -> dict:
             logger.debug("Could not rewrite %s: %s", lock_file, exc)
 
     removed = sorted(set(removed))
+    _clear_skill_enabled_state(set(removed))
     return {"ok": True, "removed": removed, "summary": f"Removed {len(removed)} skill(s)."}
 
 
 def remove_skill(name: str, *, dest: Optional[Path] = None) -> dict:
     """Remove a globally-installed skill by name."""
     dest = dest or GLOBAL_SKILLS_DIR
-    target = dest / name
+    resolved_name = name
+    installed = _scan_dir(dest, "global")
+    key = _resolve_skill_key(name, installed)
+    if key is not None:
+        resolved_name = key
+    target = dest / resolved_name
     if not target.exists():
         return {"ok": False, "summary": f"Skill '{name}' is not installed in {dest}."}
     try:
@@ -1702,9 +1908,10 @@ def remove_skill(name: str, *, dest: Optional[Path] = None) -> dict:
         return {"ok": False, "summary": f"Could not remove '{name}': {exc}"}
 
     manifest = _read_manifest(dest)
-    if name in manifest.get("skills", {}):
-        del manifest["skills"][name]
+    if resolved_name in manifest.get("skills", {}):
+        del manifest["skills"][resolved_name]
         _write_manifest(dest, manifest)
+    _clear_skill_enabled_state({resolved_name, name})
     return {"ok": True, "summary": f"Removed skill '{name}'."}
 
 

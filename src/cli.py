@@ -3234,8 +3234,13 @@ def skill_list():
         console.print("[yellow]No skills loaded.[/yellow]")
         raise typer.Exit()
 
-    table = Table(title=f"Agent Skills ({len(skills)} loaded)", show_lines=False)
+    enabled_count = len([info for info in skills if getattr(info, "enabled", True)])
+    table = Table(
+        title=f"Agent Skills ({len(skills)} total, {enabled_count} enabled)",
+        show_lines=False,
+    )
     table.add_column("Skill", style="bold cyan", no_wrap=True)
+    table.add_column("Enabled", style="dim", no_wrap=True)
     table.add_column("Source", style="dim")
     table.add_column("Author", style="dim")
     table.add_column("Updated", style="dim")
@@ -3245,6 +3250,7 @@ def skill_list():
     for info in skills:
         table.add_row(
             info.name,
+            "yes" if getattr(info, "enabled", True) else "no",
             info.source,
             display_author(info),
             display_updated(info),
@@ -3253,6 +3259,36 @@ def skill_list():
         )
 
     console.print(table)
+
+
+@skill_app.command("enable")
+def skill_enable(
+    name: str = typer.Argument(..., help="Installed skill name to enable"),
+):
+    """Enable a skill without uninstalling it."""
+    from agent.skills import set_skill_enabled
+
+    result = set_skill_enabled(name, True)
+    if result.get("ok"):
+        console.print(f"  [green]{result['summary']}[/green]")
+    else:
+        console.print(f"  [yellow]{result['summary']}[/yellow]")
+        raise typer.Exit(code=1)
+
+
+@skill_app.command("disable")
+def skill_disable(
+    name: str = typer.Argument(..., help="Installed skill name to disable"),
+):
+    """Disable a skill without uninstalling it."""
+    from agent.skills import set_skill_enabled
+
+    result = set_skill_enabled(name, False)
+    if result.get("ok"):
+        console.print(f"  [green]{result['summary']}[/green]")
+    else:
+        console.print(f"  [yellow]{result['summary']}[/yellow]")
+        raise typer.Exit(code=1)
 
 
 @skill_app.command("add")
