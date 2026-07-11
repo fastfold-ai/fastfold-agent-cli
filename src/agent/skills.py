@@ -903,15 +903,41 @@ def _resolve_skill_dirs(root: Path, subpath: Optional[str]) -> list[Path]:
         return [base]
 
     # Otherwise treat children (depth 1) with SKILL.md as a pack.
-    found = [c for c in sorted(base.iterdir()) if c.is_dir() and (c / "SKILL.md").exists()]
-    if found:
-        return found
+    if base.exists() and base.is_dir():
+        found = [
+            c
+            for c in sorted(base.iterdir())
+            if c.is_dir() and (c / "SKILL.md").exists()
+        ]
+        if found:
+            return found
 
     # Monorepo convention: skills live under a 'skills/' folder
     # (e.g. fastfold-ai/skills with skills/<name>/SKILL.md). Mirrors discover_skills().
     skills_dir = base / "skills"
     if skills_dir.exists():
-        return [c for c in sorted(skills_dir.iterdir()) if c.is_dir() and (c / "SKILL.md").exists()]
+        found = [
+            c
+            for c in sorted(skills_dir.iterdir())
+            if c.is_dir() and (c / "SKILL.md").exists()
+        ]
+        if found:
+            return found
+
+    # Skills.sh / curated layouts may nest skills (e.g. skills/.curated/<name>).
+    # When a specific subpath was requested, search by the final folder name.
+    if subpath:
+        wanted = _normalize_skill_lookup(Path(subpath).name)
+        if wanted:
+            matches: list[Path] = []
+            for skill_md in root.rglob("SKILL.md"):
+                parent = skill_md.parent
+                if _normalize_skill_lookup(parent.name) == wanted:
+                    matches.append(parent)
+            if matches:
+                # Prefer shallower paths when multiple matches exist.
+                matches.sort(key=lambda path: (len(path.parts), str(path)))
+                return [matches[0]]
     return []
 
 
@@ -1335,7 +1361,15 @@ def _install_from_repo_tree(
 ) -> dict:
     skill_dirs = _resolve_skill_dirs(repo_root, subpath)
     if not skill_dirs:
-        return {"ok": False, "summary": f"No SKILL.md found in {source}.", "via": via}
+        return {
+            "ok": False,
+            "summary": (
+                f"No SKILL.md found in {source}. "
+                "This skill may have been removed or moved in the source repository "
+                "or Skills.sh listing."
+            ),
+            "via": via,
+        }
     installed = _copy_skill_dirs(skill_dirs, dest, source, commit, release_tag)
     return {
         "ok": True,

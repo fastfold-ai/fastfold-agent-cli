@@ -101,6 +101,14 @@ def test_resolve_skill_dirs_subpath(tmp_path):
     assert [d.name for d in dirs] == ["fold"]
 
 
+def test_resolve_skill_dirs_nested_curated_by_name(tmp_path):
+    repo = tmp_path / "repo"
+    _write_skill(repo / "skills" / ".curated", "linear")
+    dirs = skills_mod._resolve_skill_dirs(repo, "skills/linear")
+    assert [d.name for d in dirs] == ["linear"]
+    assert dirs[0].parent.name == ".curated"
+
+
 # ─── Frontmatter parsing ───────────────────────────────────────────────────
 def test_parse_skill_md_reads_name_description_tags(tmp_path):
     d = _write_skill(tmp_path, "my-skill", "Does a thing", "a, b")
