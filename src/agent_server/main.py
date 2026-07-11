@@ -18,6 +18,20 @@ def run_server(
 ) -> None:
     import uvicorn
 
+    log_config = None
+    try:
+        from agent.diagnostics import ensure_logging_configured, uvicorn_log_config
+
+        log_path = ensure_logging_configured()
+        # Drop prior httpx-probe spam from early diagnostics logging.
+        try:
+            log_path.write_text("", encoding="utf-8")
+        except OSError:
+            pass
+        log_config = uvicorn_log_config(log_path)
+    except Exception:
+        pass
+
     origins = [value.strip().rstrip("/") for value in (allowed_origins or []) if value.strip()]
     hosts = [value.strip() for value in (allowed_hosts or []) if value.strip()]
     key = (api_key or "").strip() or None
@@ -52,16 +66,20 @@ def run_server(
         allowed_hosts=hosts,
     )
 
+    run_kwargs = {"log_level": "info"}
+    if log_config is not None:
+        run_kwargs["log_config"] = log_config
+
     if uds is not None:
         socket_path = uds.expanduser().resolve()
         socket_path.parent.mkdir(parents=True, exist_ok=True)
         socket_path.unlink(missing_ok=True)
         previous_umask = os.umask(0o077)
         try:
-            uvicorn.run(app, uds=str(socket_path), log_level="info")
+            uvicorn.run(app, uds=str(socket_path), **run_kwargs)
         finally:
             os.umask(previous_umask)
             socket_path.unlink(missing_ok=True)
         return
 
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    uvicorn.run(app, host=host, port=port, **run_kwargs)

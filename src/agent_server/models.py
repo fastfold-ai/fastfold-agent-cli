@@ -385,6 +385,172 @@ class UpdateRuntimeSettingsRequest(ApiModel):
     tool_mode: str | None = None
 
 
+class AccountUser(ApiModel):
+    id: str | None = None
+    email: str | None = None
+    username: str | None = None
+    plan_code: str | None = None
+    plan_label: str | None = None
+
+
+class AccountOrganization(ApiModel):
+    id: str | None = None
+    name: str | None = None
+    team_id: str | None = None
+
+
+class AccountAbout(ApiModel):
+    product: str = "FastFold Agent"
+    version: str
+    channel: str = "default"
+    latest_version: str | None = None
+    up_to_date: bool | None = None
+    licenses_url: str | None = None
+
+
+class AccountSummary(ApiModel):
+    configured: bool = False
+    user: AccountUser | None = None
+    organization: AccountOrganization | None = None
+    billing_url: str | None = None
+    about: AccountAbout
+
+
+class AgentModel(ApiModel):
+    id: str
+    label: str
+    description: str | None = None
+    provider: str
+    source: Literal["cloud", "profile", "custom"]
+    profile_id: str | None = None
+    enabled: bool = True
+    health: str | None = None
+
+
+class AgentModelList(ApiModel):
+    data: list[AgentModel] = Field(default_factory=list)
+    count: int = 0
+
+
+class DatasetSummary(ApiModel):
+    id: str
+    description: str
+    status: Literal["complete", "partial", "missing", "on-demand"]
+    files_found: int = 0
+    files_expected: int = 0
+    size_bytes: int | None = None
+    size_display: str = "-"
+    auto_download: bool = False
+    path: str
+    source: str | None = None
+    note: str | None = None
+
+
+class DatasetList(ApiModel):
+    data: list[DatasetSummary] = Field(default_factory=list)
+    count: int = 0
+
+
+class DatasetInstallResponse(ApiModel):
+    ok: bool
+    id: str
+    status: str
+    summary: str
+    dataset: DatasetSummary | None = None
+
+
+class ToolSummary(ApiModel):
+    id: str
+    name: str
+    category: str
+    status: Literal["stable", "experimental", "guarded"]
+    description: str
+    requires_data: list[str] = Field(default_factory=list)
+    enabled: bool = True
+
+
+class ToolList(ApiModel):
+    data: list[ToolSummary] = Field(default_factory=list)
+    count: int = 0
+    categories: list[str] = Field(default_factory=list)
+    load_errors: dict[str, str] = Field(default_factory=dict)
+
+
+class UpdateToolRequest(ApiModel):
+    enabled: bool | None = None
+
+
+ToolBatchAction = Literal["enable", "disable"]
+
+
+class ToolBatchActionRequest(ApiModel):
+    action: ToolBatchAction
+    ids: list[str] = Field(default_factory=list)
+
+
+class ToolBatchActionResponse(ApiModel):
+    ok: bool
+    action: ToolBatchAction
+    requested: int
+    succeeded: list[str] = Field(default_factory=list)
+    failed: list[str] = Field(default_factory=list)
+    summary: str
+
+
+class CreateAgentModelRequest(ApiModel):
+    id: str
+    provider: str = "openai"
+    label: str | None = None
+
+
+class UpdateAgentModelRequest(ApiModel):
+    enabled: bool | None = None
+
+
+class ModelProfile(ApiModel):
+    id: str
+    label: str
+    backend: str
+    base_url: str | None = None
+    default_model: str | None = None
+    discovery: list[str] = Field(default_factory=list)
+    has_api_key: bool = False
+    api_key_preview: str | None = None
+    is_cloud: bool = False
+    is_active: bool = False
+    is_default: bool = False
+
+
+class ModelProfileList(ApiModel):
+    data: list[ModelProfile] = Field(default_factory=list)
+    count: int = 0
+
+
+class UpsertModelProfileRequest(ApiModel):
+    id: str | None = None
+    label: str | None = None
+    backend: str | None = None
+    base_url: str | None = None
+    api_key: str | None = None
+    default_model: str | None = None
+    discovery: list[str] | None = None
+    set_active: bool = False
+    set_default: bool = False
+
+
+class ModelProfileProbeResult(ApiModel):
+    profile_id: str
+    health: str
+    models: list[str] = Field(default_factory=list)
+    models_source: str | None = None
+    error: str | None = None
+
+
+class DeleteModelProfileResponse(ApiModel):
+    ok: bool
+    id: str
+
+
 class McpServer(ApiModel):
     id: str
     name: str
@@ -452,3 +618,29 @@ class UpdatePtyRequest(ApiModel):
     title: str | None = None
     cols: int | None = Field(default=None, ge=1, le=500)
     rows: int | None = Field(default=None, ge=1, le=200)
+
+
+class DoctorCheckResult(ApiModel):
+    name: str
+    status: Literal["ok", "warn", "error"]
+    detail: str
+    category: str = "general"
+    fix: str | None = None
+
+
+class DoctorSummary(ApiModel):
+    ok: int = 0
+    warn: int = 0
+    error: int = 0
+    total: int = 0
+
+
+class DoctorReport(ApiModel):
+    ok: bool
+    checked_at: str
+    summary: DoctorSummary
+    checks: list[DoctorCheckResult] = Field(default_factory=list)
+
+
+class DoctorDiagnosticsRequest(ApiModel):
+    ui_diagnostics: dict[str, Any] | None = None

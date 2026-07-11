@@ -117,6 +117,19 @@ class LLMClient:
     DEFAULT_MODELS = {
         "anthropic": "claude-sonnet-4-5-20250929",
         "openai": "gpt-4o",
+        "xai": "grok-4.5",
+        "google": "gemini-3.5-flash",
+        "nvidia": "nvidia/nemotron-3-ultra-550b-a55b",
+    }
+
+    # First-party OpenAI-compatible providers: fixed base URL + env fallback.
+    OPENAI_COMPATIBLE_BASE_URLS = {
+        "xai": ("https://api.x.ai/v1", "XAI_API_KEY"),
+        "google": (
+            "https://generativelanguage.googleapis.com/v1beta/openai/",
+            "GEMINI_API_KEY",
+        ),
+        "nvidia": ("https://integrate.api.nvidia.com/v1", "NVIDIA_API_KEY"),
     }
 
     def __init__(self, provider: str = "anthropic", model: str = None,
@@ -151,6 +164,14 @@ class LLMClient:
                 client_kwargs["base_url"] = self.base_url
             self._client = openai.OpenAI(**client_kwargs)
 
+        elif self.provider in self.OPENAI_COMPATIBLE_BASE_URLS:
+            import openai
+            default_base_url, env_var = self.OPENAI_COMPATIBLE_BASE_URLS[self.provider]
+            self._client = openai.OpenAI(
+                api_key=self.api_key or os.environ.get(env_var),
+                base_url=self.base_url or default_base_url,
+            )
+
         else:
             raise ValueError(f"Unknown provider: {self.provider}")
 
@@ -169,7 +190,7 @@ class LLMClient:
 
         if self.provider == "anthropic":
             resp = self._chat_anthropic(client, system, messages, temperature, max_tokens, tools=tools)
-        elif self.provider == "openai":
+        elif self.provider == "openai" or self.provider in self.OPENAI_COMPATIBLE_BASE_URLS:
             resp = self._chat_openai(client, system, messages, temperature, max_tokens)
         else:
             raise ValueError(f"Unknown provider: {self.provider}")
@@ -199,7 +220,7 @@ class LLMClient:
 
         if self.provider == "anthropic":
             yield from self._stream_anthropic(client, system, messages, temperature, max_tokens)
-        elif self.provider == "openai":
+        elif self.provider == "openai" or self.provider in self.OPENAI_COMPATIBLE_BASE_URLS:
             yield from self._stream_openai(client, system, messages, temperature, max_tokens)
         else:
             # Fallback: non-streaming providers just yield the full response

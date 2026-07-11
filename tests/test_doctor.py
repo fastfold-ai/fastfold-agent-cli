@@ -263,3 +263,56 @@ class TestPreflightValidationConfig:
         ]):
             checks = _checks_by_name(run_checks(cfg))
         assert checks["preflight_validation"].status == "warn"
+
+
+def test_doctor_includes_tooling_skills_and_environment_checks(monkeypatch):
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.delenv("FASTFOLD_API_KEY", raising=False)
+    cfg = Config(
+        data={
+            "llm.provider": "anthropic",
+            "llm.anthropic_api_key": "sk-ant-test",
+        }
+    )
+    with patch("agent.doctor._check_api_connectivity", return_value=[]):
+        checks = _checks_by_name(run_checks(cfg))
+    assert checks["python_runtime"].status in {"ok", "warn", "error"}
+    assert checks["npx"].name == "npx"
+    assert checks["git"].name == "git"
+    assert checks["skills_loaded"].name == "skills_loaded"
+    assert checks["environment"].status == "ok"
+    assert "configured" in checks["environment"].detail
+    assert checks["llm_env"].status == "ok"
+    assert checks["fastfold_api_key"].status == "warn"
+    assert checks["skills_loaded"].category == "skills"
+
+
+def test_doctor_respects_config_keys_not_just_env(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("FASTFOLD_API_KEY", raising=False)
+    cfg = Config(
+        data={
+            "llm.provider": "openai",
+            "llm.openai_api_key": "sk-proj-test-key-1234567890",
+            "api.fastfold_cloud_key": "sk-fdg-test",
+        }
+    )
+    with patch("agent.doctor._check_api_connectivity", return_value=[]):
+        checks = _checks_by_name(run_checks(cfg))
+    assert checks["llm_env"].status == "ok"
+    assert checks["fastfold_api_key"].status == "ok"
+    assert checks["environment"].status == "ok"
+
+
+def test_to_report_summary_counts():
+    from agent.doctor import to_report
+
+    checks = [
+        DoctorCheck(name="a", status="ok", detail="ok", category="runtime"),
+        DoctorCheck(name="b", status="warn", detail="warn", category="tooling"),
+        DoctorCheck(name="c", status="error", detail="error", category="llm"),
+    ]
+    report = to_report(checks)
+    assert report["ok"] is False
+    assert report["summary"] == {"ok": 1, "warn": 1, "error": 1, "total": 3}
+    assert report["checks"][0]["category"] == "runtime"

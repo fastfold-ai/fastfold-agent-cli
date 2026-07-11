@@ -82,28 +82,9 @@ SLASH_COMMANDS = {
 }
 
 # Models available for switching, grouped by provider
-AVAILABLE_MODELS = {
-    "anthropic": [
-        ("claude-sonnet-4-5-20250929", "Sonnet 4.5", "Fast, strong default for most queries"),
-        ("claude-haiku-4-5-20251001", "Haiku 4.5", "Fastest Anthropic option for lightweight tasks"),
-        ("claude-opus-4-6", "Opus 4.6", "Most capable Anthropic option for complex reasoning"),
-    ],
-    "openai": [
-        ("gpt-5.5", "GPT-5.5", "Frontier model for coding and professional work"),
-        ("gpt-5.5-pro", "GPT-5.5 Pro", "Smarter, more precise GPT-5.5 variant"),
-        ("gpt-5.4", "GPT-5.4", "More affordable model for coding and professional work"),
-        ("gpt-5.4-pro", "GPT-5.4 Pro", "Smarter, more precise GPT-5.4 variant"),
-        ("gpt-5.4-mini", "GPT-5.4 Mini", "Strong mini model for coding, computer use, and subagents"),
-        ("gpt-5.4-nano", "GPT-5.4 Nano", "Cheapest GPT-5.4-class model for high-volume simple tasks"),
-        ("gpt-5-mini", "GPT-5 Mini", "Near-frontier model for cost-sensitive low-latency workloads"),
-        ("gpt-5-nano", "GPT-5 Nano", "Cheapest GPT-5-class model for simple high-volume tasks"),
-        (
-            "__custom_openai_compatible__",
-            "OpenAI-compatible profiles",
-            "Use, add, or edit Ollama/Unsloth/oMLX/custom OpenAI-compatible profiles",
-        ),
-    ],
-}
+from agent.model_catalog import terminal_available_models
+
+AVAILABLE_MODELS = terminal_available_models()
 
 from ui.suggestions import DEFAULT_SUGGESTIONS
 
@@ -1800,11 +1781,13 @@ class InteractiveTerminal:
                 self._advance_suggestion()
                 continue
             if cmd in ("doctor", "/doctor"):
-                from agent.doctor import has_errors, run_checks, to_table
+                from agent.doctor import has_errors, has_warnings, run_checks, to_table
                 checks = run_checks(self.session.config, session=self.session)
                 self.console.print(to_table(checks))
                 if has_errors(checks):
                     self.console.print("  [red]Blocking issues found.[/red]")
+                elif has_warnings(checks):
+                    self.console.print("  [yellow]No blocking errors; warnings remain.[/yellow]")
                 else:
                     self.console.print("  [green]No blocking issues found.[/green]")
                 self._advance_suggestion()
@@ -1974,6 +1957,31 @@ class InteractiveTerminal:
             return True
 
         provider = str(self.session.config.get("llm.provider", "anthropic") or "anthropic").strip().lower()
+
+        from agent.config import OPENAI_COMPATIBLE_PROVIDERS
+
+        if provider in OPENAI_COMPATIBLE_PROVIDERS:
+            meta = OPENAI_COMPATIBLE_PROVIDERS[provider]
+            label = meta["label"]
+            self.console.print(f"  [yellow]{issue}[/yellow]")
+            self.console.print(
+                f"  [dim]Set {meta['env_var']} or enter it now to continue.[/dim]"
+            )
+            try:
+                api_key = self._secret_prompt_session.prompt(
+                    [("class:prompt", f"  Enter {label} API key (or press Enter to cancel): ")],
+                    is_password=True,
+                ).strip()
+            except (EOFError, KeyboardInterrupt):
+                self.console.print("  [dim]Cancelled.[/dim]")
+                return False
+            if not api_key:
+                self.console.print("  [dim]Cancelled.[/dim]")
+                return False
+            self.session.config.set(meta["config_key"], api_key)
+            self.session.config.save()
+            return self.session.config.llm_preflight_issue() is None
+
         if provider not in {"anthropic", "openai"}:
             self.console.print(f"  [red]{issue}[/red]")
             return False
@@ -2259,12 +2267,24 @@ class InteractiveTerminal:
         from agent.config import Config
 
         provider, provider_label, provider_endpoint = self._current_provider_status()
+        cfg = self.session.config
+        # Match the web UI: only show models enabled in Dashboard → Models
+        # (hidden ones are managed there and re-enabled from the same place).
+        hidden_models: set[str] = set()
+        if isinstance(cfg, Config):
+            try:
+                hidden_models = set(cfg.hidden_models())
+            except Exception:
+                hidden_models = set()
+
         models_with_provider: list[dict[str, str | None]] = []
         profile_discovery_warnings: list[str] = []
         for prov, models in AVAILABLE_MODELS.items():
             for model_id, display, desc in models:
                 if model_id == "__custom_openai_compatible__":
                     # Profile management moved to /model-manager.
+                    continue
+                if model_id in hidden_models:
                     continue
                 models_with_provider.append(
                     {
@@ -2276,7 +2296,6 @@ class InteractiveTerminal:
                     }
                 )
 
-        cfg = self.session.config
         if isinstance(cfg, Config):
             compatible_profiles = cfg.openai_profiles(include_cloud=False)
             for profile_id, profile in sorted(

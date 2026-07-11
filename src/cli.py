@@ -81,7 +81,14 @@ FASTFOLD_CLOUD_API_KEYS_URL = "https://cloud.fastfold.ai/api-keys"
 BOLTZ_API_KEYS_URL = "https://api.boltz.bio/console"
 BOLTZ_SKILL_SOURCE = "fastfold-ai/skills@skills/boltz"
 BOLTZ_INSTALL_SCRIPT = "set -euo pipefail; curl -fsSL https://install.boltz.bio/boltz-api/install.sh | sh"
-SETUP_PROVIDER_ORDER = ("anthropic", "openai", "openai_compatible")
+SETUP_PROVIDER_ORDER = (
+    "anthropic",
+    "openai",
+    "xai",
+    "google",
+    "nvidia",
+    "openai_compatible",
+)
 UV_INSTALL_FLAVORS = frozenset({"all", "win_build"})
 UV_UPGRADE_PYTHON_VERSION = "3.11"
 PYPI_PROJECT_JSON_URL = "https://pypi.org/pypi/fastfold-agent-cli/json"
@@ -1284,6 +1291,8 @@ def setup_cmd(
         cli_key_for_provider = api_key
         if prov == "openai":
             cli_key_for_provider = openai_api_key
+        elif prov in ("xai", "google", "nvidia"):
+            cli_key_for_provider = None
         elif prov == "openai_compatible":
             cli_key_for_provider = profile_key or openai_api_key
             if not cli_key_for_provider and selected_compatible_profile:
@@ -1396,8 +1405,24 @@ def setup_cmd(
                 cfg.set("llm.model", desired_model)
         elif prov == "anthropic":
             cfg.set("llm.anthropic_api_key", key)
+        elif prov in ("xai", "google", "nvidia"):
+            from agent.config import OPENAI_COMPATIBLE_PROVIDERS
+
+            cfg.set(OPENAI_COMPATIBLE_PROVIDERS[prov]["config_key"], key)
     active_setup_provider = default_provider if default_provider in selected_providers else selected_providers[0]
     cfg.set("llm.provider", _setup_provider_runtime_id(active_setup_provider))
+    # Ensure a sensible default model when activating a first-party
+    # OpenAI-compatible provider (xAI / Google Gemini / NVIDIA).
+    from agent.config import OPENAI_COMPATIBLE_PROVIDERS as _OCP
+
+    if active_setup_provider in _OCP:
+        meta = _OCP[active_setup_provider]
+        current_model = str(cfg.get("llm.model") or "").strip().lower()
+        default_model = str(meta.get("default_model") or "")
+        prefixes = {"xai": "grok", "google": "gemini", "nvidia": "nvidia/"}
+        prefix = prefixes.get(active_setup_provider, "")
+        if default_model and (not prefix or not current_model.startswith(prefix)):
+            cfg.set("llm.model", default_model)
     if active_setup_provider == "openai":
         if "openai_compatible" in selected_providers and resolved_compatible_profile_id:
             cfg.set_openai_active_profile(resolved_compatible_profile_id)
@@ -1488,6 +1513,18 @@ def _prompt_api_key() -> str:
     console.print()
     try:
         key = _prompt_masked_secret("  Enter your Anthropic API key: ")
+    except (EOFError, KeyboardInterrupt):
+        console.print("\n  [dim]Setup cancelled.[/dim]")
+        raise typer.Exit()
+    return key.strip()
+
+
+def _prompt_provider_api_key(label: str, signup_url: str) -> str:
+    """Prompt for a first-party provider API key (xAI / Google Gemini)."""
+    console.print(f"  Get your key at: [link={signup_url}]{signup_url}[/link]")
+    console.print()
+    try:
+        key = _prompt_masked_secret(f"  Enter your {label} API key: ")
     except (EOFError, KeyboardInterrupt):
         console.print("\n  [dim]Setup cancelled.[/dim]")
         raise typer.Exit()
@@ -2264,6 +2301,12 @@ def _parse_provider_list(raw: str) -> list[str]:
     alias_map = {
         "anthropic": "anthropic",
         "openai": "openai",
+        "xai": "xai",
+        "grok": "xai",
+        "google": "google",
+        "gemini": "google",
+        "nvidia": "nvidia",
+        "nemotron": "nvidia",
         "openai_compatible": "openai_compatible",
         "openai-compatible": "openai_compatible",
         "compatible": "openai_compatible",
@@ -2288,6 +2331,9 @@ def _prompt_setup_providers(default_provider: str) -> list[str]:
     labels = {
         "anthropic": "Anthropic",
         "openai": "OpenAI",
+        "xai": "xAI (Grok)",
+        "google": "Google Gemini",
+        "nvidia": "NVIDIA",
         "openai_compatible": "OpenAI-compatible custom endpoint",
     }
     _ = default_provider
@@ -2347,6 +2393,15 @@ def _prompt_setup_providers(default_provider: str) -> list[str]:
         "anthropic": "anthropic",
         "o": "openai",
         "openai": "openai",
+        "x": "xai",
+        "xai": "xai",
+        "grok": "xai",
+        "g": "google",
+        "google": "google",
+        "gemini": "google",
+        "n": "nvidia",
+        "nvidia": "nvidia",
+        "nemotron": "nvidia",
         "k": "openai_compatible",
         "compatible": "openai_compatible",
         "openai-compatible": "openai_compatible",
@@ -2358,7 +2413,8 @@ def _prompt_setup_providers(default_provider: str) -> list[str]:
     while True:
         console.print("  [cyan]Select provider(s) to configure[/cyan]")
         console.print(
-            "  [dim]Options:[/dim] anthropic (a), openai (o), openai_compatible (k), all"
+            "  [dim]Options:[/dim] anthropic (a), openai (o), xai (x), google (g), "
+            "nvidia (n), openai_compatible (k), all"
         )
         try:
             raw = input("  Providers: ").strip().lower()
@@ -2421,6 +2477,17 @@ def _resolve_provider_key(
         default_compat_key = "ollama" if (is_compat and backend == "ollama") else None
         if is_compat and not default_compat_key:
             prompt_fn = lambda: _prompt_openai_compatible_api_key(backend=backend)
+    elif provider in ("xai", "google", "nvidia"):
+        from agent.config import OPENAI_COMPATIBLE_PROVIDERS
+
+        meta = OPENAI_COMPATIBLE_PROVIDERS[provider]
+        existing_key = cfg.llm_api_key(provider)
+        env_var_name = meta["env_var"]
+        label = meta["label"]
+        config_key = meta["config_key"]
+        signup_url = meta["signup_url"]
+        prompt_fn = lambda: _prompt_provider_api_key(label, signup_url)
+        default_compat_key = None
     else:
         existing_key = cfg.llm_api_key("anthropic")
         env_var_name = "ANTHROPIC_API_KEY"
@@ -3130,22 +3197,57 @@ def _prompt_install_datasets(datasets_arg: Optional[str] = None, skip: bool = Fa
 
 
 @app.command("doctor")
-def doctor_cmd():
+def doctor_cmd(
+    json_output: bool = typer.Option(
+        False,
+        "--json",
+        help="Emit machine-readable JSON instead of a table",
+    ),
+    export: Optional[Path] = typer.Option(
+        None,
+        "--export",
+        help="Write a diagnostics zip (system info, doctor report, redacted config, logs)",
+    ),
+):
     """Run environment and configuration health checks."""
     from agent.config import Config
-    from agent.doctor import run_checks, to_table, has_errors
+    from agent.doctor import run_checks, to_table, to_report, has_errors
 
     cfg = Config.load()
     checks = run_checks(cfg, session=Session(config=cfg, mode="batch"))
-    console.print(to_table(checks))
+    if export is not None:
+        from _version import __version__
+        from agent.diagnostics import build_diagnostics_zip
+
+        data, default_name = build_diagnostics_zip(
+            version=__version__,
+            doctor_report=to_report(checks),
+        )
+        out = export.expanduser()
+        if out.is_dir() or str(out).endswith(("/", "\\")):
+            out = out / default_name
+        elif out.suffix.lower() != ".zip":
+            out = out.with_suffix(".zip")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(data)
+        console.print(f"  [green]Wrote diagnostics bundle:[/green] {out}")
+
+    if json_output:
+        import json
+
+        console.print_json(json.dumps(to_report(checks)))
+    else:
+        console.print(to_table(checks))
 
     if has_errors(checks):
-        console.print(
-            "\n[red]Blocking issues found.[/red] Fix errors above, then rerun `fastfold doctor`."
-        )
+        if not json_output:
+            console.print(
+                "\n[red]Blocking issues found.[/red] Fix errors above, then rerun `fastfold doctor`."
+            )
         raise typer.Exit(code=1)
 
-    console.print("\n[green]No blocking issues found.[/green]")
+    if not json_output:
+        console.print("\n[green]No blocking issues found.[/green]")
 
 
 # ─── Data subcommand ──────────────────────────────────────────

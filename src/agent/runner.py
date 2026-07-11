@@ -681,15 +681,31 @@ class AgentRunner:
             self.session.config.get("llm.provider", "anthropic") or "anthropic"
         ).strip().lower()
 
-        if provider in ("anthropic", "openai"):
-            return await self._run_async_deepagents(query, context, progress_callback)
+        if provider not in ("anthropic", "openai", "xai", "google", "nvidia"):
+            return self._make_error_result(
+                query,
+                f"Unsupported llm.provider '{provider}'. Use 'anthropic', 'openai', "
+                "'xai', 'google', or 'nvidia' (OpenAI-compatible endpoints via "
+                "llm.openai_base_url).",
+                0.0,
+            )
 
-        return self._make_error_result(
-            query,
-            f"Unsupported llm.provider '{provider}'. Use 'anthropic' or 'openai' "
-            "(OpenAI-compatible endpoints are supported via llm.openai_base_url).",
-            0.0,
-        )
+        # Preflight: surface missing/invalid API keys as a clear, actionable
+        # message instead of a generic provider-rejected error mid-request.
+        try:
+            issue = self.session.config.llm_preflight_issue()
+        except Exception:  # noqa: BLE001 - never block a run on preflight itself
+            issue = None
+        if issue:
+            # Presentation layers render the summary as markdown; turn the
+            # dashboard reference into a clickable in-app link.
+            issue = issue.replace(
+                "Dashboard → Models → API Keys",
+                "[Dashboard → Models → API Keys](/dashboard/models)",
+            )
+            return self._make_error_result(query, issue, 0.0)
+
+        return await self._run_async_deepagents(query, context, progress_callback)
 
     async def _run_async_deepagents(
         self,
@@ -763,9 +779,13 @@ class AgentRunner:
 
             tool_mode = str(config.get("agent.tool_mode", "native") or "native").strip().lower()
 
+            # User-disabled tools (Dashboard → Tools) are excluded from discovery.
+            exclude_tool_names = set(config.hidden_tools())
+
             tools, sandbox, code_trace_buffer, display_name_map = create_ct_langchain_tools(
                 self.session,
                 exclude_categories=exclude_cats,
+                exclude_tools=exclude_tool_names,
                 provider=provider,
                 tool_mode=tool_mode,
             )

@@ -36,14 +36,14 @@ DATASETS = {
         "size_hint": "~550MB",
     },
     "prism": {
-        "description": "PRISM cell viability screening data",
+        "description": "PRISM cell viability screening data (Repurposing 24Q2)",
         "files": {
             "prism_LFC_COLLAPSED.csv": None,
         },
-        "source": "https://depmap.org/repurposing/",
-        "auto_download": False,
-        "note": "PRISM data requires manual download from https://depmap.org/repurposing/ or symlink from existing data.",
-        "size_hint": "~600MB",
+        "source": "https://depmap.org/portal/data_page/?release=PRISM+Repurposing+Public+24Q2",
+        "auto_download": True,
+        "note": "Built from DepMap PRISM Repurposing 24Q2 (LFC + treatment + cell-line metadata) into a long LFC table. Downloads ~150MB, produces ~80MB.",
+        "size_hint": "~80MB",
     },
     "l1000": {
         "description": "L1000 landmark gene expression signatures (978 genes)",
@@ -164,6 +164,12 @@ def download_dataset(name: str, output: Path = None):
         console.print(f"  Size: {ds['size_hint']}")
     console.print(f"  Destination: {dest}")
 
+    # PRISM needs a join of several figshare files into the long LFC table the
+    # tools expect, so it uses a dedicated preparation path.
+    if name == "prism":
+        _download_prism(dest, cfg)
+        return
+
     if not ds.get("auto_download"):
         # Manual download required
         if "note" in ds:
@@ -215,6 +221,94 @@ def download_dataset(name: str, output: Path = None):
         console.print(f"  [green]Auto-configured data.{name} = {dest}[/green]")
 
 
+# DepMap PRISM Repurposing 24Q2 figshare files (article 25917643).
+_PRISM_FILES = {
+    "lfc": (
+        "Repurposing_Public_24Q2_LFC_COLLAPSED.csv",
+        "https://ndownloader.figshare.com/files/46631056",
+    ),
+    "treatment": (
+        "Repurposing_Public_24Q2_Treatment_Meta_Data.csv",
+        "https://ndownloader.figshare.com/files/46631146",
+    ),
+    "cells": (
+        "Repurposing_Public_24Q2_Cell_Line_Meta_Data.csv",
+        "https://ndownloader.figshare.com/files/46630978",
+    ),
+}
+
+
+def _download_prism(dest: Path, cfg: Config) -> bool:
+    """Download PRISM Repurposing 24Q2 and build the long LFC table.
+
+    Produces ``prism_LFC_COLLAPSED.csv`` with columns
+    ``pert_name, pert_dose, ccle_name, LFC`` — the schema the viability/biomarker
+    tools expect. Joins the raw LFC matrix with treatment (broad_id → name) and
+    cell-line (depmap_id → ccle_name) metadata from figshare.
+    """
+    final = dest / "prism_LFC_COLLAPSED.csv"
+    if final.exists():
+        console.print("  [dim]prism_LFC_COLLAPSED.csv already exists, skipping[/dim]")
+        cfg.set("data.prism", str(dest))
+        cfg.save()
+        return True
+
+    raw_dir = dest / "_prism_raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    paths: dict[str, Path] = {}
+    for key, (fname, url) in _PRISM_FILES.items():
+        target = raw_dir / fname
+        if not target.exists():
+            if not _download_file(url, target, fname):
+                console.print(f"  [red]Failed to download {fname}[/red]")
+                return False
+        paths[key] = target
+
+    console.print("  Building prism_LFC_COLLAPSED.csv (joining metadata)…")
+    try:
+        import pandas as pd
+
+        lfc = pd.read_csv(paths["lfc"])
+        treatment = pd.read_csv(paths["treatment"], usecols=["broad_id", "name"])
+        cells = pd.read_csv(paths["cells"], usecols=["depmap_id", "ccle_name"])
+
+        name_map = treatment.drop_duplicates("broad_id")
+        ccle_map = cells.drop_duplicates("depmap_id")
+
+        # row_id looks like "ACH-000001::P946.2::PR500B::REP300"; the first
+        # segment is the DepMap model id.
+        lfc["depmap_id"] = lfc["row_id"].astype(str).str.split("::").str[0]
+
+        merged = lfc.merge(name_map, on="broad_id", how="left").merge(
+            ccle_map, on="depmap_id", how="left"
+        )
+        out = merged.rename(columns={"name": "pert_name", "dose": "pert_dose"})[
+            ["pert_name", "pert_dose", "ccle_name", "LFC"]
+        ]
+        out = out.dropna(subset=["pert_name", "ccle_name"])
+        out.to_csv(final, index=False)
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"  [red]Failed to build PRISM table: {exc}[/red]")
+        return False
+
+    console.print(
+        f"  [green]Wrote {final.name} ({_format_size(final.stat().st_size)})[/green]"
+    )
+
+    # Clean up the large intermediate files.
+    try:
+        for path in paths.values():
+            path.unlink(missing_ok=True)
+        raw_dir.rmdir()
+    except OSError:
+        pass
+
+    cfg.set("data.prism", str(dest))
+    cfg.save()
+    console.print(f"  [green]Auto-configured data.prism = {dest}[/green]")
+    return True
+
+
 def download_all(output: Path = None):
     """Download all auto-downloadable datasets."""
     auto_datasets = [name for name, ds in DATASETS.items() if ds.get("auto_download")]
@@ -237,6 +331,62 @@ def dataset_catalog() -> Table:
         table.add_row(name, auto, size, ds.get("description", ""))
 
     return table
+
+
+def list_dataset_records() -> list[dict]:
+    """Return structured status records for every known dataset.
+
+    Shared by the CLI status table and the web ``/v1/datasets`` API so both stay
+    consistent. Each record: id, description, status, files_found/expected,
+    size_bytes, size_display, auto_download, path, source, note.
+    """
+    cfg = Config.load()
+    base = Path(cfg.get("data.base"))
+    records: list[dict] = []
+
+    for name, ds in DATASETS.items():
+        custom_path = cfg.get(f"data.{name}")
+        path = Path(custom_path) if custom_path else base / name
+
+        expected = set(ds["files"].keys())
+        found: set[str] = set()
+        if path.exists():
+            existing = {f.name for f in path.iterdir() if f.is_file()}
+            found = expected & existing
+
+        if not expected:
+            status = "on-demand"
+        elif found == expected:
+            status = "complete"
+        elif found:
+            status = "partial"
+        else:
+            status = "missing"
+
+        disk_bytes = _dataset_disk_size(path, expected)
+        if disk_bytes > 0:
+            size_display = _format_size(disk_bytes)
+            size_bytes: int | None = disk_bytes
+        else:
+            size_display = ds.get("size_hint") or "-"
+            size_bytes = None
+
+        records.append(
+            {
+                "id": name,
+                "description": str(ds.get("description") or ""),
+                "status": status,
+                "files_found": len(found),
+                "files_expected": len(expected),
+                "size_bytes": size_bytes,
+                "size_display": size_display,
+                "auto_download": bool(ds.get("auto_download")),
+                "path": str(path),
+                "source": str(ds.get("source") or "") or None,
+                "note": str(ds.get("note") or "") or None,
+            }
+        )
+    return records
 
 
 def dataset_status() -> Table:

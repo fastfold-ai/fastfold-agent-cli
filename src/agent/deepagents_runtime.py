@@ -83,9 +83,25 @@ def build_chat_model(config, *, streaming: bool = True):
         kwargs["use_responses_api"] = False
         return init_chat_model(f"openai:{model}", **kwargs)
 
+    # First-party OpenAI-compatible providers (xAI, Google Gemini, NVIDIA) route
+    # through the OpenAI chat-completions client with a fixed base URL + key.
+    from agent.config import OPENAI_COMPATIBLE_PROVIDERS
+
+    base_url = config.llm_provider_base_url(provider)
+    if base_url:
+        meta = OPENAI_COMPATIBLE_PROVIDERS.get(provider, {})
+        model = model or str(meta.get("default_model") or "")
+        kwargs = {"temperature": temperature}
+        api_key = config.llm_api_key(provider)
+        if api_key:
+            kwargs["api_key"] = api_key
+        kwargs["base_url"] = base_url
+        kwargs["use_responses_api"] = False
+        return init_chat_model(f"openai:{model}", **kwargs)
+
     raise ValueError(
         f"deepagents runtime does not support llm.provider '{provider}'. "
-        "Use 'anthropic' or 'openai' (OpenAI-compatible via llm.openai_base_url)."
+        "Use 'anthropic', 'openai', 'xai', 'google', or 'nvidia'."
     )
 
 

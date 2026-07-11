@@ -27,7 +27,37 @@ from rich.table import Table  # noqa: E402
 CONFIG_DIR = Path.home() / ".fastfold-cli"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 CONFIG_BACKUP_FILE = CONFIG_DIR / "config.json.bak"
-VALID_LLM_PROVIDERS = frozenset({"anthropic", "openai"})
+VALID_LLM_PROVIDERS = frozenset({"anthropic", "openai", "xai", "google", "nvidia"})
+
+# First-party providers that speak the OpenAI-compatible protocol. Each routes
+# through the OpenAI SDK / LangChain "openai:" path with a fixed base URL and its
+# own API key.
+OPENAI_COMPATIBLE_PROVIDERS: dict[str, dict[str, str]] = {
+    "xai": {
+        "base_url": "https://api.x.ai/v1",
+        "config_key": "llm.xai_api_key",
+        "env_var": "XAI_API_KEY",
+        "label": "xAI",
+        "signup_url": "https://console.x.ai",
+        "default_model": "grok-4.5",
+    },
+    "google": {
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "config_key": "llm.google_api_key",
+        "env_var": "GEMINI_API_KEY",
+        "label": "Google Gemini",
+        "signup_url": "https://aistudio.google.com/apikey",
+        "default_model": "gemini-3.5-flash",
+    },
+    "nvidia": {
+        "base_url": "https://integrate.api.nvidia.com/v1",
+        "config_key": "api.nvidia_api_key",
+        "env_var": "NVIDIA_API_KEY",
+        "label": "NVIDIA",
+        "signup_url": "https://build.nvidia.com/settings/api-keys",
+        "default_model": "nvidia/nemotron-3-ultra-550b-a55b",
+    },
+}
 logger = logging.getLogger("config")
 OPENAI_API_KEY_PATTERN = re.compile(r"^sk-[A-Za-z0-9_-]{6,}$")
 ANTHROPIC_API_KEY_PATTERN = re.compile(r"^sk-ant-[A-Za-z0-9_-]{6,}$")
@@ -126,13 +156,19 @@ DEFAULTS = {
     "llm.anthropic_api_key": None,
     "llm.api_key": None,
     "llm.openai_api_key": None,
+    "llm.xai_api_key": None,
+    "llm.google_api_key": None,
     "llm.openai_compatible_api_key": None,
     "llm.openai_base_url": None,
     "llm.openai_compatible_backend": None,
     "llm.openai_profiles": None,
     "llm.openai_active_profile": None,
     "llm.openai_default_profile": None,
+    "llm.hidden_models": [],
+    "llm.custom_models": [],
+    "llm.catalog_defaults_version": 0,
     "llm.temperature": 0.1,
+    "agent.hidden_tools": [],
 
     "data.base": str(CONFIG_DIR / "data"),
     "data.depmap": None,
@@ -344,6 +380,22 @@ API_KEYS = {
         "url": "https://platform.openai.com/api-keys",
         "free": False,
     },
+    "llm.xai_api_key": {
+        "name": "xAI",
+        "provider_key": "xai",
+        "env_var": "XAI_API_KEY",
+        "description": "xAI Grok model access",
+        "url": "https://console.x.ai",
+        "free": False,
+    },
+    "llm.google_api_key": {
+        "name": "Google Gemini",
+        "provider_key": "google",
+        "env_var": "GEMINI_API_KEY",
+        "description": "Google Gemini (AI Studio) model access",
+        "url": "https://aistudio.google.com/apikey",
+        "free": True,
+    },
     "llm.openai_compatible_api_key": {
         "name": "OpenAI-compatible",
         "env_var": "OPENAI_COMPATIBLE_API_KEY",
@@ -384,7 +436,7 @@ API_KEYS = {
         "provider_key": "nvidia",
         "env_var": "NVIDIA_API_KEY",
         "description": "NVIDIA model inference and NIM endpoints",
-        "url": "https://build.nvidia.com/settings/api-key",
+        "url": "https://build.nvidia.com/settings/api-keys",
         "free": False,
     },
     "api.tavily_api_key": {
@@ -1124,6 +1176,167 @@ class Config:
         self._sync_openai_profile_projection(apply_legacy_compat=False)
         return True
 
+    def hidden_models(self) -> list[str]:
+        """Return model IDs hidden from agent model selection."""
+        raw = self.get("llm.hidden_models", [])
+        if not isinstance(raw, list):
+            return []
+        return sorted(
+            {
+                str(item).strip()
+                for item in raw
+                if str(item or "").strip()
+            }
+        )
+
+    def is_model_hidden(self, model_id: str) -> bool:
+        target = str(model_id or "").strip()
+        if not target:
+            return False
+        return target in set(self.hidden_models())
+
+    def set_model_hidden(self, model_id: str, hidden: bool) -> list[str]:
+        """Hide or show a model ID for agent use. Returns the updated hidden list."""
+        target = str(model_id or "").strip()
+        if not target:
+            raise ValueError("model_id is required.")
+        current = set(self.hidden_models())
+        if hidden:
+            current.add(target)
+        else:
+            current.discard(target)
+        next_list = sorted(current)
+        self.set("llm.hidden_models", next_list)
+        return next_list
+
+    def _migrate_catalog_defaults(self) -> None:
+        """Seed newly default-disabled catalog models into hidden_models once."""
+        from agent.model_catalog import (
+            CATALOG_DEFAULTS_VERSION,
+            DEFAULT_DISABLED_MODELS,
+        )
+
+        try:
+            current_version = int(self.get("llm.catalog_defaults_version", 0) or 0)
+        except (TypeError, ValueError):
+            current_version = 0
+        if current_version >= CATALOG_DEFAULTS_VERSION:
+            return
+
+        hidden = set(self.hidden_models())
+        hidden.update(DEFAULT_DISABLED_MODELS)
+        self.set("llm.hidden_models", sorted(hidden))
+        self.set("llm.catalog_defaults_version", CATALOG_DEFAULTS_VERSION)
+        try:
+            self.save()
+        except Exception as exc:  # pragma: no cover - best-effort persistence
+            logger.warning("Failed to persist catalog defaults migration: %s", exc)
+
+    def hidden_tools(self) -> list[str]:
+        """Return tool IDs disabled from agent tool discovery/calls."""
+        raw = self.get("agent.hidden_tools", [])
+        if not isinstance(raw, list):
+            return []
+        return sorted(
+            {str(item).strip() for item in raw if str(item or "").strip()}
+        )
+
+    def is_tool_hidden(self, tool_id: str) -> bool:
+        target = str(tool_id or "").strip()
+        if not target:
+            return False
+        return target in set(self.hidden_tools())
+
+    def set_tool_hidden(self, tool_id: str, hidden: bool) -> list[str]:
+        """Enable/disable a tool for agent use. Returns the updated hidden list."""
+        target = str(tool_id or "").strip()
+        if not target:
+            raise ValueError("tool_id is required.")
+        current = set(self.hidden_tools())
+        if hidden:
+            current.add(target)
+        else:
+            current.discard(target)
+        next_list = sorted(current)
+        self.set("agent.hidden_tools", next_list)
+        return next_list
+
+    def custom_models(self) -> list[dict[str, str]]:
+        """Return user-added cloud model IDs (provider + id), normalized."""
+        raw = self.get("llm.custom_models", [])
+        if not isinstance(raw, list):
+            return []
+        items: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for entry in raw:
+            if isinstance(entry, str):
+                model_id = entry.strip()
+                provider = "openai"
+                label = model_id
+            elif isinstance(entry, dict):
+                model_id = str(entry.get("id") or "").strip()
+                provider = str(entry.get("provider") or "openai").strip().lower() or "openai"
+                label = str(entry.get("label") or model_id).strip() or model_id
+            else:
+                continue
+            if not model_id or model_id in seen:
+                continue
+            if provider not in VALID_LLM_PROVIDERS:
+                provider = "openai"
+            seen.add(model_id)
+            items.append({"id": model_id, "provider": provider, "label": label})
+        return items
+
+    def add_custom_model(
+        self,
+        *,
+        model_id: str,
+        provider: str = "openai",
+        label: str | None = None,
+    ) -> dict[str, str]:
+        """Add a custom cloud model ID. Raises ValueError on invalid/duplicate."""
+        target = str(model_id or "").strip()
+        if not target:
+            raise ValueError("model_id is required.")
+        provider_norm = str(provider or "openai").strip().lower() or "openai"
+        if provider_norm not in VALID_LLM_PROVIDERS:
+            raise ValueError(
+                f"Unsupported provider '{provider}'. Use one of: {', '.join(sorted(VALID_LLM_PROVIDERS))}."
+            )
+        from agent.model_catalog import cloud_catalog_models
+
+        catalog_ids = {item["id"] for item in cloud_catalog_models()}
+        if target in catalog_ids:
+            raise ValueError(f"Model '{target}' is already in the built-in catalog.")
+        existing = self.custom_models()
+        if any(item["id"] == target for item in existing):
+            raise ValueError(f"Custom model '{target}' already exists.")
+        record = {
+            "id": target,
+            "provider": provider_norm,
+            "label": str(label or target).strip() or target,
+        }
+        next_list = [*existing, record]
+        self.set("llm.custom_models", next_list)
+        return record
+
+    def remove_custom_model(self, model_id: str) -> bool:
+        """Remove a custom cloud model. Returns True if something was removed."""
+        target = str(model_id or "").strip()
+        if not target:
+            raise ValueError("model_id is required.")
+        existing = self.custom_models()
+        next_list = [item for item in existing if item["id"] != target]
+        if len(next_list) == len(existing):
+            return False
+        self.set("llm.custom_models", next_list)
+        # Also un-hide if it was toggled off.
+        hidden = set(self.hidden_models())
+        if target in hidden:
+            hidden.discard(target)
+            self.set("llm.hidden_models", sorted(hidden))
+        return True
+
     def __init__(self, data: dict = None):
         self._data = data or {}
         self._ensure_openai_profiles_data(self._data)
@@ -1213,6 +1426,8 @@ class Config:
         env_mappings.update({
             "ANTHROPIC_API_KEY": "llm.anthropic_api_key",
             "OPENAI_API_KEY": "llm.openai_api_key",
+            "XAI_API_KEY": "llm.xai_api_key",
+            "GEMINI_API_KEY": "llm.google_api_key",
             "OPENAI_COMPATIBLE_API_KEY": "llm.openai_compatible_api_key",
             "OPENAI_BASE_URL": "llm.openai_base_url",
             "CT_DATA_DIR": "data.base",
@@ -1236,6 +1451,7 @@ class Config:
         cfg = cls(data)
         cfg._dirty_keys.clear()
         cfg._unset_keys.clear()
+        cfg._migrate_catalog_defaults()
         # Track keys loaded from environment so they're masked in __repr__/logs
         cfg._env_loaded_keys = {
             config_key for env_var, config_key in env_mappings.items()
@@ -1508,6 +1724,12 @@ class Config:
     def llm_api_key(self, provider: Optional[str] = None) -> Optional[str]:
         """Get the best API key for the selected provider."""
         provider = (provider or self.get("llm.provider", "anthropic")).lower()
+        if provider in OPENAI_COMPATIBLE_PROVIDERS:
+            meta = OPENAI_COMPATIBLE_PROVIDERS[provider]
+            env_key = self._normalized_secret(os.environ.get(meta["env_var"]))
+            if env_key:
+                return env_key
+            return self._normalized_secret(self.get(meta["config_key"]))
         if provider == "openai":
             profile = self.get_openai_profile()
             backend = str((profile or {}).get("backend") or "").strip().lower()
@@ -1529,6 +1751,12 @@ class Config:
         return self._normalized_secret(
             self.get("llm.anthropic_api_key") or self.get("llm.api_key")
         )
+
+    def llm_provider_base_url(self, provider: Optional[str] = None) -> Optional[str]:
+        """Fixed base URL for first-party OpenAI-compatible providers (xai/google)."""
+        provider = (provider or self.get("llm.provider", "anthropic")).lower()
+        meta = OPENAI_COMPATIBLE_PROVIDERS.get(provider)
+        return meta["base_url"] if meta else None
 
     def llm_openai_base_url(self) -> Optional[str]:
         """Return normalized OpenAI-compatible base URL, if configured."""
@@ -1608,6 +1836,14 @@ class Config:
                     "  fastfold config set llm.openai_api_key <key>"
                 )
             return None
+
+        if provider in OPENAI_COMPATIBLE_PROVIDERS:
+            meta = OPENAI_COMPATIBLE_PROVIDERS[provider]
+            return (
+                f"{meta['label']} API key not configured. Add it in Dashboard → "
+                f"Models → API Keys, set {meta['env_var']}, or run:\n"
+                f"  fastfold config set {meta['config_key']} <key>"
+            )
 
         # Azure AI Foundry: Foundry-specific env vars are valid Anthropic auth
         if provider == "anthropic" and (

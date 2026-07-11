@@ -53,7 +53,12 @@ class Session:
         provider = self.config.get("llm.provider", "anthropic")
         model = self.config.get("llm.model", None)
         api_key = self.config.llm_api_key(provider)
-        base_url = self.config.llm_openai_base_url() if str(provider).strip().lower() == "openai" else None
+        provider_norm = str(provider).strip().lower()
+        if provider_norm == "openai":
+            base_url = self.config.llm_openai_base_url()
+        else:
+            # xai/google resolve to their fixed first-party base URL; others None.
+            base_url = self.config.llm_provider_base_url(provider_norm)
 
         return LLMClient(
             provider=provider,

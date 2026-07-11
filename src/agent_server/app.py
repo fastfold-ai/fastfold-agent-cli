@@ -15,11 +15,29 @@ from pathlib import Path
 from fastapi import Body, FastAPI, File, Form, HTTPException, Query, Request, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 
 from _version import __version__
+from agent_server.account_service import AccountService
 from agent_server.models import (
+    AccountSummary,
+    AgentModel,
+    AgentModelList,
     AgentProject,
+    CreateAgentModelRequest,
+    DatasetInstallResponse,
+    DatasetList,
+    ToolBatchActionRequest,
+    ToolBatchActionResponse,
+    ToolList,
+    ToolSummary,
+    UpdateToolRequest,
+    DeleteModelProfileResponse,
+    ModelProfile,
+    ModelProfileList,
+    ModelProfileProbeResult,
+    UpdateAgentModelRequest,
+    UpsertModelProfileRequest,
     AgentSession,
     CatalogSkillAudit,
     CatalogSkillDetail,
@@ -30,6 +48,8 @@ from agent_server.models import (
     CreateSessionRequest,
     DeleteProjectResponse,
     DeleteSessionResponse,
+    DoctorDiagnosticsRequest,
+    DoctorReport,
     HealthResponse,
     IntegrationList,
     IntegrationProvider,
@@ -76,6 +96,9 @@ from agent_server.pty_manager import PtyManager
 from agent_server.service import AgentService, SessionBusyError
 from agent_server.skills_service import SkillsService
 from agent_server.integrations_service import IntegrationsService
+from agent_server.models_service import ModelsService
+from agent_server.datasets_service import DatasetsService
+from agent_server.tools_service import ToolsService
 from agent_server.settings_service import SettingsService
 from agent_server.store import AgentStore
 from agent_server.workspace import (
@@ -117,6 +140,10 @@ def create_app(
     skills_service = SkillsService()
     integrations_service = IntegrationsService()
     settings_service = SettingsService()
+    account_service = AccountService(integrations=integrations_service)
+    models_service = ModelsService()
+    datasets_service = DatasetsService()
+    tools_service = ToolsService()
     pty_manager = PtyManager()
     backend_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(store.path.resolve())))
 
@@ -205,6 +232,43 @@ def create_app(
                 terminal=True,
             ),
         )
+
+    @app.get("/v1/doctor", response_model=DoctorReport)
+    async def doctor() -> DoctorReport:
+        from agent.doctor import to_report
+
+        payload = await asyncio.to_thread(to_report)
+        return DoctorReport.model_validate(payload)
+
+    async def _build_diagnostics_response(
+        ui_diagnostics: dict | None = None,
+    ) -> Response:
+        from agent.diagnostics import build_diagnostics_zip
+
+        data, filename = await asyncio.to_thread(
+            build_diagnostics_zip,
+            version=__version__,
+            ui_diagnostics=ui_diagnostics,
+        )
+        return Response(
+            content=data,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "no-store",
+            },
+        )
+
+    @app.get("/v1/doctor/diagnostics")
+    async def download_diagnostics() -> Response:
+        return await _build_diagnostics_response()
+
+    @app.post("/v1/doctor/diagnostics")
+    async def download_diagnostics_with_ui(
+        payload: DoctorDiagnosticsRequest | None = None,
+    ) -> Response:
+        ui = payload.ui_diagnostics if payload else None
+        return await _build_diagnostics_response(ui)
 
     @app.get("/v1/mcp-servers", response_model=McpServerList)
     async def list_mcp_servers() -> McpServerList:
@@ -341,6 +405,143 @@ def create_app(
             return await asyncio.to_thread(settings_service.update, payload)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/v1/account", response_model=AccountSummary)
+    async def get_account(check_updates: bool = Query(default=False)) -> AccountSummary:
+        return await asyncio.to_thread(
+            account_service.get,
+            version=__version__,
+            check_updates=check_updates,
+        )
+
+    @app.post("/v1/account/logout", response_model=AccountSummary)
+    async def logout_account() -> AccountSummary:
+        return await asyncio.to_thread(account_service.logout)
+
+    @app.get("/v1/models", response_model=AgentModelList)
+    async def list_models(
+        enabled_only: bool = Query(default=False),
+        discover: bool = Query(default=True),
+    ) -> AgentModelList:
+        return await asyncio.to_thread(
+            models_service.list_models,
+            enabled_only=enabled_only,
+            discover=discover,
+        )
+
+    @app.post("/v1/models", response_model=AgentModel, status_code=201)
+    async def create_custom_model(payload: CreateAgentModelRequest) -> AgentModel:
+        try:
+            return await asyncio.to_thread(models_service.create_custom_model, payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.patch("/v1/models/{model_id:path}", response_model=AgentModel)
+    async def update_model(
+        model_id: str,
+        payload: UpdateAgentModelRequest,
+    ) -> AgentModel:
+        try:
+            return await asyncio.to_thread(models_service.update_model, model_id, payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/v1/models/{model_id:path}")
+    async def delete_custom_model(model_id: str) -> dict[str, bool]:
+        removed = await asyncio.to_thread(models_service.delete_custom_model, model_id)
+        if not removed:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Custom model '{model_id}' was not found.",
+            )
+        return {"ok": True}
+
+    @app.get("/v1/datasets", response_model=DatasetList)
+    async def list_datasets() -> DatasetList:
+        return await asyncio.to_thread(datasets_service.list_datasets)
+
+    @app.post("/v1/datasets/{dataset_id}/install", response_model=DatasetInstallResponse)
+    async def install_dataset(dataset_id: str) -> DatasetInstallResponse:
+        try:
+            return await asyncio.to_thread(datasets_service.install, dataset_id)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail=f"Unknown dataset '{dataset_id}'."
+            ) from exc
+
+    @app.get("/v1/tools", response_model=ToolList)
+    async def list_tools(
+        enabled_only: bool = Query(default=False),
+    ) -> ToolList:
+        return await asyncio.to_thread(
+            tools_service.list_tools, enabled_only=enabled_only
+        )
+
+    @app.post("/v1/tools/batch", response_model=ToolBatchActionResponse)
+    async def batch_tools(
+        payload: ToolBatchActionRequest,
+    ) -> ToolBatchActionResponse:
+        return await asyncio.to_thread(
+            tools_service.batch_action, payload.action, payload.ids
+        )
+
+    @app.patch("/v1/tools/{tool_id:path}", response_model=ToolSummary)
+    async def update_tool(tool_id: str, payload: UpdateToolRequest) -> ToolSummary:
+        try:
+            return await asyncio.to_thread(tools_service.update_tool, tool_id, payload)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=404, detail=f"Unknown tool '{tool_id}'."
+            ) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.get("/v1/model-profiles", response_model=ModelProfileList)
+    async def list_model_profiles(
+        include_cloud: bool = Query(default=True),
+    ) -> ModelProfileList:
+        return await asyncio.to_thread(
+            models_service.list_profiles,
+            include_cloud=include_cloud,
+        )
+
+    @app.post("/v1/model-profiles", response_model=ModelProfile, status_code=201)
+    async def create_model_profile(payload: UpsertModelProfileRequest) -> ModelProfile:
+        try:
+            return await asyncio.to_thread(models_service.upsert_profile, payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.patch("/v1/model-profiles/{profile_id}", response_model=ModelProfile)
+    async def update_model_profile(
+        profile_id: str,
+        payload: UpsertModelProfileRequest,
+    ) -> ModelProfile:
+        merged = payload.model_copy(update={"id": profile_id})
+        try:
+            return await asyncio.to_thread(models_service.upsert_profile, merged)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.delete("/v1/model-profiles/{profile_id}", response_model=DeleteModelProfileResponse)
+    async def delete_model_profile(profile_id: str) -> DeleteModelProfileResponse:
+        try:
+            removed = await asyncio.to_thread(models_service.delete_profile, profile_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not removed:
+            raise HTTPException(status_code=404, detail="Model profile not found.")
+        return DeleteModelProfileResponse(ok=True, id=profile_id)
+
+    @app.post(
+        "/v1/model-profiles/{profile_id}/probe",
+        response_model=ModelProfileProbeResult,
+    )
+    async def probe_model_profile(profile_id: str) -> ModelProfileProbeResult:
+        try:
+            return await asyncio.to_thread(models_service.probe_profile, profile_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Model profile not found.") from exc
 
     @app.get("/v1/skills", response_model=SkillList)
     async def list_skills() -> SkillList:
