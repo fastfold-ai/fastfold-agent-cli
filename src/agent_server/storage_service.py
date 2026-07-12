@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import shutil
+import site
 import subprocess
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from importlib import metadata as importlib_metadata
 from pathlib import Path
 
 from agent.config import CONFIG_DIR, Config
@@ -14,6 +18,11 @@ from agent_server.models import (
     StorageLocation,
     StorageReport,
 )
+
+logger = logging.getLogger("storage_service")
+
+# Cap package children so Storage stays responsive on huge envs.
+_MAX_PACKAGE_CHILDREN = 400
 
 
 @dataclass(frozen=True)
@@ -60,6 +69,127 @@ def _path_size_bytes(path: Path) -> int:
     except OSError:
         return total
     return total
+
+
+def resolve_python_env_root(executable: Path | None = None) -> Path | None:
+    """Return the venv/conda/uv-tool root for the agent sandbox interpreter.
+
+    The built-in sandbox runs code in-process with ``sys.executable``, so this
+    is the environment FastFold uses for ``run_python``.
+    """
+    exe = (executable or Path(sys.executable)).expanduser()
+    try:
+        exe = exe.resolve()
+    except OSError:
+        return None
+
+    parent = exe.parent
+    if parent.name in {"bin", "Scripts"}:
+        root = parent.parent
+        # Prefer roots that look like isolated environments.
+        if (root / "pyvenv.cfg").exists() or (root / "conda-meta").exists():
+            return root
+        # uv tool installs and some custom prefixes still live under bin/.
+        return root
+
+    # System interpreter: fall back to primary site-packages when available.
+    try:
+        sites = [Path(p) for p in site.getsitepackages()]
+    except (AttributeError, TypeError):
+        sites = []
+    for candidate in sites:
+        if candidate.is_dir():
+            return candidate
+    try:
+        user_site = site.getusersitepackages()
+        if user_site:
+            path = Path(user_site)
+            if path.is_dir():
+                return path
+    except (AttributeError, TypeError, OSError):
+        pass
+    return None
+
+
+def list_installed_packages() -> list[tuple[str, str]]:
+    """Return sorted ``(name, version)`` for packages in the current interpreter."""
+    packages: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    try:
+        distributions = list(importlib_metadata.distributions())
+    except Exception as exc:  # noqa: BLE001 — best-effort inventory
+        logger.warning("Unable to list installed packages: %s", exc)
+        return []
+
+    for dist in distributions:
+        try:
+            name = (
+                dist.metadata["Name"]
+                if dist.metadata is not None and "Name" in dist.metadata
+                else dist.name
+            )
+            version = dist.version or ""
+        except Exception:  # noqa: BLE001
+            continue
+        name = str(name or "").strip()
+        version = str(version or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        packages.append((name, version))
+
+    packages.sort(key=lambda item: item[0].lower())
+    return packages
+
+
+def _python_env_category() -> StorageCategory | None:
+    root = resolve_python_env_root()
+    if root is None:
+        return None
+
+    env_bytes = _path_size_bytes(root)
+    packages = list_installed_packages()
+    truncated = False
+    if len(packages) > _MAX_PACKAGE_CHILDREN:
+        packages = packages[:_MAX_PACKAGE_CHILDREN]
+        truncated = True
+
+    children: list[StorageCategory] = [
+        StorageCategory(
+            id=f"python_env:pkg:{name.lower()}",
+            label=f"{name} {version}".strip() if version else name,
+            color="#10b981",
+            bytes=0,
+            path=None,
+        )
+        for name, version in packages
+    ]
+    if truncated:
+        children.append(
+            StorageCategory(
+                id="python_env:pkg:truncated",
+                label=f"…and more (showing first {_MAX_PACKAGE_CHILDREN})",
+                color="#10b981",
+                bytes=0,
+                path=None,
+            )
+        )
+
+    label = "Python environment"
+    if (root / "conda-meta").exists() or (root / "pyvenv.cfg").exists():
+        label = f"Python environment ({root.name})"
+
+    return StorageCategory(
+        id="python_env",
+        label=label,
+        color="#10b981",
+        bytes=env_bytes,
+        path=str(root),
+        children=children,
+    )
 
 
 def _category_specs(home: Path, cfg: Config) -> list[_CategorySpec]:
@@ -179,6 +309,12 @@ class StorageService:
                 )
             )
 
+        # Agent sandbox interpreter (in-process run_python) — often outside
+        # ~/.fastfold-cli (venv / uv tool / conda). Still shown in Disk usage.
+        python_env = _python_env_category()
+        if python_env is not None:
+            categories.append(python_env)
+
         # Catch remaining top-level entries under the home root as "Other".
         other_bytes = 0
         try:
@@ -200,6 +336,10 @@ class StorageService:
                 )
             )
 
+        # Location total stays scoped to ~/.fastfold-cli; bar total includes env.
+        home_bytes = sum(
+            item.bytes for item in categories if item.id != "python_env"
+        )
         total_bytes = sum(item.bytes for item in categories)
         try:
             disk = shutil.disk_usage(root)
@@ -211,7 +351,7 @@ class StorageService:
             location=StorageLocation(
                 path=str(root),
                 label="default location",
-                bytes=total_bytes,
+                bytes=home_bytes,
             ),
             categories=categories,
             total_bytes=total_bytes,

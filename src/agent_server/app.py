@@ -77,6 +77,9 @@ from agent_server.models import (
     SessionList,
     StartRunResponse,
     StorageReport,
+    EnvironmentReport,
+    EnvironmentPackageRequest,
+    EnvironmentPackageMutationResult,
     InstallSkillRequest,
     SkillDetail,
     SkillList,
@@ -294,6 +297,45 @@ def create_app(
         from agent_server.storage_service import StorageService
 
         return await asyncio.to_thread(StorageService().get_report)
+
+    @app.get("/v1/environment", response_model=EnvironmentReport)
+    async def get_environment() -> EnvironmentReport:
+        from agent_server.environment_service import EnvironmentService
+
+        return await asyncio.to_thread(EnvironmentService().get_report)
+
+    @app.post(
+        "/v1/environment/packages/install",
+        response_model=EnvironmentPackageMutationResult,
+    )
+    async def install_environment_package(
+        payload: EnvironmentPackageRequest,
+    ) -> EnvironmentPackageMutationResult:
+        from agent_server.environment_service import EnvironmentError, EnvironmentService
+
+        try:
+            return await asyncio.to_thread(
+                lambda: EnvironmentService().install(
+                    payload.name,
+                    allow_unlisted=payload.allow_unlisted,
+                )
+            )
+        except EnvironmentError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    @app.post(
+        "/v1/environment/packages/uninstall",
+        response_model=EnvironmentPackageMutationResult,
+    )
+    async def uninstall_environment_package(
+        payload: EnvironmentPackageRequest,
+    ) -> EnvironmentPackageMutationResult:
+        from agent_server.environment_service import EnvironmentError, EnvironmentService
+
+        try:
+            return await asyncio.to_thread(EnvironmentService().uninstall, payload.name)
+        except EnvironmentError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     @app.get("/v1/mcp-servers", response_model=McpServerList)
     async def list_mcp_servers() -> McpServerList:

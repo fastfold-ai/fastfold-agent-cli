@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Custom MCP servers: description, OAuth metadata fields, static custom headers
   (secret values in config), and optional headers-helper command; helper wins
   over static headers at runtime.
+- Storage reports the agent sandbox Python environment size and installed
+  package list (name + version) under Disk usage.
+- Environment dashboard page to install/remove allowlisted skill/tool Python
+  packages (chemistry, single-cell, ML, etc.) while core deps stay locked.
 - Doctor checks in the `mcp` category that live-probe enabled catalog MCPs.
 - Docs for the shortlist under `docs/mcp-defaults/`.
 
