@@ -103,7 +103,12 @@ from agent_server.pty_manager import PtyManager
 from agent_server.service import AgentService, SessionBusyError
 from agent_server.skills_service import SkillsService
 from agent_server.integrations_service import IntegrationsService
-from agent_server.mcp_service import McpService
+from agent_server.mcp_service import (
+    McpService,
+    clear_custom_headers,
+    enrich_mcp_server,
+    set_custom_headers,
+)
 from agent_server.models_service import ModelsService
 from agent_server.datasets_service import DatasetsService
 from agent_server.tools_service import ToolsService
@@ -292,7 +297,10 @@ def create_app(
 
     @app.get("/v1/mcp-servers", response_model=McpServerList)
     async def list_mcp_servers() -> McpServerList:
-        return McpServerList(data=await asyncio.to_thread(store.list_mcp_servers))
+        def _list() -> list[McpServer]:
+            return [enrich_mcp_server(server) for server in store.list_mcp_servers()]
+
+        return McpServerList(data=await asyncio.to_thread(_list))
 
     @app.get("/v1/mcp-servers/catalog", response_model=McpCatalogList)
     async def list_mcp_catalog() -> McpCatalogList:
@@ -455,27 +463,45 @@ def create_app(
             raise HTTPException(status_code=400, detail="stdio MCP servers require a command.")
         if payload.transport != "stdio" and not payload.url:
             raise HTTPException(status_code=400, detail="Remote MCP servers require a URL.")
-        return await asyncio.to_thread(
-            store.create_mcp_server,
-            name=payload.name,
-            transport=payload.transport,
-            command=payload.command,
-            args=payload.args,
-            url=payload.url,
-            enabled=payload.enabled,
-            catalog_id=payload.catalog_id,
-        )
+
+        def _create() -> McpServer:
+            server = store.create_mcp_server(
+                name=payload.name,
+                transport=payload.transport,
+                command=payload.command,
+                args=payload.args,
+                url=payload.url,
+                enabled=payload.enabled,
+                catalog_id=payload.catalog_id,
+                description=payload.description,
+                oauth_client_id=payload.oauth_client_id,
+                oauth_server_url=payload.oauth_server_url,
+                oauth_scopes=payload.oauth_scopes,
+                headers_helper_command=payload.headers_helper_command,
+            )
+            if payload.headers is not None:
+                set_custom_headers(server.id, payload.headers)
+            return enrich_mcp_server(server)
+
+        return await asyncio.to_thread(_create)
 
     @app.patch("/v1/mcp-servers/{server_id}", response_model=McpServer)
     async def update_mcp_server(
         server_id: str,
         payload: UpdateMcpServerRequest,
     ) -> McpServer:
-        server = await asyncio.to_thread(
-            store.update_mcp_server,
-            server_id,
-            **payload.model_dump(exclude_unset=True),
-        )
+        def _update() -> McpServer | None:
+            changes = payload.model_dump(exclude_unset=True)
+            headers = changes.pop("headers", None)
+            headers_provided = "headers" in payload.model_fields_set
+            server = store.update_mcp_server(server_id, **changes)
+            if server is None:
+                return None
+            if headers_provided:
+                set_custom_headers(server.id, headers)
+            return enrich_mcp_server(server)
+
+        server = await asyncio.to_thread(_update)
         if server is None:
             raise HTTPException(status_code=404, detail="MCP server not found.")
         return server
@@ -498,7 +524,13 @@ def create_app(
 
     @app.delete("/v1/mcp-servers/{server_id}", response_model=DeleteSessionResponse)
     async def delete_mcp_server(server_id: str) -> DeleteSessionResponse:
-        if not await asyncio.to_thread(store.delete_mcp_server, server_id):
+        def _delete() -> bool:
+            deleted = store.delete_mcp_server(server_id)
+            if deleted:
+                clear_custom_headers(server_id)
+            return deleted
+
+        if not await asyncio.to_thread(_delete):
             raise HTTPException(status_code=404, detail="MCP server not found.")
         return DeleteSessionResponse()
 

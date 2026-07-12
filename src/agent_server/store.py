@@ -133,6 +133,18 @@ class AgentStore:
             }
             if "catalog_id" not in mcp_columns:
                 connection.execute("ALTER TABLE mcp_servers ADD COLUMN catalog_id TEXT")
+            for column, ddl in (
+                ("description", "ALTER TABLE mcp_servers ADD COLUMN description TEXT"),
+                ("oauth_client_id", "ALTER TABLE mcp_servers ADD COLUMN oauth_client_id TEXT"),
+                ("oauth_server_url", "ALTER TABLE mcp_servers ADD COLUMN oauth_server_url TEXT"),
+                ("oauth_scopes", "ALTER TABLE mcp_servers ADD COLUMN oauth_scopes TEXT"),
+                (
+                    "headers_helper_command",
+                    "ALTER TABLE mcp_servers ADD COLUMN headers_helper_command TEXT",
+                ),
+            ):
+                if column not in mcp_columns:
+                    connection.execute(ddl)
             connection.execute(
                 """
                 CREATE UNIQUE INDEX IF NOT EXISTS mcp_servers_catalog_id
@@ -668,6 +680,13 @@ class AgentStore:
             url=row["url"],
             enabled=bool(row["enabled"]),
             catalog_id=row["catalog_id"] if "catalog_id" in keys else None,
+            description=row["description"] if "description" in keys else None,
+            oauth_client_id=row["oauth_client_id"] if "oauth_client_id" in keys else None,
+            oauth_server_url=row["oauth_server_url"] if "oauth_server_url" in keys else None,
+            oauth_scopes=row["oauth_scopes"] if "oauth_scopes" in keys else None,
+            headers_helper_command=(
+                row["headers_helper_command"] if "headers_helper_command" in keys else None
+            ),
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
@@ -693,6 +712,11 @@ class AgentStore:
         url: str | None,
         enabled: bool,
         catalog_id: str | None = None,
+        description: str | None = None,
+        oauth_client_id: str | None = None,
+        oauth_server_url: str | None = None,
+        oauth_scopes: str | None = None,
+        headers_helper_command: str | None = None,
     ) -> McpServer:
         now = utc_now()
         server = McpServer(
@@ -704,6 +728,13 @@ class AgentStore:
             url=url.strip() if url else None,
             enabled=enabled,
             catalog_id=catalog_id.strip() if catalog_id else None,
+            description=description.strip() if description else None,
+            oauth_client_id=oauth_client_id.strip() if oauth_client_id else None,
+            oauth_server_url=oauth_server_url.strip() if oauth_server_url else None,
+            oauth_scopes=oauth_scopes.strip() if oauth_scopes else None,
+            headers_helper_command=(
+                headers_helper_command.strip() if headers_helper_command else None
+            ),
             created_at=now,
             updated_at=now,
         )
@@ -712,8 +743,9 @@ class AgentStore:
                 """
                 INSERT INTO mcp_servers(
                     id, name, transport, command, args, url, enabled, catalog_id,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    description, oauth_client_id, oauth_server_url, oauth_scopes,
+                    headers_helper_command, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     server.id,
@@ -724,6 +756,11 @@ class AgentStore:
                     server.url,
                     int(server.enabled),
                     server.catalog_id,
+                    server.description,
+                    server.oauth_client_id,
+                    server.oauth_server_url,
+                    server.oauth_scopes,
+                    server.headers_helper_command,
                     server.created_at.isoformat(),
                     server.updated_at.isoformat(),
                 ),
@@ -742,13 +779,18 @@ class AgentStore:
             if key in data:
                 data[key] = value
         data["updated_at"] = utc_now()
+        # Response-only fields — never persist from callers.
+        data.pop("header_names", None)
+        data.pop("headers_configured", None)
         server = McpServer(**data)
         with self._write_lock, self._connect() as connection:
             connection.execute(
                 """
                 UPDATE mcp_servers
                 SET name = ?, command = ?, args = ?, url = ?, enabled = ?,
-                    catalog_id = ?, updated_at = ?
+                    catalog_id = ?, description = ?, oauth_client_id = ?,
+                    oauth_server_url = ?, oauth_scopes = ?,
+                    headers_helper_command = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -758,6 +800,11 @@ class AgentStore:
                     server.url,
                     int(server.enabled),
                     server.catalog_id,
+                    server.description,
+                    server.oauth_client_id,
+                    server.oauth_server_url,
+                    server.oauth_scopes,
+                    server.headers_helper_command,
                     server.updated_at.isoformat(),
                     server.id,
                 ),

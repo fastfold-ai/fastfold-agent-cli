@@ -37,6 +37,7 @@ Interactive session: `/mcp` (same actions).
 - CLI helpers: `src/agent/mcp_manage.py`
 - API: `GET /v1/mcp-servers/catalog`, connect/validate/enable, OAuth callback
 - Runtime headers for enabled catalog MCPs
+- Custom remotes: static headers (config secrets) + optional headers-helper command; OAuth fields stored for later Connect
 - Doctor category `mcp` (live probe); dashboard catalog uses cached health for fast load
 
 See [catalog.md](catalog.md) for per-server details.

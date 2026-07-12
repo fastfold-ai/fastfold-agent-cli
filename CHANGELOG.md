@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and interactive `/mcp`.
 - MCP credentials under Integrations / `/keys` (`mcp.*` config keys) with runtime
   auth headers for enabled catalog servers.
+- Custom MCP servers: description, OAuth metadata fields, static custom headers
+  (secret values in config), and optional headers-helper command; helper wins
+  over static headers at runtime.
 - Doctor checks in the `mcp` category that live-probe enabled catalog MCPs.
 - Docs for the shortlist under `docs/mcp-defaults/`.
 

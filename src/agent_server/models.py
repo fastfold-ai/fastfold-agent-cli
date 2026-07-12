@@ -560,6 +560,13 @@ class McpServer(ApiModel):
     url: str | None = None
     enabled: bool = True
     catalog_id: str | None = None
+    description: str | None = None
+    oauth_client_id: str | None = None
+    oauth_server_url: str | None = None
+    oauth_scopes: str | None = None
+    headers_helper_command: str | None = None
+    header_names: list[str] = Field(default_factory=list)
+    headers_configured: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -631,6 +638,12 @@ class CreateMcpServerRequest(ApiModel):
     url: str | None = None
     enabled: bool = True
     catalog_id: str | None = None
+    description: str | None = None
+    oauth_client_id: str | None = None
+    oauth_server_url: str | None = None
+    oauth_scopes: str | None = None
+    headers_helper_command: str | None = None
+    headers: dict[str, str] | None = None
 
 
 class UpdateMcpServerRequest(ApiModel):
@@ -640,6 +653,12 @@ class UpdateMcpServerRequest(ApiModel):
     url: str | None = None
     enabled: bool | None = None
     catalog_id: str | None = None
+    description: str | None = None
+    oauth_client_id: str | None = None
+    oauth_server_url: str | None = None
+    oauth_scopes: str | None = None
+    headers_helper_command: str | None = None
+    headers: dict[str, str] | None = None
 
 
 class MessageFeedbackRequest(ApiModel):

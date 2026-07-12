@@ -731,7 +731,32 @@ def _check_mcp_servers(cfg: Config) -> list[DoctorCheck]:
             continue
 
         result = probe_mcp_server(url=entry.url, headers=headers, timeout=25.0)
+        # Neurosnap accepts Bearer or X-API-KEY — retry alternate if primary fails.
+        if not result["ok"] and entry.id == "neurosnap":
+            from agent_server.mcp_service import _cfg_secret
+
+            api_key = _cfg_secret(cfg, entry.api_key_config_key, entry.api_key_env_var)
+            if api_key:
+                for alt in (
+                    {"X-API-KEY": api_key},
+                    {"Authorization": f"Bearer {api_key}"},
+                ):
+                    if alt == headers:
+                        continue
+                    alt_result = probe_mcp_server(
+                        url=entry.url, headers=alt, timeout=25.0
+                    )
+                    if alt_result.get("ok"):
+                        result = alt_result
+                        break
+
         if result["ok"]:
+            try:
+                from agent_server.mcp_service import save_tool_count
+
+                save_tool_count(entry.id, int(result.get("toolCount") or 0))
+            except Exception:  # noqa: BLE001
+                pass
             checks.append(
                 DoctorCheck(
                     name=check_name,
@@ -741,6 +766,15 @@ def _check_mcp_servers(cfg: Config) -> list[DoctorCheck]:
                 )
             )
         else:
+            try:
+                from agent_server.mcp_service import clear_tool_count, save_status_message
+
+                clear_tool_count(entry.id)
+                save_status_message(
+                    entry.id, str(result.get("message") or "Connection failed")
+                )
+            except Exception:  # noqa: BLE001
+                pass
             checks.append(
                 DoctorCheck(
                     name=check_name,

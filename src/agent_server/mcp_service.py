@@ -26,6 +26,132 @@ logger = logging.getLogger("mcp_service")
 _oauth_states: dict[str, dict[str, Any]] = {}
 _oauth_lock = threading.Lock()
 
+_HEADERS_HELPER_TIMEOUT_S = 10
+
+
+def custom_headers_config_key(server_id: str) -> str:
+    return f"mcp.custom_{server_id}_headers"
+
+
+def get_custom_headers(config: Config | None, server_id: str) -> dict[str, str]:
+    cfg = config or Config.load()
+    raw = cfg.get(custom_headers_config_key(server_id))
+    if isinstance(raw, dict):
+        return {
+            str(key).strip(): str(value)
+            for key, value in raw.items()
+            if str(key).strip() and str(value)
+        }
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return {}
+        if isinstance(parsed, dict):
+            return {
+                str(key).strip(): str(value)
+                for key, value in parsed.items()
+                if str(key).strip() and str(value)
+            }
+    return {}
+
+
+def set_custom_headers(
+    server_id: str,
+    headers: dict[str, str] | None,
+    *,
+    config: Config | None = None,
+) -> None:
+    cfg = config or Config.load()
+    key = custom_headers_config_key(server_id)
+    cleaned = {
+        str(name).strip(): str(value)
+        for name, value in (headers or {}).items()
+        if str(name).strip() and str(value)
+    }
+    if cleaned:
+        cfg.set(key, cleaned)
+    else:
+        cfg.unset(key)
+    cfg.save()
+
+
+def clear_custom_headers(server_id: str, *, config: Config | None = None) -> None:
+    set_custom_headers(server_id, None, config=config)
+
+
+def enrich_mcp_server(server, *, config: Config | None = None):
+    """Attach non-secret header metadata to an MCP server model."""
+    headers = get_custom_headers(config, server.id)
+    names = sorted(headers.keys())
+    return server.model_copy(
+        update={
+            "header_names": names,
+            "headers_configured": bool(names),
+        }
+    )
+
+
+def run_headers_helper_command(command: str) -> dict[str, str] | None:
+    """Run a shell command that prints a JSON object of HTTP headers on stdout."""
+    import subprocess
+
+    try:
+        completed = subprocess.run(
+            command,
+            shell=True,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_HEADERS_HELPER_TIMEOUT_S,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("MCP headers helper timed out after %ss", _HEADERS_HELPER_TIMEOUT_S)
+        return None
+    except OSError as exc:
+        logger.warning("MCP headers helper failed to start: %s", exc)
+        return None
+
+    if completed.returncode != 0:
+        stderr = (completed.stderr or "").strip()
+        logger.warning(
+            "MCP headers helper exited %s: %s",
+            completed.returncode,
+            stderr[:300] or "(no stderr)",
+        )
+        return None
+
+    stdout = (completed.stdout or "").strip()
+    if not stdout:
+        return None
+    try:
+        parsed = json.loads(stdout)
+    except json.JSONDecodeError:
+        logger.warning("MCP headers helper stdout was not valid JSON")
+        return None
+    if not isinstance(parsed, dict):
+        logger.warning("MCP headers helper JSON must be an object")
+        return None
+    return {
+        str(key).strip(): str(value)
+        for key, value in parsed.items()
+        if str(key).strip() and value is not None and str(value)
+    }
+
+
+def resolve_custom_server_headers(server, *, config: Config | None = None) -> dict[str, str] | None:
+    """Resolve auth headers for a custom (non-catalog) remote MCP server.
+
+    Precedence: headers helper command (if set and succeeds) → static custom headers.
+    """
+    helper = getattr(server, "headers_helper_command", None)
+    if helper and str(helper).strip():
+        dynamic = run_headers_helper_command(str(helper).strip())
+        if dynamic:
+            return dynamic
+    static = get_custom_headers(config, server.id)
+    return static or None
+
 
 def _cfg_secret(config: Config, config_key: str | None, env_var: str | None) -> str | None:
     if env_var:
@@ -642,6 +768,8 @@ class McpService:
                 entry = get_catalog_entry(server.catalog_id)
                 if entry:
                     headers = resolve_auth_headers(entry, cfg)
+            else:
+                headers = resolve_custom_server_headers(server, config=cfg)
             if not server.url:
                 return {
                     "ok": False,
@@ -815,6 +943,9 @@ class McpService:
         out: list[dict[str, Any]] = []
         for server in self.store.list_mcp_servers(enabled_only=True):
             payload = server.model_dump(mode="json")
+            # Never leak header secrets into the agent context dump.
+            payload.pop("header_names", None)
+            payload.pop("headers_configured", None)
             catalog_id = getattr(server, "catalog_id", None)
             if catalog_id:
                 entry = get_catalog_entry(catalog_id)
@@ -822,5 +953,9 @@ class McpService:
                     headers = resolve_auth_headers(entry, cfg)
                     if headers:
                         payload["headers"] = headers
+            else:
+                headers = resolve_custom_server_headers(server, config=cfg)
+                if headers:
+                    payload["headers"] = headers
             out.append(payload)
         return out
