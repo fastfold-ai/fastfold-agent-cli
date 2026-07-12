@@ -60,6 +60,19 @@ def run_server(
 
     from agent_server.app import create_app
 
+    # Persist bind options so Status → Restart can re-launch the same server.
+    os.environ["FASTFOLD_SERVE_HOST"] = host
+    os.environ["FASTFOLD_SERVE_PORT"] = str(port)
+    os.environ["FASTFOLD_SERVE_PUBLIC"] = "1" if public else "0"
+    os.environ["FASTFOLD_SERVE_ORIGINS"] = ",".join(origins)
+    os.environ["FASTFOLD_SERVE_HOSTS"] = ",".join(hosts)
+    if uds is not None:
+        os.environ["FASTFOLD_SERVE_UDS"] = str(uds.expanduser().resolve())
+    else:
+        os.environ.pop("FASTFOLD_SERVE_UDS", None)
+    if key:
+        os.environ.setdefault("FASTFOLD_SERVER_API_KEY", key)
+
     app = create_app(
         api_key=key,
         allowed_origins=origins,

@@ -31,11 +31,50 @@ class Capabilities(ApiModel):
 
 class HealthResponse(ApiModel):
     status: Literal["ok", "degraded"] = "ok"
-    service: str = "FastFold Agent Server"
+    service: str = "Sandwalk"
     version: str
     backend_id: str
     user_name: str | None = None
     capabilities: Capabilities = Field(default_factory=Capabilities)
+
+
+class ServerSystemInfo(ApiModel):
+    label: str
+    platform: str
+    arch: str
+    os_version: str
+    python_version: str
+    ram_used_bytes: int = 0
+    ram_total_bytes: int = 0
+    thermal_state: str | None = None
+    load_average: list[float] | None = None
+
+
+class ServerCacheInfo(ApiModel):
+    file_count: int = 0
+    total_bytes: int = 0
+    path: str
+
+
+class ServerStatusReport(ApiModel):
+    status: Literal["running", "degraded"] = "running"
+    service: str = "Sandwalk"
+    version: str
+    message: str | None = None
+    host: str | None = None
+    port: int | None = None
+    pid: int
+    started_at: str
+    uptime_seconds: float = 0
+    system: ServerSystemInfo
+    cache: ServerCacheInfo
+    checked_at: str
+
+
+class ServerLifecycleResult(ApiModel):
+    ok: bool = True
+    action: Literal["stop", "restart"]
+    message: str = ""
 
 
 SessionStatus = Literal["idle", "running", "interrupted", "error"]

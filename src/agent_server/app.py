@@ -51,6 +51,9 @@ from agent_server.models import (
     DoctorDiagnosticsRequest,
     DoctorReport,
     HealthResponse,
+    ServerCacheInfo,
+    ServerLifecycleResult,
+    ServerStatusReport,
     IntegrationList,
     IntegrationProvider,
     IntegrationSetupRequest,
@@ -176,7 +179,7 @@ def create_app(
         await service.shutdown()
 
     app = FastAPI(
-        title="FastFold Agent Server",
+        title="Sandwalk",
         version=__version__,
         lifespan=lifespan,
     )
@@ -254,6 +257,32 @@ def create_app(
                 terminal=True,
             ),
         )
+
+    @app.get("/v1/status", response_model=ServerStatusReport)
+    async def server_status() -> ServerStatusReport:
+        from agent_server.status_service import get_status_report
+
+        return await asyncio.to_thread(
+            lambda: get_status_report(version=__version__)
+        )
+
+    @app.post("/v1/server/stop", response_model=ServerLifecycleResult)
+    async def stop_server() -> ServerLifecycleResult:
+        from agent_server.status_service import schedule_stop
+
+        return schedule_stop()
+
+    @app.post("/v1/server/restart", response_model=ServerLifecycleResult)
+    async def restart_server() -> ServerLifecycleResult:
+        from agent_server.status_service import schedule_restart
+
+        return schedule_restart()
+
+    @app.post("/v1/storage/cache/clear", response_model=ServerCacheInfo)
+    async def clear_runtime_cache() -> ServerCacheInfo:
+        from agent_server.status_service import clear_cache
+
+        return await asyncio.to_thread(clear_cache)
 
     @app.get("/v1/doctor", response_model=DoctorReport)
     async def doctor() -> DoctorReport:
