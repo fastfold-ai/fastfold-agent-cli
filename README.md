@@ -131,6 +131,24 @@ Use `/keys` (interactive) or `fastfold keys` (shell) to see integration status, 
 | SendGrid | `SENDGRID_API_KEY` | `notification.sendgrid_api_key` | Email notification delivery | [sendgrid.com](https://sendgrid.com) |
 | Lambda Labs | `LAMBDA_API_KEY` | `compute.lambda_api_key` | GPU compute job submission | [cloud.lambdalabs.com](https://cloud.lambdalabs.com) |
 | RunPod | `RUNPOD_API_KEY` | `compute.runpod_api_key` | GPU compute job submission | [runpod.io](https://www.runpod.io) |
+| Tamarind Bio (MCP) | `TAMARIND_API_KEY` | `mcp.tamarind_api_key` | Tamarind MCP tools | [app.tamarind.bio](https://app.tamarind.bio) |
+| Neurosnap (MCP) | `NEUROSNAP_API_KEY` | `mcp.neurosnap_api_key` | Neurosnap MCP tools | [neurosnap.ai](https://neurosnap.ai/overview?view=api) |
+| Linear (MCP) | `LINEAR_API_KEY` | `mcp.linear_api_key` | Linear MCP tools (or OAuth Connect) | [linear.app](https://linear.app/settings/account/security) |
+
+### Cloud MCP servers
+
+Connect suggested remote MCPs (off by default) from the local dashboard
+(`/dashboard/mcp`) or the CLI. Credentials save under Integrations / `/keys`.
+
+```bash
+fastfold mcp catalog
+fastfold mcp connect neurosnap --api-key "$NEUROSNAP_API_KEY"
+fastfold mcp validate neurosnap
+fastfold mcp enable tamarind
+fastfold mcp disable neurosnap
+```
+
+Interactive session: `/mcp`. Details: [docs/mcp-defaults/README.md](docs/mcp-defaults/README.md).
 
 Boltz quick setup from interactive mode:
 
@@ -264,6 +282,9 @@ fastfold "What are the top degradation targets for this compound?"
 # Validate setup
 fastfold doctor
 
+# MCP catalog / connect
+fastfold mcp catalog
+
 # List available tools
 fastfold tool list
 
@@ -325,6 +346,7 @@ Inside `fastfold` interactive mode (run `/help` for the full reference):
 - `/settings`: configure UI and agent preferences
 - `/config`: show active runtime configuration
 - `/keys`: show API key setup status by service (`/keys profile`, `/keys set-compatible <profile_id>`, `/keys set-boltz`)
+- `/mcp`: manage suggested and custom MCP servers (catalog, connect, enable/disable)
 
 **Run control**
 

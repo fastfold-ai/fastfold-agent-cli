@@ -63,6 +63,10 @@ _CATEGORY_BY_NAME: dict[str, str] = {
     "skills_loaded": "skills",
     "environment": "environment",
     "fastfold_api_key": "environment",
+    "mcp_tamarind": "mcp",
+    "mcp_latch": "mcp",
+    "mcp_neurosnap": "mcp",
+    "mcp_linear": "mcp",
 }
 
 
@@ -410,6 +414,7 @@ def run_checks(config: Config | None = None, session=None) -> list[DoctorCheck]:
     checks.extend(_check_cli_tooling())
     checks.append(_check_skills_loaded())
     checks.extend(_check_environment(cfg))
+    checks.extend(_check_mcp_servers(cfg))
 
     return [_normalize_check(check) for check in checks]
 
@@ -652,6 +657,122 @@ def _check_skills_loaded() -> DoctorCheck:
         detail=detail,
         category="skills",
     )
+
+
+def _check_mcp_servers(cfg: Config) -> list[DoctorCheck]:
+    """Probe enabled catalog MCP servers (Connect → toggle on)."""
+    checks: list[DoctorCheck] = []
+    try:
+        from agent.mcp_catalog import MCP_CATALOG
+        from agent_server.mcp_service import (
+            credentials_configured,
+            probe_mcp_server,
+            resolve_auth_headers,
+        )
+        from agent_server.store import AgentStore
+    except Exception as exc:  # noqa: BLE001
+        checks.append(
+            DoctorCheck(
+                name="mcp_catalog",
+                status="warn",
+                detail=f"MCP catalog unavailable: {exc}",
+                category="mcp",
+            )
+        )
+        return checks
+
+    try:
+        store = AgentStore()
+        enabled = {
+            s.catalog_id: s
+            for s in store.list_mcp_servers(enabled_only=True)
+            if getattr(s, "catalog_id", None)
+        }
+    except Exception as exc:  # noqa: BLE001
+        checks.append(
+            DoctorCheck(
+                name="mcp_store",
+                status="warn",
+                detail=f"Could not load MCP servers: {exc}",
+                category="mcp",
+                fix="Restart `fastfold serve`",
+            )
+        )
+        return checks
+
+    for entry in MCP_CATALOG:
+        check_name = f"mcp_{entry.id}"
+        server = enabled.get(entry.id)
+        if server is None:
+            # Suggested default off — skip unless credentials exist (stale/misconfig)
+            if credentials_configured(entry, cfg):
+                checks.append(
+                    DoctorCheck(
+                        name=check_name,
+                        status="warn",
+                        detail=f"{entry.name} credentials saved but MCP is disabled",
+                        category="mcp",
+                        fix=f"Enable on Dashboard → MCP, or Connect again",
+                    )
+                )
+            continue
+
+        headers = resolve_auth_headers(entry, cfg)
+        if not headers:
+            checks.append(
+                DoctorCheck(
+                    name=check_name,
+                    status="error",
+                    detail=f"{entry.name} is enabled but not authenticated",
+                    category="mcp",
+                    fix="Dashboard → MCP → Connect (OAuth or API key)",
+                )
+            )
+            continue
+
+        result = probe_mcp_server(url=entry.url, headers=headers, timeout=25.0)
+        if result["ok"]:
+            checks.append(
+                DoctorCheck(
+                    name=check_name,
+                    status="ok",
+                    detail=f"{entry.name}: {result['toolCount']} tools",
+                    category="mcp",
+                )
+            )
+        else:
+            checks.append(
+                DoctorCheck(
+                    name=check_name,
+                    status="error",
+                    detail=f"{entry.name}: {result['message']}",
+                    category="mcp",
+                    fix="Reconnect on Dashboard → MCP or check API key under Integrations",
+                )
+            )
+
+    # Also note custom enabled remote MCP servers (no catalog_id)
+    try:
+        customs = [
+            s
+            for s in store.list_mcp_servers(enabled_only=True)
+            if not getattr(s, "catalog_id", None) and s.url
+        ]
+        for server in customs[:5]:
+            result = probe_mcp_server(url=server.url, headers=None, timeout=15.0)
+            status = "ok" if result["ok"] else "warn"
+            checks.append(
+                DoctorCheck(
+                    name=f"mcp_custom_{server.id[:8]}",
+                    status=status,
+                    detail=f"{server.name}: {result['message']}",
+                    category="mcp",
+                )
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+    return checks
 
 
 def _env_present(*names: str) -> bool:

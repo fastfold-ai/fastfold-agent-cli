@@ -72,6 +72,21 @@ PROVIDER_METADATA = {
         "category": "Skills",
         "description": "Vercel OIDC token for skills.sh catalog search.",
     },
+    "tamarind": {
+        "name": "Tamarind Bio",
+        "category": "MCP",
+        "description": "Tamarind Bio MCP credentials for structure and design jobs.",
+    },
+    "neurosnap": {
+        "name": "Neurosnap",
+        "category": "MCP",
+        "description": "Neurosnap MCP API key for computational biology jobs.",
+    },
+    "linear": {
+        "name": "Linear",
+        "category": "MCP",
+        "description": "Linear MCP API key for issues and projects.",
+    },
 }
 VERCEL_INTEGRATION_DIR = (CONFIG_DIR / "vercel-integration").expanduser()
 
@@ -85,6 +100,8 @@ def category_for(config_key: str) -> str:
         return "Notifications"
     if config_key.startswith("api."):
         return "Scientific Services"
+    if config_key.startswith("mcp."):
+        return "MCP"
     return "Other"
 
 

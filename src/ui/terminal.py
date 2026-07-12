@@ -59,6 +59,7 @@ SLASH_COMMANDS = {
     "/settings": "Configure UI and agent preferences",
     "/config": "Show active runtime configuration",
     "/keys": "Show API key status (/keys profile | /keys set-compatible | /keys set-boltz)",
+    "/mcp": "List and manage MCP servers (/mcp connect|enable|validate|add|remove)",
     "/model-manager": "Manage OpenAI-compatible profiles (add/edit/delete)",
     "/upgrade": "Upgrade fastfold-agent-cli via uv",
     "/doctor": "Run readiness diagnostics and fix hints",
@@ -1783,6 +1784,10 @@ class InteractiveTerminal:
                 continue
             if cmd == "keys" or cmd.startswith("/keys"):
                 self._handle_keys_command(query)
+                self._advance_suggestion()
+                continue
+            if cmd == "mcp" or cmd.startswith("/mcp"):
+                self._handle_mcp_command(query)
                 self._advance_suggestion()
                 continue
             if cmd in ("upgrade", "/upgrade"):
@@ -3719,6 +3724,16 @@ class InteractiveTerminal:
             self._ensure_boltz_cli_ready()
         else:
             self.console.print("  [dim]Skipped boltz-api install.[/dim]")
+
+    def _handle_mcp_command(self, query: str) -> None:
+        """Handle /mcp — list and manage MCP servers (Deep Agents–style)."""
+        from agent.mcp_manage import handle_mcp_argv
+
+        parts = query.strip().split()
+        # Drop leading /mcp or mcp
+        if parts and parts[0].lstrip("/").lower() == "mcp":
+            parts = parts[1:]
+        handle_mcp_argv(parts or ["list"], self.console)
 
     def _handle_keys_command(self, query: str) -> None:
         """Handle /keys with optional compatible-profile actions."""

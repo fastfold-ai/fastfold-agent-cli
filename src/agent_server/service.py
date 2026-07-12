@@ -333,10 +333,9 @@ class AgentService:
                         )
 
             history = self.store.list_messages(session_id)
-            mcp_servers = [
-                server.model_dump(mode="json")
-                for server in self.store.list_mcp_servers(enabled_only=True)
-            ]
+            from agent_server.mcp_service import McpService
+
+            mcp_servers = McpService(self.store).resolve_runtime_servers()
             project_context = None
             current = self.store.get_session(session_id)
             if current and current.project_id:

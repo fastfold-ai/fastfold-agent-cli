@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Suggested cloud MCP catalog (Tamarind, Latch, Neurosnap, Linear) with Connect /
+  enable / disable / validate flows in the agent server, CLI (`fastfold mcp`),
+  and interactive `/mcp`.
+- MCP credentials under Integrations / `/keys` (`mcp.*` config keys) with runtime
+  auth headers for enabled catalog servers.
+- Doctor checks in the `mcp` category that live-probe enabled catalog MCPs.
+- Docs for the shortlist under `docs/mcp-defaults/`.
+
+### Changed
+
+- Dashboard MCP catalog listing uses cached health (tool counts / last status)
+  so `/dashboard/mcp` loads quickly; live probes remain on connect, enable, and
+  doctor.
+- Tamarind Bio Connect is API-key-only (no OAuth client registration path).
+
+### Fixed
+
+- Reconnect now persists a new API key before probing, and clears stale OAuth
+  tokens so the saved key is what runtime and doctor use.
+- Toggle enable/disable no longer disconnects or wipes credentials.
+
 ## [0.0.70] - 2026-07-10
 
 ### Changed

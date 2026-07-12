@@ -95,6 +95,7 @@ class AgentStore:
                     args TEXT NOT NULL,
                     url TEXT,
                     enabled INTEGER NOT NULL,
+                    catalog_id TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -124,6 +125,19 @@ class AgentStore:
                 """
                 CREATE INDEX IF NOT EXISTS sessions_project_updated
                     ON sessions(project_id, updated_at DESC)
+                """
+            )
+            mcp_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(mcp_servers)").fetchall()
+            }
+            if "catalog_id" not in mcp_columns:
+                connection.execute("ALTER TABLE mcp_servers ADD COLUMN catalog_id TEXT")
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS mcp_servers_catalog_id
+                    ON mcp_servers(catalog_id)
+                    WHERE catalog_id IS NOT NULL
                 """
             )
 
@@ -644,6 +658,7 @@ class AgentStore:
 
     @staticmethod
     def _mcp_server(row: sqlite3.Row) -> McpServer:
+        keys = set(row.keys())
         return McpServer(
             id=row["id"],
             name=row["name"],
@@ -652,6 +667,7 @@ class AgentStore:
             args=json.loads(row["args"]),
             url=row["url"],
             enabled=bool(row["enabled"]),
+            catalog_id=row["catalog_id"] if "catalog_id" in keys else None,
             created_at=datetime.fromisoformat(row["created_at"]),
             updated_at=datetime.fromisoformat(row["updated_at"]),
         )
@@ -676,6 +692,7 @@ class AgentStore:
         args: list[str],
         url: str | None,
         enabled: bool,
+        catalog_id: str | None = None,
     ) -> McpServer:
         now = utc_now()
         server = McpServer(
@@ -686,6 +703,7 @@ class AgentStore:
             args=args,
             url=url.strip() if url else None,
             enabled=enabled,
+            catalog_id=catalog_id.strip() if catalog_id else None,
             created_at=now,
             updated_at=now,
         )
@@ -693,8 +711,9 @@ class AgentStore:
             connection.execute(
                 """
                 INSERT INTO mcp_servers(
-                    id, name, transport, command, args, url, enabled, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    id, name, transport, command, args, url, enabled, catalog_id,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     server.id,
@@ -704,6 +723,7 @@ class AgentStore:
                     json.dumps(server.args),
                     server.url,
                     int(server.enabled),
+                    server.catalog_id,
                     server.created_at.isoformat(),
                     server.updated_at.isoformat(),
                 ),
@@ -718,14 +738,17 @@ class AgentStore:
         if current is None:
             return None
         data = current.model_dump()
-        data.update({key: value for key, value in changes.items() if value is not None})
+        for key, value in changes.items():
+            if key in data:
+                data[key] = value
         data["updated_at"] = utc_now()
         server = McpServer(**data)
         with self._write_lock, self._connect() as connection:
             connection.execute(
                 """
                 UPDATE mcp_servers
-                SET name = ?, command = ?, args = ?, url = ?, enabled = ?, updated_at = ?
+                SET name = ?, command = ?, args = ?, url = ?, enabled = ?,
+                    catalog_id = ?, updated_at = ?
                 WHERE id = ?
                 """,
                 (
@@ -734,6 +757,7 @@ class AgentStore:
                     json.dumps(server.args),
                     server.url,
                     int(server.enabled),
+                    server.catalog_id,
                     server.updated_at.isoformat(),
                     server.id,
                 ),

@@ -61,6 +61,12 @@ from agent_server.models import (
     MessageFeedbackResponse,
     McpServer,
     McpServerList,
+    McpCatalogList,
+    McpCatalogEntryStatus,
+    ConnectMcpCatalogRequest,
+    ConnectMcpCatalogResponse,
+    UpdateMcpCatalogRequest,
+    ValidateMcpResponse,
     CreateMcpServerRequest,
     MoveWorkspaceFileRequest,
     ProjectList,
@@ -97,6 +103,7 @@ from agent_server.pty_manager import PtyManager
 from agent_server.service import AgentService, SessionBusyError
 from agent_server.skills_service import SkillsService
 from agent_server.integrations_service import IntegrationsService
+from agent_server.mcp_service import McpService
 from agent_server.models_service import ModelsService
 from agent_server.datasets_service import DatasetsService
 from agent_server.tools_service import ToolsService
@@ -146,6 +153,12 @@ def create_app(
     datasets_service = DatasetsService()
     tools_service = ToolsService()
     pty_manager = PtyManager()
+    public_base = (
+        os.environ.get("FASTFOLD_SERVER_URL")
+        or os.environ.get("FASTFOLD_AGENT_URL")
+        or "http://127.0.0.1:8787"
+    ).rstrip("/")
+    mcp_service = McpService(store, public_base_url=public_base)
     backend_id = str(uuid.uuid5(uuid.NAMESPACE_URL, str(store.path.resolve())))
 
     @asynccontextmanager
@@ -281,6 +294,161 @@ def create_app(
     async def list_mcp_servers() -> McpServerList:
         return McpServerList(data=await asyncio.to_thread(store.list_mcp_servers))
 
+    @app.get("/v1/mcp-servers/catalog", response_model=McpCatalogList)
+    async def list_mcp_catalog() -> McpCatalogList:
+        rows = await asyncio.to_thread(mcp_service.catalog_statuses)
+        return McpCatalogList(
+            data=[McpCatalogEntryStatus.model_validate(row) for row in rows]
+        )
+
+    @app.post(
+        "/v1/mcp-servers/catalog/{catalog_id}/connect",
+        response_model=ConnectMcpCatalogResponse,
+    )
+    async def connect_mcp_catalog(
+        catalog_id: str,
+        payload: ConnectMcpCatalogRequest,
+    ) -> ConnectMcpCatalogResponse:
+        try:
+            if payload.method == "oauth":
+                result = await asyncio.to_thread(mcp_service.start_oauth, catalog_id)
+                return ConnectMcpCatalogResponse(
+                    ok=True,
+                    authorize_url=result.get("authorizeUrl"),
+                    state=result.get("state"),
+                    redirect_uri=result.get("redirectUri"),
+                    catalog_id=result.get("catalogId") or catalog_id,
+                    message="Open authorizeUrl in a browser to finish OAuth",
+                )
+            if not payload.api_key:
+                raise HTTPException(status_code=400, detail="apiKey is required for API key connect")
+            result = await asyncio.to_thread(
+                mcp_service.connect_with_api_key,
+                catalog_id,
+                payload.api_key,
+            )
+            return ConnectMcpCatalogResponse(
+                ok=bool(result.get("ok")),
+                catalog_id=catalog_id,
+                server_id=result.get("serverId"),
+                enabled=result.get("enabled"),
+                tool_count=result.get("toolCount"),
+                message=result.get("message"),
+                tools=list(result.get("tools") or []),
+            )
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Unknown MCP catalog entry") from None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    @app.delete(
+        "/v1/mcp-servers/catalog/{catalog_id}/connect",
+        response_model=ConnectMcpCatalogResponse,
+    )
+    async def disconnect_mcp_catalog(catalog_id: str) -> ConnectMcpCatalogResponse:
+        try:
+            result = await asyncio.to_thread(mcp_service.disconnect, catalog_id)
+            return ConnectMcpCatalogResponse(
+                ok=True,
+                catalog_id=catalog_id,
+                enabled=False,
+                message="Disconnected — credentials cleared and MCP disabled",
+            )
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Unknown MCP catalog entry") from None
+
+    @app.patch(
+        "/v1/mcp-servers/catalog/{catalog_id}",
+        response_model=ConnectMcpCatalogResponse,
+    )
+    async def update_mcp_catalog(
+        catalog_id: str,
+        payload: UpdateMcpCatalogRequest,
+    ) -> ConnectMcpCatalogResponse:
+        try:
+            result = await asyncio.to_thread(
+                mcp_service.set_enabled,
+                catalog_id,
+                payload.enabled,
+            )
+            return ConnectMcpCatalogResponse(
+                ok=bool(result.get("ok")),
+                catalog_id=catalog_id,
+                server_id=result.get("serverId"),
+                enabled=result.get("enabled"),
+                message=(
+                    "Enabled" if result.get("enabled") else "Disabled"
+                ),
+            )
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Unknown MCP catalog entry") from None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    @app.post(
+        "/v1/mcp-servers/catalog/{catalog_id}/validate",
+        response_model=ValidateMcpResponse,
+    )
+    async def validate_mcp_catalog(catalog_id: str) -> ValidateMcpResponse:
+        try:
+            result = await asyncio.to_thread(mcp_service.validate, catalog_id, None)
+            return ValidateMcpResponse(
+                ok=bool(result.get("ok")),
+                tool_count=int(result.get("toolCount") or 0),
+                message=str(result.get("message") or ""),
+                tools=list(result.get("tools") or []),
+            )
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Unknown MCP catalog entry") from None
+
+    @app.get("/v1/mcp-servers/oauth/callback")
+    async def mcp_oauth_callback(
+        code: str | None = None,
+        state: str | None = None,
+        error: str | None = None,
+        error_description: str | None = None,
+    ) -> Response:
+        if error:
+            detail = error_description or error
+            html = f"""<!doctype html><html><body style="font-family:system-ui;padding:2rem">
+              <h2>MCP OAuth failed</h2><p>{detail}</p>
+              <p>You can close this window and return to FastFold.</p>
+              <script>window.opener&&window.opener.postMessage({{type:'fastfold-mcp-oauth',ok:false,error:{json.dumps(detail)}}},'*');</script>
+              </body></html>"""
+            return Response(content=html, media_type="text/html")
+        if not code or not state:
+            raise HTTPException(status_code=400, detail="Missing code or state")
+        try:
+            result = await asyncio.to_thread(
+                mcp_service.complete_oauth,
+                code=code,
+                state=state,
+            )
+        except Exception as exc:  # noqa: BLE001
+            html = f"""<!doctype html><html><body style="font-family:system-ui;padding:2rem">
+              <h2>MCP OAuth failed</h2><p>{exc}</p>
+              <script>window.opener&&window.opener.postMessage({{type:'fastfold-mcp-oauth',ok:false,error:{json.dumps(str(exc))}}},'*');</script>
+              </body></html>"""
+            return Response(content=html, media_type="text/html", status_code=400)
+
+        payload = json.dumps(
+            {
+                "type": "fastfold-mcp-oauth",
+                "ok": bool(result.get("ok")),
+                "catalogId": result.get("catalogId"),
+                "enabled": result.get("enabled"),
+                "toolCount": result.get("toolCount"),
+                "message": result.get("message"),
+            }
+        )
+        html = f"""<!doctype html><html><body style="font-family:system-ui;padding:2rem">
+          <h2>{"Connected" if result.get("ok") else "Connected with errors"}</h2>
+          <p>{result.get("message") or ""}</p>
+          <p>You can close this window and return to FastFold.</p>
+          <script>window.opener&&window.opener.postMessage({payload},'*');setTimeout(()=>window.close(),800);</script>
+          </body></html>"""
+        return Response(content=html, media_type="text/html")
+
     @app.post("/v1/mcp-servers", response_model=McpServer, status_code=201)
     async def create_mcp_server(payload: CreateMcpServerRequest) -> McpServer:
         if payload.transport == "stdio" and not payload.command:
@@ -295,6 +463,7 @@ def create_app(
             args=payload.args,
             url=payload.url,
             enabled=payload.enabled,
+            catalog_id=payload.catalog_id,
         )
 
     @app.patch("/v1/mcp-servers/{server_id}", response_model=McpServer)
@@ -310,6 +479,22 @@ def create_app(
         if server is None:
             raise HTTPException(status_code=404, detail="MCP server not found.")
         return server
+
+    @app.post(
+        "/v1/mcp-servers/{server_id}/validate",
+        response_model=ValidateMcpResponse,
+    )
+    async def validate_mcp_server(server_id: str) -> ValidateMcpResponse:
+        try:
+            result = await asyncio.to_thread(mcp_service.validate, None, server_id)
+            return ValidateMcpResponse(
+                ok=bool(result.get("ok")),
+                tool_count=int(result.get("toolCount") or 0),
+                message=str(result.get("message") or ""),
+                tools=list(result.get("tools") or []),
+            )
+        except KeyError:
+            raise HTTPException(status_code=404, detail="MCP server not found") from None
 
     @app.delete("/v1/mcp-servers/{server_id}", response_model=DeleteSessionResponse)
     async def delete_mcp_server(server_id: str) -> DeleteSessionResponse:
